@@ -1,0 +1,72 @@
+# OpenDART 원본 XML 구조 파싱 전담 모듈. 
+
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Union
+
+_ENCODING_DECL_RE = re.compile(rb'encoding=["\']([\w-]+)["\']')
+_BARE_AMPERSAND_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)")
+_BARE_LESS_THAN_RE = re.compile(r"<(?![a-zA-Z_/!?])")
+_TITLE_PREFIX_RE = re.compile(r"^(?:[IVXLCDM]+\.|\d+(?:-\d+)?\.)\s*")
+_TITLE_BRACKET_RE = re.compile(r"^【\s*(.+?)\s*】$")
+
+
+class DartXmlParseError(Exception):
+    """XML 파일을 읽거나 파싱하는 데 실패했을 때 발생시킨다."""
+
+def _read_xml_text(xml_path: Union[str, Path]) -> str:
+    """XML 파일을 읽어 문자열로 반환한다. 인코딩 선언이 있으면 그에 맞춰 디코딩한다."""
+    raw_bytes = Path(xml_path).read_bytes()
+    match = _ENCODING_DECL_RE.search(raw_bytes[:200])
+    encoding = match.group(1).decode("ascii") if match else "utf-8"
+    return raw_bytes.decode(encoding)
+
+
+def _sanitize_for_parsing(xml_text: str) -> str:
+    """XML 파서가 처리할 수 없는 bare &나 <를 이스케이프한다."""
+    escaped = _BARE_AMPERSAND_RE.sub("&amp;", xml_text)
+    escaped = _BARE_LESS_THAN_RE.sub("&lt;", escaped)
+    return escaped
+
+
+def _normalize_section_title(raw_title: str) -> str:
+    """목차 제목에서 번호 접두어("II.", "1.", "2-1.")나 전각 괄호(【 】)를 벗겨낸다."""
+    title = raw_title.strip()
+    bracket_match = _TITLE_BRACKET_RE.match(title)
+    if bracket_match:
+        return bracket_match.group(1).strip()
+    return _TITLE_PREFIX_RE.sub("", title).strip()
+
+
+def parse_sections(xml_path: Union[str, Path]) -> dict[str, str]:
+    """XML 파일을 읽어, 섹션명을 키로, 섹션 원문(XML 문자열)을 값으로 하는 dict를 반환한다."""
+    try:
+        xml_text = _read_xml_text(xml_path)
+    except OSError as exc:
+        raise DartXmlParseError(f"{xml_path} 파일을 읽을 수 없습니다: {exc!r}") from exc
+
+    sanitized = _sanitize_for_parsing(xml_text)
+
+    try:
+        root = ET.fromstring(sanitized)
+    except ET.ParseError as exc:
+        raise DartXmlParseError(f"{xml_path} XML 파싱 실패: {exc!r}") from exc
+
+    sections: dict[str, str] = {}
+
+    for elem in root.iter():
+        children = list(elem)
+        if not children or children[0].tag != "TITLE": # TITLE 태그가 없는 섹션은 건너뜀.
+            continue
+        raw_title = "".join(children[0].itertext()).strip()
+        if not raw_title:
+            continue
+        title = _normalize_section_title(raw_title)
+        if not title or title in sections:
+            continue
+        sections[title] = ET.tostring(elem, encoding="unicode")
+
+    return sections
