@@ -31,10 +31,10 @@ def validate_investments(document: NormalizedDocument) -> tuple[NormalizedDocume
         props = rel.properties
         reasons = []
 
-        if not is_in_range(props.get("share_ratio"), 0, 100):
-            reasons.append(f"share_ratio={props.get('share_ratio')!r} (0~100 벗어남)")
-        if not is_in_range(props.get("previous_share_ratio"), 0, 100):
-            reasons.append(f"previous_share_ratio={props.get('previous_share_ratio')!r} (0~100 벗어남)")
+        if not is_in_range(props.get("ratio"), 0, 100):
+            reasons.append(f"ratio={props.get('ratio')!r} (0~100 벗어남)")
+        if not is_in_range(props.get("previous_ratio"), 0, 100):
+            reasons.append(f"previous_ratio={props.get('previous_ratio')!r} (0~100 벗어남)")
         if not is_iso_date(props.get("settlement_date")):
             reasons.append(f"settlement_date={props.get('settlement_date')!r} (ISO 8601 아님)")
 

@@ -1,0 +1,103 @@
+# BizNode 로컬 개발 인프라 (Sprint 0)
+# 기동: docker compose up -d
+# 중지: docker compose down          (데이터 유지)
+# 초기화: docker compose down -v      (볼륨까지 삭제 — 주의)
+
+services:
+  # ── Graph DB ────────────────────────────────────────────────
+  # APOC 필수: pipeline/importer/neo4j_importer.py가 apoc.merge.node/relationship 사용
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: biznode-neo4j
+    ports:
+      - "7474:7474"   # HTTP Browser
+      - "7687:7687"   # Bolt
+    environment:
+      NEO4J_AUTH: "neo4j/biznode_dev_pw"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+      NEO4J_server_memory_heap_max__size: "1G"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # ── RDBMS ───────────────────────────────────────────────────
+  # init/*.sql은 최초 기동(빈 볼륨) 시 자동 실행. 전부 멱등이라 수동 재실행도 안전.
+  postgres:
+    image: postgres:16-alpine
+    container_name: biznode-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: biznode
+      POSTGRES_USER: biznode
+      POSTGRES_PASSWORD: biznode_dev_pw
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biznode -d biznode"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Vector DB ───────────────────────────────────────────────
+  # 8000은 FastAPI용으로 비워두고 8001로 노출
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: biznode-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    restart: unless-stopped
+
+  # ── 캐시/큐 (선택) ──────────────────────────────────────────
+  # Tier3 온디맨드 수집 큐 · DART API rate limit 카운터
+  redis:
+    image: redis:7-alpine
+    container_name: biznode-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── PostgreSQL 브라우저 UI (Neo4j Browser의 PostgreSQL 판) ──
+  # localhost:8081 접속 → 로그인 없이 바로 테이블 탐색·SQL 실행
+  pgweb:
+    image: sosedoff/pgweb:latest
+    container_name: biznode-pgweb
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: "postgres://biznode:biznode_dev_pw@postgres:5432/biznode?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  pg_data:
+  chroma_data:
+  redis_data:

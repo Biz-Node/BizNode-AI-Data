@@ -12,10 +12,10 @@ def validate_shareholders(document: NormalizedDocument) -> tuple[NormalizedDocum
         props = rel.properties
         reasons: list[str] = []
 
-        if not is_in_range(props.get("share_ratio"), 0, 100):
-            reasons.append(f"share_ratio={props.get('share_ratio')!r} (0~100 벗어남)")
-        if not is_in_range(props.get("previous_share_ratio"), 0, 100):
-            reasons.append(f"previous_share_ratio={props.get('previous_share_ratio')!r} (0~100 벗어남)")
+        if not is_in_range(props.get("ratio"), 0, 100):
+            reasons.append(f"ratio={props.get('ratio')!r} (0~100 벗어남)")
+        if not is_in_range(props.get("previous_ratio"), 0, 100):
+            reasons.append(f"previous_ratio={props.get('previous_ratio')!r} (0~100 벗어남)")
         if not is_non_negative(props.get("share_count")):
             reasons.append(f"share_count={props.get('share_count')!r} (음수)")
         if not is_non_negative(props.get("previous_share_count")):
