@@ -56,7 +56,10 @@ def normalize_majorstock(rows: list[dict[str, Any]], corp_code: str) -> Normaliz
         valid_from = _to_iso(row.get("rcept_dt"))
         rel = OwnsStakeInRelationshipDTO(
             subtype=STAKE_SUBTYPE_5PCT,
-            meta=standard_edge_meta(source_doc=None, valid_from=valid_from),
+            # 근거: 대량보유 보고서 접수번호(rcept_no)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")), valid_from=valid_from
+            ),
             ratio=parse_float(row.get("stkrt")),
             change_reason=clean_missing(row.get("report_resn")),
         )

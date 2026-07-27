@@ -27,6 +27,18 @@ from pipeline.normalizer.entities import build_person, master_company_ref
 # 사외이사 subtype
 _OUTSIDE_DIRECTOR_SUBTYPE = "사외이사"
 
+# Person 노드 폭발 방지(방법서 §10[2]) — 미등기 실무임원(상무·전무 등)은 제외하고
+# 이사회 구성원(등기)만 노드화. 단 대표/회장/사장은 미등기라도 유지.
+_TOP_POSITION_MARKERS = ("대표", "회장", "사장")
+
+
+def _is_governance_relevant(rgist_at: str | None, ofcps_raw: str | None) -> bool:
+    """등기임원이거나 최고경영진(대표/회장/사장)이면 True."""
+    if rgist_at and rgist_at.strip() != "미등기":
+        return True
+    position = ofcps_raw or ""
+    return any(m in position for m in _TOP_POSITION_MARKERS)
+
 # 신규 선임 여부를 판단하는 재직기간 기준(12개월).
 _NEW_EXECUTIVE_THRESHOLD_MONTHS = 12
 
@@ -131,6 +143,10 @@ def normalize_executives(rows: list[dict[str, Any]], corp_code: str) -> Normaliz
         if name is None:
             continue
 
+        # 미등기 실무임원 제외 (Person 폭발 방지) — 등기임원·최고경영진만
+        if not _is_governance_relevant(clean_missing(row.get("rgist_exctv_at")), row.get("ofcps")):
+            continue
+
         birth_ym = convert_korean_year_month(row.get("birth_ym"))
         gender = clean_missing(row.get("sexdstn"))
         entity, from_ref = build_person(name, birth_ym, gender, corp_code)
@@ -150,7 +166,12 @@ def normalize_executives(rows: list[dict[str, Any]], corp_code: str) -> Normaliz
         )
 
         relationship_dto = ExecutiveRelationshipDTO(
-            meta=standard_edge_meta(source_doc=None, valid_from=clean_missing(row.get("stlm_dt"))),
+            # 근거: 공시 접수번호 / 관측일: 결산기준일(사업보고서 연 1회)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")),
+                valid_from=clean_missing(row.get("stlm_dt")),
+                observed_at=clean_missing(row.get("stlm_dt")),
+            ),
             subtype=subtype,
             position=position,
             employment_type=clean_missing(row.get("fte_at")),

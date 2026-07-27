@@ -52,6 +52,8 @@ POSTGRES_DSN = os.getenv(
 # compose에서 8000(FastAPI)과 겹치지 않도록 8001로 노출
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8001"))
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
 # ── 캐시/큐 (Redis, 선택) ──────────────────────────────────────
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")

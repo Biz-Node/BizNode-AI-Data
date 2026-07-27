@@ -32,6 +32,16 @@ def make_person_key(name: str, birth_year_month: Optional[str], corp_code: str) 
 # 엣지 표준 메타 (방법서 §4 · ERD §2-3) — 전 엣지 공통
 # ---------------------------------------------------------------------------
 
+# 소스별 예상 갱신 주기(일). "미갱신 = 종료"가 아니라 소스마다 주기가 다르다.
+#   DART 정형(지분·임원)은 사업보고서가 연 1회라 11개월 미갱신도 정상이다.
+#   방법서 §4의 "6개월 룰"을 일괄 적용하면 정상 관계를 대거 오판한다.
+SOURCE_REFRESH_CYCLE_DAYS = {
+    "dart": 365,          # 사업보고서 연 1회
+    "dart_filing": 0,     # 개별 공시(공급계약 등) — valid_until이 진짜 종료일
+    "news": 180,          # 뉴스는 6개월 미언급이면 신선도 하향 (P2)
+}
+
+
 def standard_edge_meta(
     *,
     source_doc: Optional[str],
@@ -40,17 +50,27 @@ def standard_edge_meta(
     valid_from: Optional[str] = None,       # 상태 엣지: 관계 시작일
     valid_until: Optional[str] = None,
     occurred_at: Optional[str] = None,      # 사건 엣지: 발생 시점
-    last_seen: Optional[str] = None,
+    last_seen: Optional[str] = None,        # 마지막 관측일(기록). None이면 관측 기준일로 채움
+    observed_at: Optional[str] = None,      # 이 관계가 관측된 문서의 기준일
     is_current: bool = True,
     evidence_id: Optional[str] = None,
     created_at: Optional[str] = None,
 ) -> dict[str, Any]:
-    """전 엣지가 공유하는 표준 메타 속성 딕셔너리."""
+    """전 엣지가 공유하는 표준 메타 속성 딕셔너리.
+
+    last_seen = "마지막으로 이 관계를 관측한 날"(사실 기록)이며 신선도 판정 자체가
+    아니다. 판정은 `refresh_cycle_days`(소스별 주기)와 함께 조회 시점에 계산한다.
+    valid_until이 있으면 그것이 우선한다(계약 종료일 = 명확한 사실).
+    """
+    # 관측일 우선순위: 명시 last_seen > 문서 기준일 > 관계 시작일/발생일
+    resolved_last_seen = last_seen or observed_at or valid_from or occurred_at
+
     return {
         "valid_from": valid_from,
         "valid_until": valid_until,
         "occurred_at": occurred_at,
-        "last_seen": last_seen,
+        "last_seen": resolved_last_seen,
+        "refresh_cycle_days": SOURCE_REFRESH_CYCLE_DAYS.get(source_type, 365),
         "is_current": is_current,
         "confidence": confidence,
         "source_type": source_type,

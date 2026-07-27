@@ -65,7 +65,12 @@ def normalize_investments(rows: list[dict[str, Any]], corp_code: str) -> Normali
 
         rel = OwnsStakeInRelationshipDTO(
             subtype=subtype,
-            meta=standard_edge_meta(source_doc=None, valid_from=first_acquired),
+            # 근거: 공시 접수번호 / 관측일: 결산기준일(valid_from은 최초취득일이라 별개)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")),
+                valid_from=first_acquired,
+                observed_at=clean_missing(row.get("stlm_dt")),
+            ),
             ratio=ratio,
             previous_ratio=previous_ratio,
             ratio_change=ratio_change,

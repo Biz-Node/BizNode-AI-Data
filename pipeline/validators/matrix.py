@@ -43,7 +43,8 @@ def _s(*types: str) -> frozenset[str]:
 
 # 방법서 2-2 허용 매트릭스 (12종)
 EDGE_MATRIX: dict[str, EdgeRule] = {
-    "OWNS_STAKE_IN":  EdgeRule(_s("Company", "Person", "Organization"), _s("Company"), False),
+    # target에 Organization 허용: 재단·연구원 출자(출연)는 실제 관계 (P1 완화)
+    "OWNS_STAKE_IN":  EdgeRule(_s("Company", "Person", "Organization"), _s("Company", "Organization"), False),
     "IS_EXECUTIVE_OF": EdgeRule(_s("Person"), _s("Company", "Organization"), False),
     "SUPPLIES_TO":    EdgeRule(_s("Company"), _s("Company"), False),
     "PARTNERS_WITH":  EdgeRule(_s("Company", "Organization"), _s("Company", "Organization"), True),

@@ -255,6 +255,93 @@
 
 - **결과: 지분·임원 골격 그래프가 캔버스에 뜬다**
 
+### ✅ P1 최종 검토 (2026-07-27) — 사용성 관점 결함 점검
+
+플랫폼 사용성 기준으로 전수 점검하고 결함을 수정했다.
+
+**수정 완료 (🔴 심각):**
+
+| # | 결함 | 조치 |
+|---|---|---|
+| 1 | **전 엣지 근거 누락** — OWNS_STAKE_IN·IS_EXECUTIVE_OF 2,174건에 `source_doc`·`evidence_id` 없음 | 원본 `rcept_no` 연결 + 경로 A용 evidence 스니펫 생성기([path_a_evidence.py](pipeline/importer/path_a_evidence.py)). **근거 100% 달성** |
+| 2 | **APOC MERGE 버그** — `apoc.merge.relationship`의 4번째 인자는 onCreate라 기존 엣지 속성이 재적재해도 갱신 안 됨 | onMatch 인자 추가(관계만, 노드는 시드 보호 위해 onCreate 유지) |
+| 3 | **`last_seen` 전 엣지 0건** — 신선도 판정 불가 | 아래 §신선도 참조 |
+
+**★ 신선도 판정 — 방법서 §4의 "6개월 룰"을 소스별 주기로 정교화:**
+
+방법서는 "6개월 미갱신 → 과거 관계로 간주"라 했으나 **일괄 적용하면 정상 관계를 오판**한다.
+삼성생명의 삼성전자 8.51% 지분은 10년째 유지되는데 사업보고서는 **연 1회**뿐이다.
+
+```python
+SOURCE_REFRESH_CYCLE_DAYS = {
+    "dart":        365,  # 사업보고서 연 1회 → 11개월 미갱신도 정상
+    "dart_filing":   0,  # 개별 공시 → valid_until이 진짜 종료일
+    "news":        180,  # 뉴스만 6개월 룰 (P2)
+}
+```
+판정 우선순위: ①`is_current=false`/`valid_until` 경과 = **expired**(명확한 사실 우선)
+②`last_seen`이 주기×1.5 이내 = **current** ③초과 = **stale**(신뢰도 0.6배)
+
+구현: [pipeline/freshness.py](pipeline/freshness.py) — `assess()` / `effective_confidence()`.
+실측 검증: 208일 경과 임원 관계가 `CURRENT` 판정(6개월 룰이면 오판했을 케이스).
+
+**남은 한계 (P2·서빙에서 해결):**
+
+| 항목 | 현황 | 해결 경로 |
+|---|---|---|
+| **공급망 2홉 경로 1건** | 체인 중간 노드가 시드여야 성립하는데 타겟 대부분이 stub | 시드 확대(구조) + P2 뉴스(공시 없는 관계) |
+| 슈퍼노드 | NAVER 296·LG전자 210·삼성전자 177 | 서빙 API에서 degree 제한·페이징 |
+| 고립 시드 2곳 | 케이씨텍·태성(비상장, 공시 없음) | 프론트 "데이터 준비 중" 안내 |
+| 제품 0개 3곳 | 현대차증권·케이티·제이브이엠(금융·통신 목차 상이) | 매체별 파서 or P2 |
+| `ingest_runs` 미사용 | 배치 이력·매칭 실패율 미기록(§13) | 운영 단계 |
+
+**audit 확장:** `[F-근거]`(source_doc·evidence_id 누락) + `[F-신선도]`(last_seen 누락) 검사 추가 → 재발 시 즉시 탐지.
+
+---
+
+### ✅ Sprint 2 완료 (2026-07-26) — 경로 B 공시 원본 전체
+
+경로 B 완결: SUPPLIES_TO(2C) + ACQUIRES/SUES/Event(2D).
+
+**2D 사건 엣지 (주요사항보고서 구조화 API):**
+| 유형 | 소스 | 결과 |
+|---|---|---|
+| **ACQUIRES** | 합병(cmpMgDecsn)·주식취득(otcprStkInvscrInhDecsn) | **14건** (카카오→다음글로벌, 두산로보틱스→두산에너빌리티, 코미코→미코세라믹스 등) |
+| **SUES** | 소송(lwstLg) | 0 (상대 익명 개인 → Event로) |
+| **Event+HAS_EVENT** | 소송/부도/회생 | **1건** (현대차증권 신주발행금지가처분) — 첫 Event 노드 |
+
+**실측 결론:** 건강한 반도체·로봇 시드라 ACQUIRES는 실질 데이터, 부도·회생·영업정지=0(Event는 P2 뉴스 영역). 소송 상대가 익명이면 SUES 대신 Event+HAS_EVENT로 사실 기록.
+
+**데이터 품질 감사(audit_graph) 확립:** 6범주 ~22검사(무결성·참조·범위·통계·크로스-DB). 🔴 무결성 오류 0건. 적재마다 실행해 회귀 방지. 이 과정에서 발견·수정: Person 폭발(1504→827, 미등기 필터), SUPPLIES_TO garbage(선주·문장 → 0), Organization 오분류, Event name/title 검사.
+
+---
+
+### Sprint 2C 결과 — 공급계약 → SUPPLIES_TO + 팩트체크
+
+경로 B 공급계약 파싱 완료. **ChromaDB 첫 적재 + 팩트체크(엣지→근거) 작동.**
+
+| 저장소 | 결과 |
+|---|---|
+| **Neo4j** | SUPPLIES_TO **140건** 추가 (총 엣지 OWNS_STAKE_IN 2092·IS_EXECUTIVE_OF 1261·SUPPLIES_TO 140) · Company 1,583 |
+| **ChromaDB** | evidence 컬렉션 140청크 (OpenAI text-embedding-3-small) |
+| **PostgreSQL** | documents 393(원문메타) · vector_chunks 141(레지스트리) |
+| **파일** | data/documents/{rcept_no}/ 원문 393건 |
+
+**실제 반도체·로봇 밸류체인:** 테크윙·와이씨→삼성전자, 주성엔지니어링·넥스틴·한미반도체(7.7%)→SK하이닉스, 삼성에스디에스→삼성전자(3.6%), 뉴로메카→큐렉소. 대기업(삼성·SK)이 다수 공급사의 inbound 엣지를 받음(Sprint 0 inbound 통찰 실증).
+
+**팩트체크 흐름 완성:** 엣지 클릭 → `evidence_id` → ChromaDB → 근거문("한미반도체는 SK하이닉스와 공급계약 체결, 442억원, 매출 7.66%…"). BizNode XAI 정체성 작동.
+
+**핵심 구현 결정/발견:**
+- **결정적 evidence_id 해시**(§5-3): 재실행 멱등, 엣지-청크 고아 방지
+- **크로스-DB 쓰기 순서**(§5-2): staged→Chroma→Neo4j→loaded_at
+- **파서 결함 2건 수정**: ①필드 라벨 "계약상대"/"계약상대방" 혼재 ②과다포착으로 실명 계약 오판 → 정밀 종료자 + 설명형("해외 Nand 제조사") 명시 스킵. 수정으로 **엣지 78→140 회복**
+- 원문 로컬 캐시 → 재실행 시 DART 재호출 없음
+- 실제 유보율 ~20%(78건, 팹리스·소부장 영업기밀) — 방법서 §7 예측대로. 방산(HD현대·현대로템)은 계약상대 공개
+
+**범위:** 공급계약(SUPPLIES_TO)만. ACQUIRES·SUES·Event는 다음(2D).
+
+---
+
 ### Sprint 2 — 경로 B 공시 원본 ★핵심
 > **수집=라이브러리 / 파싱·정규화·적재=자체** (§9-2). 아래 앞 2줄만 라이브러리, 나머지는 전부 자체 구현.
 
@@ -264,6 +351,44 @@
 - [ ] 합병·양수도 파서 → ACQUIRES / 소송 파서 → SUES / 부도·회생 → Event+HAS_EVENT
 - [ ] 계약상대방 공시유보 → 엣지 보류, HAS_EVENT로 사실만 기록
 - **결과: 공급망·M&A·리스크 엣지 + 근거 조회**
+
+### ✅ Sprint 3 완결 (2026-07-27) — 경로 C 전체 (제품 + 계약관계)
+
+**II-6 주요계약 → PARTNERS_WITH / DEPENDS_ON 추가 (LLM 추출):**
+
+| 엣지 | 건수 | 실제 예 |
+|---|---|---|
+| `PARTNERS_WITH` | 32 | 삼성전자↔Google·Qualcomm·Ericsson·Huawei·Nokia(특허 라이선스), SK하이닉스↔Rambus(크로스 라이선스) |
+| `DEPENDS_ON` | 11 | HD현대 정유 공정 라이선스 8종(FCC 촉매분해·탈황·황산재생), SK하이닉스 NAND |
+
+- **대칭 엣지 처리**: PARTNERS_WITH는 방법서 §11대로 키 사전순 단방향 저장(A→B, B→A 중복 방지), 조회는 방향 무시.
+- **LLM + 코드 가드 2단**: 프롬프트로 소유권이전 거래(양수도·신주인수·SHA) 제외 지시 + 코드에서 재차 필터(프롬프트만 신뢰하지 않음). 일반명사 counterparty("계열회사"·"기술사용허락")도 차단.
+
+**⚠️ IX 계열회사 → OWNS_STAKE_IN 엣지로 만들지 않기로 결정(방법서 §7 문자와 다름):**
+계열사는 "소유"가 아니라 **같은 그룹 형제사**다. 삼성전자→삼성물산을 OWNS_STAKE_IN으로 만들면 ①거짓 소유 관계 ②67개사 clique(2,200+ 허위 엣지) ③실제 지분은 이미 경로 A(출자30·최대주주17)가 커버. → **`Company.business_group` 속성**으로 두는 것이 의미상 정확(Sector를 속성화한 것과 같은 원리). P1에서는 미구현, 필요 시 속성으로 추가.
+
+**경로 C 최종:** Product 335노드 · DEVELOPS 357 · PARTNERS_WITH 32 · DEPENDS_ON 11.
+
+---
+
+### Sprint 3 핵심 (2026-07-27) — 사업보고서 II-2 → Product + DEVELOPS
+
+경로 C 착수, **LLM 서술 추출 첫 도입**(OpenAI gpt-4o-mini). 표·서술이 지저분해 규칙 대신 LLM 구조화 추출.
+
+| 저장소 | 결과 |
+|---|---|
+| **Neo4j** | Product 270노드 · DEVELOPS 282엣지 |
+| **ChromaDB** | evidence 282청크 |
+
+**★공유 Product 노드로 경쟁구도 자동 형성:** 삼성↔LG(TV·냉장고·에어컨), 삼성↔제주반도체(DRAM·NAND), 유일↔나우↔클로봇(로봇), LG전자↔LG이노텍(Camera). "누가 DRAM 만드나" 질의 가능 → P2 COMPETES_WITH 추론 기반.
+
+**추출 흐름:** find 사업보고서(pblntf_ty A) → parse_sections(목차 분리) → II-2 텍스트 → OpenAI JSON 구조화 추출 → Product norm_name(소문자·공백제거)로 공유 노드.
+
+**현재 6개 엣지 타입:** OWNS_STAKE_IN 1667·IS_EXECUTIVE_OF 495·DEVELOPS 282·SUPPLIES_TO 122·ACQUIRES 14·HAS_EVENT 1. 노드: Company 1573·Person 506·Product 270·Event 1.
+
+**남은 경로 C(선택):** IX 계열사→OWNS_STAKE_IN{계열사}(30번 출자와 중복), II-6→PARTNERS_WITH·DEPENDS_ON(서술 sparse, "해당없음" 다수).
+
+---
 
 ### Sprint 3 — 경로 C 사업보고서
 > 원본 확보는 Sprint 2와 동일 정책(라이브러리). 기존 [downloader.py](pipeline/extractors/dart/downloader.py)와 통합.

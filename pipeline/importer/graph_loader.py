@@ -34,6 +34,8 @@ def _node_ident(node_type: str, key: str) -> dict[str, str]:
         return {"person_key": key}
     if node_type == "Company":
         return _company_ident(key)
+    if node_type == "Event":
+        return {"event_id": key}
     return {"norm_name": key}
 
 
@@ -44,11 +46,15 @@ def _rel_ident(edge_type: str, props: dict[str, Any]) -> dict[str, Any]:
     return {"subtype": props.get("subtype")}
 
 
+# apoc.merge.*의 4번째 인자는 onCreate, 마지막은 onMatch.
+# 재적재 시 속성 갱신이 되려면 onMatch에도 같은 props를 넘겨야 한다
+# (안 그러면 기존 엣지는 예전 속성을 그대로 유지 — 근거 누락 버그의 원인).
 _QUERY = """
 UNWIND $rows AS row
 CALL apoc.merge.node([row.src_label], row.src_ident, row.src_props, {}) YIELD node AS s
 CALL apoc.merge.node([row.tgt_label], row.tgt_ident, row.tgt_props, {}) YIELD node AS t
-CALL apoc.merge.relationship(s, row.edge_type, row.rel_ident, row.rel_props, t, {}) YIELD rel
+CALL apoc.merge.relationship(s, row.edge_type, row.rel_ident, row.rel_props, t, row.rel_props)
+YIELD rel
 RETURN count(*) AS n
 """
 

@@ -70,6 +70,14 @@ def download_and_extract(
     *,
     api_key: Optional[str] = None,
     download_dir: Path = DEFAULT_DOWNLOAD_DIR,
+    use_cache: bool = True,
 ) -> Path:
+    # 캐시: 이미 압축 해제된 XML이 있으면 재사용(재실행 시 DART 재호출 없음)
+    extract_dir = download_dir / rcept_no
+    if use_cache and extract_dir.is_dir():
+        xmls = sorted(extract_dir.rglob("*.xml"))
+        if xmls:
+            return max(xmls, key=lambda p: p.stat().st_size)
+
     zip_path = download_report_zip(rcept_no, api_key=api_key, download_dir=download_dir)
     return extract_xml(zip_path)

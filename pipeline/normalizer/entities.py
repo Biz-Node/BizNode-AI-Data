@@ -12,6 +12,7 @@ from typing import Optional
 from schemas.dart_schemas import (
     CompanyDTO,
     EntityDTO,
+    OrganizationDTO,
     PersonDTO,
     make_entity_ref,
     make_person_key,
@@ -22,6 +23,18 @@ from pipeline.normalizer.resolver import resolve
 
 # 개인이 아닌 법인/단체를 시사하는 표기
 _COMPANY_MARKERS = ("㈜", "(주)", "(유)", "주식회사", "유한회사", "회사", "재단", "조합", "Inc", "Ltd", "Corp")
+
+# 비기업 기관(Organization) 표기 — 연구기관·재단·협회 등 (기업 아님)
+_ORG_MARKERS = ("연구원", "연구소", "재단법인", "협회", "진흥원", "위원회", "학회", "진흥회")
+
+
+def looks_like_organization(name: str) -> bool:
+    """비기업 기관 판별. 단 ㈜·주식회사 등 법인격 표기가 있으면 회사다
+    (예: ㈜인공지능연구원, 디엠비마케팅연구소㈜는 '연구원/연구소'가 들어가도 주식회사).
+    """
+    if any(m in name for m in _COMPANY_MARKERS):
+        return False
+    return any(m in name for m in _ORG_MARKERS)
 
 
 def looks_like_company(name: str) -> bool:
@@ -34,8 +47,12 @@ def looks_like_company(name: str) -> bool:
 
 
 def build_company(name: str) -> tuple[EntityDTO, str]:
-    """이름 → (Company EntityDTO, ref). 엔드포인트 후보라 is_stub=True로 표기
-    (importer가 ON CREATE 시에만 적용 → 이미 있는 시드 노드는 유지).
+    """이름 → (Company EntityDTO, ref). 엔드포인트 후보라 is_stub=True.
+
+    P1 경로 A(정형)는 전부 Company로 둔다(펀드·연구소·재단 포함). Organization
+    (규제기관·정부·협회) 타이핑은 P2(소송·규제 주체)에서 처리 — 정형 소스로는
+    회사/기관을 안정적으로 구분할 수 없고(㈜연구원 등 실명 회사도 많음), 무리한
+    분류가 ER 이중화를 유발한다. looks_like_organization은 P2용으로 보존.
     """
     norm = normalize_company_name(name)
     vehicle = is_investment_vehicle(name)
