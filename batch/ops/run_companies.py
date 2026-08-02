@@ -48,12 +48,65 @@ def pending_by_priority(limit: int) -> list[str]:
     return todo[:limit]
 
 
+# 표준 설정 — 이 셋이 다르면 그 기업은 다시 모아야 한다.
+STD_YEARS, STD_LIMIT, STD_MONTH_SPLIT = 5, 240, True
+
+_NONSTD = """
+SELECT DISTINCT ON (corp_code) corp_code, company_name, years, month_split, extract_limit
+FROM extraction_runs ORDER BY corp_code, run_at DESC
+"""
+
+
+def nonstandard_runs(limit: int | None = None) -> list[tuple[str, str]]:
+    """**표준이 아닌 설정으로 모은 기업**을 돌려준다 — 재수집 대상.
+
+    ★왜 도구가 알아야 하나: 손으로 고르면 틀린다. 실제로 29개사가 다섯 가지
+      설정으로 갈려 있었고(3년/기간/100이 17곳, 5년/월별/240이 12곳 …),
+      어느 게 어느 설정인지는 `extraction_runs`만 안다. 사람이 기억할 일이 아니다.
+
+    같은 기업을 여러 번 돌렸으면 **가장 최근 실행**을 본다.
+    이미 뽑은 기사는 `title_hash`로 걸러지므로 재수집은 **추가분만** 돈이 든다
+    (실측: 옛 설정 평균 37건 → 표준 74건, 차이 37건 ≈ 545원/사).
+    """
+    order = {n: i for i, n in enumerate(VALUE_CHAIN_PRIORITY)}
+    with postgres_connection() as conn:
+        ensure_table(conn)
+        rows = conn.execute(_NONSTD).fetchall()
+    out = [(code, name) for code, name, yrs, ms, lim in rows
+           if not (yrs == STD_YEARS and ms == STD_MONTH_SPLIT and lim == STD_LIMIT)]
+    out.sort(key=lambda x: order.get(x[1], 999))
+    return out[:limit] if limit else out
+
+
+# 규모별 실측 단가 — `extraction_runs` 29개사 실지출에서 뽑았다.
+_UNIT_LARGE_KRW = 3000     # 매출 5조 이상: 관련 기사가 상한 근처까지 나온다
+_UNIT_OTHER_KRW = 700      # 그 외: 5년을 뒤져도 관련 기사가 40건 남짓이다
+_LARGE_REVENUE = 5e12
+
+
+def _estimate_cost(names: list[str]) -> float:
+    """상한이 아니라 **실측 단가 기반 예상치**."""
+    try:
+        from app.core.database import neo4j_session
+        with neo4j_session() as s:
+            rev = {r["n"]: r["v"] for r in s.run(
+                "MATCH (c:Company) WHERE c.name IN $ns "
+                "RETURN c.name AS n, c.revenue_snapshot AS v", ns=names)}
+    except Exception:
+        return len(names) * _UNIT_OTHER_KRW
+    return sum(_UNIT_LARGE_KRW if (rev.get(n) or 0) >= _LARGE_REVENUE
+               else _UNIT_OTHER_KRW for n in names)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("companies", nargs="*", help="기업명 (비우면 --plan 사용)")
     ap.add_argument("--plan", type=int, metavar="N",
                     help="미진행 기업 중 밸류체인 우선순위 N개")
+    ap.add_argument("--recollect", type=int, nargs="?", const=999, metavar="N",
+                    help="**표준이 아닌 설정으로 모은 기업**을 다시 (기본 전부). "
+                         "이미 뽑은 기사는 건너뛰므로 추가분만 돈이 듭니다")
     # ★기본값 = **표준 설정**이다. 바꾸지 마세요(2026-08-02 확정).
     #
     #   전에는 기본이 `3년 · 상한 100 · 월별분할 없음`이었다. 그래서 그냥 돌린
@@ -80,20 +133,39 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="목록만 보고 끝")
     args = ap.parse_args()
 
-    names = args.companies or (pending_by_priority(args.plan) if args.plan else [])
+    if args.recollect:
+        names = [n for _, n in nonstandard_runs(args.recollect)]
+        if names:
+            print(f"■ 표준이 아닌 설정으로 모은 기업 {len(names)}곳을 다시 모읍니다")
+            print("   (이미 뽑은 기사는 title_hash로 건너뜁니다 — 추가분만 과금)\n")
+    else:
+        names = args.companies or (pending_by_priority(args.plan) if args.plan else [])
     if not names:
-        print("돌릴 기업이 없습니다. 기업명을 주거나 --plan N 을 쓰세요.")
+        print("돌릴 기업이 없습니다. 기업명을 주거나 --plan N / --recollect 를 쓰세요.")
         return 1
 
-    print(f"대상 {len(names)}개사 · 기업당 최대 {args.limit}건 · {args.years}년치")
+    std = (args.years == 5 and args.limit == 240 and args.month_split)
+    print(f"대상 {len(names)}개사 · {args.years}년 · 월별분할={args.month_split} · "
+          f"상한 {args.limit}건" + ("  [표준]" if std else "  ⚠ 표준이 아닙니다"))
+    if not std:
+        print("   ※ 표준은 5년 · 월별분할 · 상한 240입니다. 다르게 모으면 이 기업만")
+        print("     연결 밀도가 달라져 **다른 기업과 위험도를 비교할 수 없습니다**.")
     for i, n in enumerate(names, 1):
         print(f"  {i:>2}. {n}")
-    # 상한 = 전 기업이 CAP을 채웠을 때. 실제로는 중소형사가 공급 부족으로
-    # 훨씬 적게 나오므로 **상한이지 예상치가 아니다**(10개사 배치 실측: 상한의 25%).
+
+    # ★상한과 예상치를 **함께** 찍는다. 전에는 상한만 찍어서, 그 값을 예상 비용으로
+    #   읽고 예산을 3배로 잡은 적이 있다(2026-08-02). 상한은 전 기업이 CAP을
+    #   채웠을 때인데, 29개사 중 채운 건 3곳뿐이었다.
     cap_cost = len(names) * args.limit * _EXTRACT_KRW
-    print(f"\n비용 상한 {cap_cost:,.0f}원 (≈ ${cap_cost/1380:.1f}) "
-          f"— 전 기업이 상한 {args.limit}건을 채울 경우")
-    print(f"  실제는 중소형사가 공급 부족으로 미달하므로 이보다 적습니다")
+    est = _estimate_cost(names)
+    if args.recollect:
+        # 재수집은 **이미 뽑은 기사를 건너뛴다**. 옛 설정 평균 37건 → 표준 74건이
+        # 실측이므로 추가분은 절반쯤이다. 아래 예상치는 그래서 상한에 가깝다.
+        print(f"\n예상 {est:,.0f}원의 **절반 이하**입니다 — 이미 뽑은 기사는 건너뜁니다")
+        print(f"  (실측: 옛 설정 평균 37건 → 표준 74건, 추가분 37건 ≈ 545원/사)")
+    print(f"\n예상 {est:,.0f}원  (실측 단가: 대형 약 3,000원 · 그 외 약 700원)")
+    print(f"비용 상한 {cap_cost:,.0f}원 — 전 기업이 상한 {args.limit}건을 채울 경우")
+    print(f"  추출량은 상한이 아니라 **관련 판정을 통과한 기사 수**가 정합니다.")
     if args.dry_run:
         print("\n[dry-run] 실행하지 않았습니다.")
         return 0

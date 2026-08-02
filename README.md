@@ -5,6 +5,7 @@
 > 2026 한이음 드림업 · 금융/핀테크 · 팀 쑥부르스도나스
 > 문서: 이 파일(개요·서비스) · [코드 지도](CODEMAP.md)(파일이 어디에 무엇을) ·
 > [데이터 수집 방법서](BizNode_데이터수집_방법서.md)(설계·실측·운영 규칙) ·
+> [데이터베이스 ERD](BizNode_데이터베이스_ERD.md)(그래프·벡터·RDB 스키마와 교차 키) ·
 > [추출 진행현황](BizNode_추출_진행현황.md)(자동 생성)
 
 ---
@@ -199,12 +200,42 @@ python -m batch.build.sales_customers
 python -m batch.build.company_detail       # 개요·사업부문
 
 # 2) 뉴스 — 3~5개사씩 나눠서 (구글 속도 제한 회피)
-python -m batch.ops.run_companies --plan 5 --years 5 --limit 240 \
-    --month-split --bucket month --resolve-factor 4
+#    ★설정을 손으로 주지 않는다. 기본값이 곧 표준(5년 · 월별분할 · 상한 240)이다.
+python -m batch.ops.run_companies --plan 5
 
 # 3) 정리·검증 — 배치가 끝나면 한 번. **아래를 전부 순서대로 실행한다.**
 python -m batch.ops.finalize
 ```
+
+### 확정된 수집 절차 (2026-08-02)
+
+**표준 설정 = 5년 · 월별분할 · 상한 240.** `run_companies`의 기본값에 박아 뒀다.
+바꾸면 그 기업만 연결 밀도가 달라져 **다른 기업과 위험도를 비교할 수 없다**
+— 리스크 파급이 연결 수에 직접 반응하기 때문이다(허브 감점 `40/(40+차수-1)`).
+
+```bash
+# ⓪ 넣기 전 — 시드가 기존 노드에 붙는지 확인 (무료·1분)
+python -m batch.audit.graph          # 「시드 추가 시 노드가 갈리는 기업: 0곳」이어야 한다
+
+# ① 표준이 아닌 설정으로 모은 기업을 먼저 맞춘다 (17곳 · 약 7,000원)
+python -m batch.ops.run_companies --recollect 5      # 5곳씩 나눠서
+python -m batch.ops.finalize
+
+# ② 미진행 기업 확장 (35곳 · 약 45,000원) — 밸류체인 우선순위로 자동 정렬
+python -m batch.ops.run_companies --plan 5           # 5곳씩, 며칠에 나눠
+python -m batch.ops.finalize                         # 5곳 끝날 때마다
+
+# ③ 다 끝나면 사람이 본다
+python -m batch.audit.spot_check --source news
+```
+
+> **왜 5곳씩인가** — 5년·월별이면 기업당 60개 질의라, 52곳을 한 번에 돌리면
+> 3,000개가 넘어 구글이 막는다(실측: 심텍 480개 질의 전량 503).
+> 막히면 `exit 3`으로 끝나고 **대장에 기록하지 않아** 나중에 다시 돌 수 있다.
+
+> **비용은 상한이 아니라 예상치를 본다** — 추출량은 상한이 아니라
+> 「관련 판정을 통과한 기사 수」가 정한다. 29개사 중 상한을 채운 건 3곳뿐이다.
+> `run_companies`가 둘 다 찍는다.
 
 `finalize`가 도는 순서(개별 실행도 가능):
 
@@ -222,6 +253,10 @@ python -m batch.repair.subtypes                # subtype 수렴
 python -m batch.repair.executive_titles        # 근거에서 직위 복원
 python -m batch.repair.stake_subtypes          # 최대주주/자회사 라벨 교정
 python -m batch.repair.evidence                # 근거 청크 중복 병합 → 고아 삭제
+python -m batch.repair.event_sources           # 사건에 관련 기사 목록 채우기
+python -m batch.repair.press_names             # 언론사명을 URL 도메인 다수결로 복구
+python -m batch.build.stub_profiles            # stub 정체 한 줄 (신규분만)
+python -m batch.build.company_vectors          # 기업 카드 임베딩 (변경분만)
 
 # ③ 검사 — 무엇이 틀렸나 (지우지 않고 표시만)
 python -m batch.audit.grounding --llm --apply --all --source news
