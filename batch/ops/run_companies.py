@@ -54,10 +54,24 @@ def main() -> int:
     ap.add_argument("companies", nargs="*", help="기업명 (비우면 --plan 사용)")
     ap.add_argument("--plan", type=int, metavar="N",
                     help="미진행 기업 중 밸류체인 우선순위 N개")
-    ap.add_argument("--years", type=int, default=3)
-    ap.add_argument("--limit", type=int, default=100, help="기업당 추출 상한")
-    ap.add_argument("--month-split", action="store_true",
-                    help="대형주용 — 월 단위로 쪼개 수집(1,000건 상한 회피)")
+    # ★기본값 = **표준 설정**이다. 바꾸지 마세요(2026-08-02 확정).
+    #
+    #   전에는 기본이 `3년 · 상한 100 · 월별분할 없음`이었다. 그래서 그냥 돌린
+    #   17개사와, 나중에 플래그를 붙여 돌린 12개사가 **밀도가 2배 다른 두 집단**이
+    #   됐다. 리스크 파급은 연결 수에 직접 반응하므로(허브 감점 = 40/(40+차수-1)),
+    #   수집량 차이가 그대로 위험도 차이로 보인다 —
+    #   「A사가 위험해 보이는 이유」가 「A사 뉴스를 더 모아서」가 된다.
+    #
+    #   설정을 기본값에 박아 둬야 **아무 생각 없이 돌려도 같은 조건**이 된다.
+    #   실측 단가: 대형 약 3,000원 · 그 외 약 700원(상한이 아니라 관련 기사 수가
+    #   추출량을 정한다 — 29개사 중 상한을 채운 건 3곳뿐이다).
+    ap.add_argument("--years", type=int, default=5,
+                    help="수집 기간(년). 표준 5 — 바꾸면 기업 간 비교가 깨집니다")
+    ap.add_argument("--limit", type=int, default=240,
+                    help="기업당 추출 상한. 표준 240")
+    ap.add_argument("--no-month-split", dest="month_split", action="store_false",
+                    help="월 단위 분할 수집을 끈다 — **표준에서 벗어납니다**")
+    ap.set_defaults(month_split=True)
     ap.add_argument("--bucket", choices=["month", "quarter", "year"],
                     default="month", help="기간 균등 배분 단위")
     ap.add_argument("--resolve-factor", type=int, default=4,
