@@ -1,12 +1,12 @@
-"""[Sprint 1] 정형 골격 그래프 구축 오케스트레이터 (경로 A).
+"""정형 골격 그래프 구축 오케스트레이터 (경로 A).
 
 순서: Neo4j 스키마 → 시드 Company 노드 → staged_edges 스테이징 → Neo4j 적재.
 raw_dart(기존 수집분) 재사용. 관계는 staged_edges에서 재생성되므로 --reset 후
 재실행해도 DART 재호출은 기업개황(company.json)만 발생한다.
 
 실행:
-  python -m batch.build_graph            # 증분(loaded_at NULL만 적재)
-  python -m batch.build_graph --reset    # 그래프 초기화 후 전체 재구축
+  python -m batch.build.graph            # 증분(loaded_at NULL만 적재)
+  python -m batch.build.graph --reset    # 그래프 초기화 후 전체 재구축
 """
 
 from __future__ import annotations

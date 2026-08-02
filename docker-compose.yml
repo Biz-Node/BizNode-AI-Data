@@ -5,7 +5,7 @@
 
 services:
   # ── Graph DB ────────────────────────────────────────────────
-  # APOC 필수: pipeline/importer/neo4j_importer.py가 apoc.merge.node/relationship 사용
+  # APOC 필수: graph_loader의 MERGE, batch/repair/*의 노드 병합·유형 변경에서 사용
   neo4j:
     image: neo4j:5.26-community
     container_name: biznode-neo4j

@@ -1,7 +1,7 @@
-"""[Sprint 1D] 대량보유(majorstock, 5%룰) → data/raw_dart/{corp}_majorstock.json.
+"""대량보유(majorstock, 5%룰) → data/raw_dart/{corp}_majorstock.json.
 
 지분공시 종합정보 API는 corp_code만 필요(bsns_year 없음).
-실행: python -m batch.fetch_ownership
+실행: python -m batch.build.ownership
 """
 
 from __future__ import annotations

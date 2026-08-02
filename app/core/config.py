@@ -23,11 +23,13 @@ DOCUMENTS_DIR = DATA_DIR / "documents"  # 공시 원문 보관 (임베딩 안 �
 DART_KEY = os.getenv("DART_KEY")
 DATA_GO_KR_SERVICE_KEY = os.getenv("DATA_GO_KR_SERVICE_KEY")
 
-# LLM — 현재 프로젝트 표준은 OpenAI.
-# ANTHROPIC_API_KEY는 기존 llm_postprocess.py(Claude Haiku Batch)가 참조하므로
-# 마이그레이션 전까지 남겨둔다. 미설정 시 해당 모듈만 동작하지 않는다.
+# LLM — 프로젝트 표준은 OpenAI (gpt-4o 추출 · gpt-4o-mini 검증·분류·임베딩).
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# ── 뉴스 수집 (P2) ─────────────────────────────────────────────
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+BIGKINDS_ACCESS_KEY = os.getenv("BIGKINDS_ACCESS_KEY")
 
 # ── Graph DB (Neo4j) ───────────────────────────────────────────
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")

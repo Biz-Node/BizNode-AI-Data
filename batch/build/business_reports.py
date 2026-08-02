@@ -1,11 +1,12 @@
-"""[Sprint 3] 사업보고서 II-2 → Product 노드 + DEVELOPS + evidence (경로 C).
+"""사업보고서 II-2 → Product 노드 + DEVELOPS + evidence (경로 C).
 
 find 사업보고서 → 타겟 섹션 추출 → LLM 제품 추출 → 스테이징 → evidence → 적재.
-쓰기 순서 §5-2. 실행: python -m batch.build_business_reports
+쓰기 순서 §5-2. 실행: python -m batch.build.business_reports
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 
@@ -37,13 +38,19 @@ def _to_iso(yyyymmdd):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--contracts-only", action="store_true",
+                        help="II-6 계약만 재추출(II-2 제품 LLM 호출 생략) — 재적재용")
+    args = parser.parse_args()
+
     with open(ETF_LIST_PATH, encoding="utf-8") as f:
         seed = json.load(f)["companies"]
 
     all_ev = []
     tot_products = tot_contracts = no_report = 0
 
-    print(f"[1/3] 사업보고서 수집·LLM 추출(제품·계약)·스테이징")
+    scope = "계약만" if args.contracts_only else "제품·계약"
+    print(f"[1/3] 사업보고서 수집·LLM 추출({scope})·스테이징")
     with postgres_connection() as conn:
         for i, c in enumerate(seed, 1):
             corp_code, name = c["corpCode"], c["companyName"]
@@ -62,13 +69,17 @@ def main() -> int:
             register_document(conn, rcept_no, corp_code, "사업보고서",
                               rpt.get("report_nm", ""), report_date)
             # II-2 제품 → Product + DEVELOPS
-            products = extract_products(sections.get("products", ""), name)
-            doc, evs = build_product_document(corp_code, name, rcept_no, products, report_date)
-            n, _ = stage_document(conn, f"report:{corp_code}", doc)
-            all_ev.extend(evs)
-            tot_products += n
+            products: list[dict] = []
+            n = 0
+            if not args.contracts_only:
+                products = extract_products(sections.get("products", ""), name)
+                doc, evs = build_product_document(corp_code, name, rcept_no, products,
+                                                  report_date)
+                n, _ = stage_document(conn, f"report:{corp_code}", doc)
+                all_ev.extend(evs)
+                tot_products += n
 
-            # II-6 계약 → PARTNERS_WITH / DEPENDS_ON
+            # II-6 계약 → SUPPLIES_TO / PARTNERS_WITH / DEPENDS_ON
             relations = extract_contract_relations(sections.get("contracts", ""), name)
             cdoc, cevs = build_contract_relation_document(
                 corp_code, name, rcept_no, relations, report_date
@@ -84,7 +95,7 @@ def main() -> int:
                 print(f"  [{i}/{len(seed)}] {name}: 제품 {n} ({names}){extra}")
 
         print(f"  → Product·DEVELOPS {tot_products}건, "
-              f"PARTNERS/DEPENDS_ON {tot_contracts}건, 보고서 없음 {no_report}개사")
+              f"계약관계 {tot_contracts}건, 보고서 없음 {no_report}개사")
 
         print(f"\n[2/3] evidence 임베딩 → ChromaDB + vector_chunks ({len(all_ev)}건)")
         upsert_evidence(conn, all_ev)

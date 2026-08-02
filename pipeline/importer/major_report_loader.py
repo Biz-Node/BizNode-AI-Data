@@ -21,6 +21,7 @@ from schemas.dart_schemas import (
 from pipeline.extractors.dart.document import register_document
 from pipeline.extractors.dart.major_reports import fetch_major_report
 from pipeline.importer.evidence import EvidenceRecord, make_evidence_id
+from pipeline.text import eul_reul, i_ga
 from pipeline.normalizer.base import clean_missing, clean_name, convert_korean_date
 from pipeline.normalizer.entities import build_company, master_company_ref
 from pipeline.normalizer.resolver import resolve
@@ -63,7 +64,7 @@ def _acquire_edge(corp_code, corp_name, target_name, subtype, occurred_at, rcept
              "ratio": ratio, **meta}
     rel = RelationshipDTO("ACQUIRES", from_ref, tgt_ref, props)
 
-    text = f"{corp_name}이(가) {target_name}에 대해 {subtype}을(를) 결정하였다."
+    text = f"{i_ga(corp_name)} {target_name}에 대해 {eul_reul(subtype)} 결정하였다."
     if occurred_at:
         text += f" 이사회 결의일은 {occurred_at}이다."
     text += extra_evidence
@@ -140,7 +141,7 @@ def build_lawsuit_document(conn, corp_code, corp_name, bgn_de, end_de):
         anon = (not opponent) or any(m in opponent for m in _ANON_LAWSUIT)
         resolved = resolve(opponent) if (opponent and not anon) else None
 
-        text = f"{corp_name} 관련 소송 '{case_nm}'이(가) 제기되었다."
+        text = f"{corp_name} 관련 소송 「{case_nm}」 제기."
         if court:
             text += f" 관할: {court}."
         if occurred:

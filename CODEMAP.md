@@ -1,0 +1,205 @@
+# 코드 지도
+
+파일이 어디에 무엇을 하는지 한 장으로. 자세한 「왜」는 각 파일 맨 위 독스트링에 있다.
+설계 근거는 [방법서](BizNode_데이터수집_방법서.md), 서비스 개요는 [README](README.md).
+
+---
+
+## 큰 그림 — 데이터가 흐르는 순서
+
+```
+   ①수집          ②파싱·정규화        ③검증        ④적재           ⑤정리·검사      ⑥조회
+DART API   ──┐                                                                    
+공시 원문   ──┼─→ pipeline/        → validators/ → staged_edges → batch/repair/ → app/services/
+구글뉴스    ──┤   extractors         matrix.py      (PostgreSQL)   batch/audit/    graph_service
+네이버      ──┘   normalizer                            ↓                              ↓
+                  parsers                          Neo4j·ChromaDB                   프론트(예정)
+```
+
+- **`pipeline/`** 은 라이브러리다. CLI가 없고, 아무것도 스스로 실행하지 않는다.
+- **`batch/`** 는 그 라이브러리를 부르는 실행 진입점(CLI)이다.
+- 의존은 한 방향: `batch/` → `pipeline/` → `app/core`. **반대 방향은 없다.**
+
+---
+
+# batch/ — 실행하는 것 (46개)
+
+디렉터리가 **동사**다. 파일 이름에 `build_`·`fix_`·`audit_` 접두어를 붙이지 않는다.
+
+## batch/build/ — 만든다 (수집·적재)
+
+| 파일 | 하는 일 |
+|---|---|
+| `graph.py` | **여기서 시작한다.** 시드 기업 노드 + 지분·임원 관계 (경로 A) |
+| `financials.py` | 재무 3개년 → PostgreSQL + 노드 스냅샷 |
+| `disclosures.py` | 공급계약 공시 → `SUPPLIES_TO` (경로 B) |
+| `major_reports.py` | 주요사항보고서 → `ACQUIRES`·`SUES`·사건 (경로 B) |
+| `business_reports.py` | 사업보고서 → 제품 노드 + `DEVELOPS` (경로 C) |
+| `sales_customers.py` | 사업보고서 「매출 및 수주상황」 → 거래처 |
+| `company_detail.py` | 사업보고서 → 기업 개요 · 사업부문 (화면 표시용) |
+| `news.py` | 뉴스 → 관계 엣지 (수집 → 필터 → 추출 → 적재) |
+| `corp_master.py` | DART 전체 기업 마스터 11만건 (ER 블로킹용) |
+| `ownership.py` | 대량보유(5%룰) 원본 수집 |
+| `subtype_taxonomy.py` | subtype 분류 체계 수립 (1회성) |
+| `company_vectors.py` | 기업 소개 카드 임베딩 — **말로 회사 찾기** (개요+제품+거래처) |
+| `stub_profiles.py` | stub 2,267곳에 정체 붙이기 (DART 기업개황 → LLM 한 줄) |
+| `all.py` | 위를 순서대로 한 번에 |
+
+## batch/repair/ — 고친다 (이미 들어온 것 · 대부분 0원)
+
+| 파일 | 하는 일 |
+|---|---|
+| `node_names.py` | 이름이 불량한 노드 복구 (`Event`·NULL·설명형 stub) |
+| `node_identity.py` | 정규화키 재계산 → 같아진 노드 병합 |
+| `edges.py` | subtype 대표형 통일 + 중복 엣지 클러스터링 |
+| `subtypes.py` | subtype 레지스트리 정리 |
+| `products.py` | 같은 제품이 표기만 달라 갈린 것 통일 |
+| `event_names.py` | 사건 이름 다시 짓기 (기사 제목·프롬프트 유출) |
+| `event_types.py` | 사건에 유형 11종 + 리스크 여부 부여 |
+| `evidence.py` | 근거 청크 중복 병합 → 고아 삭제 |
+| `event_sources.py` | 사건에 **관련 기사 목록** 채우기 (엣지 출처를 노드로) |
+| `press_names.py` | 기사의 언론사명을 URL 도메인 다수결로 복구 |
+| `executive_titles.py` | 「임원」으로 뭉뚱그려진 직위를 근거에서 되찾기 |
+| `stake_subtypes.py` | 최대주주/자회사 라벨 교정 |
+| `segment_units.py` | 사업부문 매출 단위 오류 교정 (백만원↔원) |
+| `misclassified_edges.py` | 오분류 엣지 재배정 (방향까지 판단) |
+| `retypes.py` | 유형오류 판정을 실제로 적용 — **매트릭스가 거른다** |
+
+## batch/audit/ — 본다 (지우지 않고 표시만)
+
+| 파일 | 하는 일 |
+|---|---|
+| `grounding.py` | **근거가 관계를 뒷받침하나** — 저장된 문장으로 1차 판정 |
+| `grounding_fulltext.py` | 1차에서 걸린 것을 **기사 전문**으로 다시 (2차) |
+| `relations.py` | 방향 · 대칭 병렬언급 · 양방향 공급 · 사건성 (`--scope`) |
+| `dart.py` | DART 전용 — 필드 값 범위 + 사업보고서 **원문 대조** |
+| `freshness.py` | 관계의 **종료** — 뉴스가 말함 / DART 재적재에서 사라짐 |
+| `graph.py` | 구조 무결성 42개 검사 — 노드·엣지·값·의미·**라벨·검사표시·타입**·확장 안전성 |
+| `selftest.py` | ★**검사기 자체**가 한쪽으로 쏠렸는지 (추출기+검증기) |
+| `coverage.py` | ★「무엇이 걸렸나」가 아니라 **「무엇을 아직 안 봤나」** |
+| `spot_check.py` | 사람이 읽는 표본 — 아직 정의 못 한 실패 유형 찾기 |
+| `queries.py` | 실제 질의를 던져 서비스가 되는지 확인 |
+
+## batch/ops/ — 돌린다·본다
+
+| 파일 | 하는 일 |
+|---|---|
+| `finalize.py` | **후처리 전체를 순서대로** (회귀확인 → 정리 → 검사) |
+| `run_companies.py` | 여러 기업 추출 — 하나 실패해도 나머지 계속 |
+| `pilot_company.py` | 기업 1개로 파이프라인을 돌려 깔때기 실측 |
+| `status.py` | 어느 기업을 얼마나 돌렸나 (진행현황 문서 생성) |
+| `lookup.py` | 근거 원문 조회 CLI (ChromaDB엔 UI가 없다) |
+| `refilter.py` | 저장된 기사에 **현재** 규칙 필터를 다시 적용 |
+
+---
+
+# pipeline/ — 라이브러리 (CLI 없음)
+
+## pipeline/ 최상위 — 여러 곳이 공유하는 규칙
+
+| 파일 | 하는 일 |
+|---|---|
+| `ontology.py` | ★**엣지 12종의 정식 정의.** 추출기·검증기가 **같은 문장**을 쓴다 |
+| `llm.py` | ★LLM 호출 한 곳 — 스키마 강제 + **실패를 통과와 구별** |
+| `freshness.py` | 관계 신선도 판정 (current / stale / expired) |
+| `text.py` | 한국어 문장 생성 (근거 스니펫용) |
+
+## pipeline/extractors/ — 밖에서 가져온다
+
+**dart/** `corp_code`(기업 마스터) · `company_info`(기업개황) · `financials`(재무)
+· `disclosure_list`(공시 목록) · `document`·`downloader`(원문 ZIP)
+· `xml_parser`·`text_cleaner`(원문 파싱) · `business_report`·`company_detail`·`sales_customers`(절 추출)
+· `major_reports`(주요사항보고서)
+
+**news/** `naver`(관계 기사 발견) · `gnews`(기간 제약을 푸는 경로) · `rss`(전문 제공 매체)
+· `crawler`(본문 크롤 · robots.txt 준수)
+
+## pipeline/news/ — 뉴스 깔때기
+
+| 파일 | 하는 일 |
+|---|---|
+| `collector.py` | 수집 → 중복 제거 → 필터 |
+| `relevance.py` | 적합성 필터 — LLM 진입 최전선 (규칙 → LLM 2단) |
+| `extractor.py` | ★기사 → 관계 트리플 (매트릭스를 프롬프트로 주입) |
+
+## pipeline/parsers/ — 공시 본문에서 관계 뽑기
+
+`supply_contract`(공급계약 공시) · `product_extractor`(주요 제품)
+· `contract_extractor`(주요계약 → 협력·공급·의존)
+
+## pipeline/normalizer/ — 표기를 통일한다
+
+| 파일 | 하는 일 |
+|---|---|
+| `base.py` | 이름 정제 공통 유틸 (법인격 접미어 제거 등) |
+| `entities.py` | 이름 → 노드 엔티티 빌더 |
+| `relations.py` | ★L3 subtype 대표형 통일 + OTHER 매핑 |
+| `subtype_registry.py` | 개방형 subtype을 **관리되는 개방형**으로 |
+| `product_names.py` | 제품 표기 통일 (`HBM3E` / `HBM 3E`) |
+| `generic_names.py` | 설명형·익명 개체명 판별 (「글로벌 대형기업」 차단) |
+| `foreign_aliases.py` | 해외 기업 한글·영문 표기 통일 |
+| `resolver.py` | 이름 → `corp_code` 개체 해소 |
+| `person_index.py` | 이름 → 생년월 인덱스 (인물 분열 방지) |
+| `common.py` | 투자조합·신탁·펀드 분류 |
+| `shareholder_normalizer.py` | 최대주주 현황 → 지분 관계 (본인/특수관계인 구분) |
+| `executive_normalizer.py` | 임원 현황 → 임원 관계 |
+| `investment_normalizer.py` | 타법인 출자 → 자회사/출자 |
+| `majorstock_normalizer.py` | 대량보유(5%룰) → 지분 관계 |
+
+## pipeline/validators/ — 적재 전 최종 방어선
+
+| 파일 | 하는 일 |
+|---|---|
+| `matrix.py` | ★**노드-엣지 허용 매트릭스.** 잘못된 조합을 여기서 막는다 |
+| `dart.py` | DART 정형 데이터 도메인 검증 (값 범위·형식) |
+| `base.py` | 검증 리포트 · 공통 헬퍼 |
+
+## pipeline/importer/ — 저장소에 넣는다
+
+| 파일 | 하는 일 |
+|---|---|
+| `staging.py` | 정규화 결과 → `staged_edges` ★**권위 저장소** |
+| `graph_loader.py` | `staged_edges` → Neo4j (여기서 `loaded_at`을 찍는다) |
+| `evidence.py` | 근거 청크 → ChromaDB + 레지스트리 · `fetch_texts()` |
+| `neo4j_schema.py` | 제약·인덱스 셋업 |
+| `company_loader.py` | 시드 기업 노드 |
+| `disclosure_loader.py` | 공급계약 공시 → 엣지 |
+| `major_report_loader.py` | 주요사항보고서 → 엣지 |
+| `business_report_loader.py` | 사업보고서 → 제품·엣지 |
+| `news_loader.py` | 뉴스 관계 → 노드·엣지·근거 |
+| `path_a_evidence.py` | 정형 API 엣지의 근거 문장 **생성** (팩트체크용) |
+| `person_er.py` | 인물 개체해소 — 근거가 확실한 분열만 병합 |
+| `event_er.py` | 사건 개체해소 — 이름만 다른 같은 사건 병합 |
+| `extraction_ledger.py` | 기업별 추출 이력 |
+
+## pipeline/vectorstore/
+
+`base.py`(인터페이스) · `chroma_store.py`(ChromaDB + OpenAI 임베딩)
+
+---
+
+# app/ — 서비스가 읽는 쪽
+
+| 파일 | 하는 일 |
+|---|---|
+| `core/config.py` | 환경 설정 (`.env` → docker-compose 기본값 폴백) |
+| `core/database.py` | Neo4j · PostgreSQL 접속 헬퍼 |
+| `services/graph_service.py` | ★**그래프를 읽는 유일한 통로.** 신선도·근거 검증 결과를 적용해 거르고, 질의 시점에 파급을 계산한다 |
+| `api/` | 미구현 |
+
+# schemas/
+
+`dart_schemas.py` — 파이프라인 전역 공유 DTO (엔티티·관계·정규화 문서)
+
+---
+
+## 어디부터 읽어야 하나
+
+| 알고 싶은 것 | 볼 파일 |
+|---|---|
+| 엣지 12종이 무슨 뜻인가 | `pipeline/ontology.py` |
+| 어떤 조합이 허용되나 | `pipeline/validators/matrix.py` |
+| 뉴스에서 관계를 어떻게 뽑나 | `pipeline/news/extractor.py` |
+| 무엇이 틀렸는지 어떻게 아나 | `batch/audit/grounding.py` → `grounding_fulltext.py` |
+| 화면에 뭐가 나가나 | `app/services/graph_service.py` |
+| 전체를 한 번에 돌리려면 | `batch/ops/finalize.py` |

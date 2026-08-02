@@ -1,3 +1,9 @@
+"""공시 원문 ZIP 내려받아 풀기 → `data/raw_reports/{접수번호}/`.
+
+한 번 받아 두면 재파싱에 DART 재호출이 없다. `audit.dart`의 원문 대조와
+`build.company_detail`이 이 캐시를 그대로 읽는다.
+"""
+
 from __future__ import annotations
 
 import zipfile

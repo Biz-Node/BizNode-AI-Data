@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.core.database import neo4j_session, postgres_connection
@@ -40,21 +41,40 @@ def _node_ident(node_type: str, key: str) -> dict[str, str]:
 
 
 def _rel_ident(edge_type: str, props: dict[str, Any]) -> dict[str, Any]:
-    """상태 엣지는 subtype, 사건 엣지는 source_doc으로 MERGE 식별."""
-    if edge_type in EVENT_EDGES:
-        return {"source_doc": props.get("source_doc")}
+    """MERGE 식별자 — 상태·사건 모두 **subtype 기준**.
+
+    ★2026-07-28 교정: 사건 엣지를 `source_doc`(기사 URL)으로 식별하고 있었다.
+      "같은 회사를 여러 번 인수할 수 있으니 사건마다 구분하자"는 의도였는데,
+      실제로는 **같은 사건의 반복 보도**를 구분하고 있었다.
+      실측: 「삼성전자 -ACQUIRES-> 레인보우로보틱스」가 **32개 엣지**
+            (하나의 인수를 32개 기사가 보도 — 2024-12-31에만 10건)
+
+      같은 상대에게 M&A를 두 번 하는 일은 드물고, 있더라도 subtype·시점이 다르다.
+      반복 보도를 32개 엣지로 만드는 손해가 훨씬 크다.
+      여러 출처가 같은 관계를 말하면 **엣지는 하나, 근거는 목록**으로 쌓는다.
+    """
     return {"subtype": props.get("subtype")}
 
 
 # apoc.merge.*의 4번째 인자는 onCreate, 마지막은 onMatch.
 # 재적재 시 속성 갱신이 되려면 onMatch에도 같은 props를 넘겨야 한다
 # (안 그러면 기존 엣지는 예전 속성을 그대로 유지 — 근거 누락 버그의 원인).
+# ★`loaded_at`을 배치 단위로 찍는다 — **재적재 때 사라진 관계를 알아내기 위함**.
+#
+#   DART를 다시 적재하면 「작년엔 있었는데 올해 보고서엔 없는」 지분·거래처가 생긴다.
+#   그건 관계가 끝났다는 뜻인데, MERGE만 하면 옛 엣지가 그대로 남는다.
+#   같은 적재 배치의 엣지는 같은 `loaded_at`을 갖게 되므로, 나중에
+#   `batch/audit/freshness.py`가 「이번 배치에서 갱신되지 않은 것」을 찾아낸다.
+#
+#   `last_seen`은 **공시 날짜**(사건이 일어난 때)이고 `loaded_at`은 **우리가 본 때**다.
+#   둘은 다르다 — 국민연금 5% 공시는 2024년 것이어도 오늘 적재될 수 있다.
 _QUERY = """
 UNWIND $rows AS row
 CALL apoc.merge.node([row.src_label], row.src_ident, row.src_props, {}) YIELD node AS s
 CALL apoc.merge.node([row.tgt_label], row.tgt_ident, row.tgt_props, {}) YIELD node AS t
 CALL apoc.merge.relationship(s, row.edge_type, row.rel_ident, row.rel_props, t, row.rel_props)
 YIELD rel
+SET rel.loaded_at = $loaded_at
 RETURN count(*) AS n
 """
 
@@ -102,10 +122,13 @@ def load_staged_to_neo4j(only_corp: Optional[str] = None, batch_size: int = 500)
             return 0
 
         prepared = [_prepare(s) for s in staged]
+        # 배치 전체가 **같은** loaded_at을 갖게 한다. 행마다 datetime()을 부르면
+        # 미세하게 달라져 "이번 배치에서 갱신됐나"를 판정할 수 없다.
+        loaded_at = datetime.now(timezone.utc).isoformat()
         with neo4j_session() as session:
             for i in range(0, len(prepared), batch_size):
                 chunk = prepared[i : i + batch_size]
-                session.run(_QUERY, rows=chunk)
+                session.run(_QUERY, rows=chunk, loaded_at=loaded_at)
                 total += len(chunk)
 
         # 커밋 마커 (맨 마지막)

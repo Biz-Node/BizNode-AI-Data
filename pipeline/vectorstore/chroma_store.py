@@ -2,6 +2,10 @@
 
 임베딩은 애플리케이션에서 계산해 전달한다(Chroma 서버가 아니라). 모델 교체 시
 vector_chunks.embedding_model로 재임베딩 대상을 특정하기 위함.
+
+★`base.VectorStore` 프로토콜을 **실제로 선언**한다. 전에는 주석으로만 "어댑터"라
+  적혀 있어 계약이 지켜지는지 아무도 검사하지 않았다 — 인터페이스가 코드에
+  안 걸리면 문서일 뿐이다. 이제 시그니처가 어긋나면 타입 검사에서 걸린다.
 """
 
 from __future__ import annotations
@@ -17,11 +21,12 @@ from app.core.config import (
     EMBEDDING_MODEL,
     OPENAI_API_KEY,
 )
+from pipeline.vectorstore.base import VectorStore
 
 _EMBED_BATCH = 100  # OpenAI 임베딩 배치 크기
 
 
-class ChromaStore:
+class ChromaStore(VectorStore):
     def __init__(self) -> None:
         self._client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
         self._oai = openai.OpenAI(api_key=OPENAI_API_KEY)

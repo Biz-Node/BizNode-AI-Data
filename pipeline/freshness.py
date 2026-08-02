@@ -72,7 +72,15 @@ def assess(props: dict[str, Any], *, today: Optional[date] = None) -> Freshness:
 
     threshold = cycle * _GRACE_RATIO
     if days_since <= threshold:
-        return Freshness("current", f"{days_since}일 경과 (주기 {cycle}일 이내)", days_since, 1.0)
+        # ★유예를 곱한 값과 비교해 놓고 원래 주기를 표시하면 앞뒤가 안 맞는다.
+        #   실제로 「205일 경과 (주기 180일 이내)」처럼 모순돼 보이는 문구가 나왔다.
+        #   주기를 넘겼지만 유예 안이면 그렇게 밝힌다.
+        if days_since <= cycle:
+            reason = f"{days_since}일 경과 (갱신주기 {cycle}일 이내)"
+        else:
+            reason = (f"{days_since}일 경과 (주기 {cycle}일 초과, "
+                      f"유예 {threshold:.0f}일 이내)")
+        return Freshness("current", reason, days_since, 1.0)
 
     return Freshness(
         "stale",

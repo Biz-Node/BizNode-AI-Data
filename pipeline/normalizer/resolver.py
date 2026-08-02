@@ -101,6 +101,30 @@ def _fuzzy(norm: str) -> Optional[Resolution]:
     return result
 
 
+# 기업집단 지칭 접미어 — 뉴스는 "SK그룹"·"현대차그룹"처럼 그룹명을 자주 쓴다.
+# 개별 법인이 아니라 집단이라 corp_code가 없으므로, 접미어를 떼고 지주·대표사로 해소한다.
+_GROUP_SUFFIXES = ("그룹", "계열", "일가")
+# 관용 축약 → 실제 법인명 (접미어 제거만으론 안 되는 것)
+_GROUP_ALIASES = {
+    "현대차": "현대자동차",
+    "한화": "한화",
+    "롯데": "롯데지주",
+    "포스코": "포스코홀딩스",
+    "GS": "GS",
+    "CJ": "CJ",
+    "LS": "LS",
+}
+
+
+def _strip_group(name: str) -> Optional[str]:
+    """'SK그룹' → 'SK', '현대차그룹' → '현대자동차'. 그룹명이 아니면 None."""
+    for suffix in _GROUP_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            base = name[: -len(suffix)].strip()
+            return _GROUP_ALIASES.get(base, base)
+    return None
+
+
 def resolve(name: Optional[str]) -> Optional[Resolution]:
     """이름 → Resolution. 매칭 실패 시 None(→ 호출측에서 unresolved stub 처리)."""
     if not name:
@@ -112,6 +136,15 @@ def resolve(name: Optional[str]) -> Optional[Resolution]:
     exact = _exact_index().get(norm)
     if exact is not None:
         return exact
+
+    # 그룹명 폴백 — "SK그룹"은 corp_code가 없지만 "SK"는 있다
+    base = _strip_group(name)
+    if base:
+        base_norm = normalize_company_name(base)
+        exact = _exact_index().get(base_norm)
+        if exact is not None:
+            return exact
+
     return _fuzzy(norm)
 
 

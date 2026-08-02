@@ -1,9 +1,9 @@
-"""[Sprint 2C] 공급계약 공시 → SUPPLIES_TO + evidence (경로 B).
+"""공급계약 공시 → SUPPLIES_TO + evidence (경로 B).
 
 쓰기 순서(ERD §5-2): staged_edges(권위) → ChromaDB evidence + vector_chunks
 → Neo4j(파생) + loaded_at(커밋 마커 마지막).
 
-실행: python -m batch.build_disclosures
+실행: python -m batch.build.disclosures
 """
 
 from __future__ import annotations

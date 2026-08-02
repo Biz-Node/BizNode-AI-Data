@@ -1,6 +1,6 @@
-"""[Sprint 1D] 시드 재무 → PostgreSQL financials + Neo4j Company revenue_snapshot.
+"""시드 재무 → PostgreSQL financials + Neo4j Company revenue_snapshot.
 
-실행: python -m batch.import_financials
+실행: python -m batch.build.financials
 """
 
 from __future__ import annotations

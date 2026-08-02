@@ -1,7 +1,7 @@
-"""[Sprint 2D] 주요사항보고서 → ACQUIRES / SUES / Event+HAS_EVENT + evidence.
+"""주요사항보고서 → ACQUIRES / SUES / Event+HAS_EVENT + evidence.
 
 쓰기 순서(§5-2): staged_edges → ChromaDB evidence + vector_chunks → Neo4j + loaded_at.
-실행: python -m batch.build_major_reports
+실행: python -m batch.build.major_reports
 """
 
 from __future__ import annotations

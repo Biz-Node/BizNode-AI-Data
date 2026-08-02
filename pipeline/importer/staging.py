@@ -21,9 +21,11 @@ from pipeline.normalizer.executive_normalizer import normalize_executives
 from pipeline.normalizer.investment_normalizer import normalize_investments
 from pipeline.normalizer.majorstock_normalizer import normalize_majorstock
 from pipeline.normalizer.shareholder_normalizer import normalize_shareholders
-from pipeline.validators.executive_validator import validate_executives
-from pipeline.validators.investment_validator import validate_investments
-from pipeline.validators.shareholder_validator import validate_shareholders
+from pipeline.validators.dart import (
+    validate_executives,
+    validate_investments,
+    validate_shareholders,
+)
 from pipeline.validators.matrix import level_1_category, validate_edge
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))

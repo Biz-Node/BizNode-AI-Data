@@ -195,6 +195,47 @@ CREATE INDEX IF NOT EXISTS idx_staged_edges_tgt ON staged_edges (tgt_key);
 CREATE INDEX IF NOT EXISTS idx_staged_edges_run ON staged_edges (run_id);
 
 -- ─────────────────────────────────────────────────────────────
+-- 뉴스 기사 (P2) — 본문은 저장하지 않는다(저작권·방법서 §8).
+--   수집 메타 + 필터 판정 결과만 보관하고, 근거는 evidence 스니펫으로.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS news_articles (
+    url            TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    press          TEXT,
+    published_at   TIMESTAMPTZ,
+    source_channel TEXT,                    -- rss | bigkinds | naver
+    title_hash     TEXT,                    -- 제목 정규화 해시(통신사 전재 dedup)
+    body_length    INT,                     -- 확보한 본문 길이(품질 지표)
+    -- 필터 판정 (2단 게이트)
+    rule_passed    BOOLEAN,                 -- 1차 규칙 필터
+    llm_relevant   BOOLEAN,                 -- 2차 제로샷 라우터
+    matched_corps  JSONB,                   -- 언급된 시드 corp_code 목록
+    -- 처리 상태
+    extracted_at   TIMESTAMPTZ,             -- 관계 추출 완료 시각
+    collected_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_news_title_hash ON news_articles (title_hash);
+CREATE INDEX IF NOT EXISTS idx_news_pending
+    ON news_articles (collected_at) WHERE extracted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_news_corps ON news_articles USING GIN (matched_corps);
+
+-- ─────────────────────────────────────────────────────────────
+-- 미매핑 관계 표현 (P2) — 12종 어디에도 못 넣고 버린 OTHER를 쌓는다.
+--   버린 것을 세어 두면 "무엇을 놓치고 있는지"가 데이터로 드러난다.
+--   seen_count가 높은 표현부터 normalizer/relations.py 렉시콘에 추가하면 된다.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS unmapped_relations (
+    expression   TEXT PRIMARY KEY,        -- LLM이 남긴 원문 관계 표현
+    source_name  TEXT,                    -- 관계 주체(예시 1건)
+    target_name  TEXT,                    -- 관계 대상(예시 1건)
+    evidence     TEXT,                    -- 근거 문장(예시 1건)
+    source_doc   TEXT,                    -- 출처 URL/접수번호(예시 1건)
+    seen_count   INT NOT NULL DEFAULT 1,  -- 누적 관측 횟수 ← 렉시콘 추가 우선순위
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_unmapped_freq ON unmapped_relations (seen_count DESC);
+
+-- ─────────────────────────────────────────────────────────────
 -- 주가·시가총액 (일별 시세) — DART 아님. data.go.kr 금융위 API 또는 pykrx.
 --   주가 API는 stock_code(종목코드) 기준이라 companies.stock_code로 조인한다.
 --   Company 노드의 market_cap_snapshot은 여기 최신 행에서 가져온다.
@@ -237,5 +278,22 @@ CREATE TABLE IF NOT EXISTS business_segments (
     revenue       BIGINT,
     revenue_ratio NUMERIC(5,2),            -- 부문 매출 비중(%)
     source_doc    CHAR(14),
+    -- ★신뢰 표시 — 값을 지우지 않고 「믿을 수 있는가」를 따로 둔다.
+    --   사업보고서의 품목별 매출 표는 단위(원/천원/백만원)가 표 밖 캡션에 있어
+    --   추출이 자주 틀린다. 실측(2026-08-01): 56개사 중 39개사의 금액이 1,000배
+    --   또는 100만배 어긋나 있었다. 전사 매출과 대조해 배수를 역산·교정했지만
+    --   8개사는 어떤 배수로도 안 맞아 판단을 보류했다.
+    --   비중도 따로 본다 — 합계가 100%에서 크게 벗어나면(수출/내수 중복 등)
+    --   금액은 맞는데 비중만 틀린 경우가 있다.
+    --   화면에서는 false인 값을 **감추고 나머지만** 보여준다.
+    revenue_trusted BOOLEAN NOT NULL DEFAULT TRUE,
+    ratio_trusted   BOOLEAN NOT NULL DEFAULT TRUE,
+    trust_reason    TEXT,                  -- 왜 못 믿는지 (사람이 읽는 설명)
     PRIMARY KEY (corp_code, bsns_year, segment_name)
 );
+ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
+    revenue_trusted BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
+    ratio_trusted   BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
+    trust_reason    TEXT;

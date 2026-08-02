@@ -1,10 +1,9 @@
-anthropic>=0.40,<1.0
 fastapi>=0.115,<1.0
 pydantic>=2.10,<3.0
 python-dotenv>=1.0,<2.0
 uvicorn[standard]>=0.34,<1.0
 
-# HTTP — batch/fetch_dart_to_json.py 등 DART API 호출
+# HTTP — DART API 호출 · 뉴스 본문 수집
 requests>=2.32,<3.0
 
 # XML — 사업보고서 원문 파싱(malformed 복구, recover 파서)

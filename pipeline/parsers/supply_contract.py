@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from pipeline.normalizer.generic_names import is_generic_name
+
 # 태그 제거·공백 축약된 평문에서 필드 추출
 # 라벨은 문서마다 "계약상대"/"계약상대방", 다음 필드 순서도 문서마다 다름
 # → 방은 선택적, 종료는 다음 필드 라벨 중 가장 먼저 오는 것에서 끊는다(정밀 포착)
@@ -66,6 +68,9 @@ def _clean_counterparty(raw: str) -> Optional[str]:
     # 설명형("해외 Nand 제조사", "아시아 지역 선주") — 실명 아님 → 스킵
     if any(m in name for m in _DESCRIPTION_MARKERS):
         return None
+    # 공용 가드: "글로벌 항공우주 업체"처럼 수식어+일반명사 조합도 차단
+    if is_generic_name(name):
+        return None
     # 문장 조각("의 최근 매출액은", "이 영업비밀 보호 요청 중...") → 스킵
     if any(m in name for m in _SENTENCE_MARKERS):
         return None
@@ -107,12 +112,20 @@ def parse_supply_contract(xml_text: str) -> ContractInfo:
 
 
 def build_evidence_text(supplier_name: str, info: ContractInfo) -> str:
-    """근거 스니펫 — 파싱 필드로 구조화 문장 생성(의미검색·팩트체크용)."""
-    parts = [f"{supplier_name}은(는) {info.counterparty}와 단일판매·공급계약을 체결하였다."]
+    """근거 스니펫 — 파싱 필드로 구조화 문장 생성(의미검색·팩트체크용).
+
+    외국 회사명이 상대방인 경우가 많아 조사를 붙이지 않는 구조를 쓴다
+    (`Fujitsu와(과)` 같은 표기 방지).
+    """
+    parts = [f"공급 관계 — 공급자: {supplier_name} / 수요자: {info.counterparty}",
+             "근거: 「단일판매ㆍ공급계약체결」 공시"]
+    if info.occurred_at:
+        parts.append(f"계약(수주)일: {info.occurred_at}")
     if info.contract_amount:
-        parts.append(f"계약금액은 {info.contract_amount:,}원이다.")
+        parts.append(f"계약금액: {info.contract_amount:,}원")
     if info.revenue_ratio is not None:
-        parts.append(f"최근 매출액 대비 {info.revenue_ratio * 100:.2f}%에 해당한다.")
+        parts.append(f"최근 매출액 대비: {info.revenue_ratio * 100:.2f}%"
+                     f"{'  ← 매출을 초과하는 대형 계약' if info.revenue_ratio > 1 else ''}")
     if info.valid_from and info.valid_until:
-        parts.append(f"계약기간은 {info.valid_from}부터 {info.valid_until}까지이다.")
-    return " ".join(parts)
+        parts.append(f"계약기간: {info.valid_from} ~ {info.valid_until}")
+    return "\n".join(parts)

@@ -1,4 +1,4 @@
-"""[온보딩 한 방] 전 경로 파이프라인을 순차 실행하고 마지막에 감사한다.
+"""전 경로 파이프라인을 순차 실행하고 마지막에 감사한다.
 
 시드에 기업을 추가한 뒤 이 명령 하나로 전체를 최신화한다. 각 단계는 멱등
 (staged_edges source_doc 단위 삭제·재삽입, evidence·MERGE 멱등)이라 반복 안전.
@@ -6,8 +6,8 @@
   경로 A(지분·임원) → 재무 → 경로 B(공급·사건) → 경로 C(제품) → 감사
 
 실행:
-  python -m batch.build_all            # 증분 최신화
-  python -m batch.build_all --reset    # 그래프 초기화 후 전체 재구축
+  python -m batch.build.all            # 증분 최신화
+  python -m batch.build.all --reset    # 그래프 초기화 후 전체 재구축
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ import argparse
 import sys
 import time
 
-from batch import (
-    audit_graph,
-    build_business_reports,
-    build_disclosures,
-    build_graph,
-    build_major_reports,
-    import_financials,
+from batch.audit import graph as audit_graph
+from batch.build import (
+    business_reports,
+    disclosures,
+    financials,
+    graph as build_graph,
+    major_reports,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -30,11 +30,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # (제목, 실행 콜러블) — 순서 중요: 노드 먼저, 관계 나중
 STEPS = [
-    ("경로 A — 지분·임원 (build_graph)", None),  # reset 인자 필요 → 별도 처리
-    ("재무 (import_financials)", import_financials.main),
-    ("경로 B 공급계약 (build_disclosures)", build_disclosures.main),
-    ("경로 B 사건 (build_major_reports)", build_major_reports.main),
-    ("경로 C 제품 (build_business_reports)", build_business_reports.main),
+    ("경로 A — 지분·임원 (build.graph)", None),  # reset 인자 필요 → 별도 처리
+    ("재무 (build.financials)", financials.main),
+    ("경로 B 공급계약 (build.disclosures)", disclosures.main),
+    ("경로 B 사건 (build.major_reports)", major_reports.main),
+    ("경로 C 제품 (build.business_reports)", business_reports.main),
 ]
 
 

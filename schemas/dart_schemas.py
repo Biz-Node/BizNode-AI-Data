@@ -241,6 +241,10 @@ class EventDTO:
 
 # OWNS_STAKE_IN subtype 값 (방법서 2-3)
 STAKE_SUBTYPE_MAJOR = "최대주주"
+# 「최대주주 및 특수관계인 현황」에서 relate가 「본인」이 아닌 행. 계열회사·친족·
+# 재단·임원 등이 여기 들어간다. 최대주주와 **한 묶음으로 보고**되지만 최대주주는
+# 아니다 — 라벨을 나누지 않으면 지분 0.7%짜리 계열사가 최대주주로 표시된다.
+STAKE_SUBTYPE_RELATED = "특수관계인"
 STAKE_SUBTYPE_5PCT = "5%이상주주"
 STAKE_SUBTYPE_SUBSIDIARY = "자회사"
 STAKE_SUBTYPE_INVEST = "출자"

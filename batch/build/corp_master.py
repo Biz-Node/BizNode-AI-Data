@@ -1,6 +1,6 @@
-"""[Sprint 0] DART 고유번호 전량 → PostgreSQL `corp_code_master` 적재.
+"""DART 고유번호 전량 → PostgreSQL `corp_code_master` 적재.
 
-실행: python -m batch.import_corp_code_master
+실행: python -m batch.build.corp_master
 """
 
 from __future__ import annotations

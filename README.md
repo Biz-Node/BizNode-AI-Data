@@ -1,165 +1,299 @@
-# BizNode-ETF
+# BizNode
 
-ETF 구성종목을 시작점으로 삼아 OpenDART 공시 데이터(최대주주/임원현황/타법인출자 등)를
-수집·정규화·검증한 뒤 Neo4j 지식 그래프로 적재하는 배치 파이프라인 프로젝트입니다.
+**GraphRAG 기반 기업 관계·리스크 분석 워크스페이스**
+
+> 2026 한이음 드림업 · 금융/핀테크 · 팀 쑥부르스도나스
+> 문서: 이 파일(개요·서비스) · [코드 지도](CODEMAP.md)(파일이 어디에 무엇을) ·
+> [데이터 수집 방법서](BizNode_데이터수집_방법서.md)(설계·실측·운영 규칙) ·
+> [추출 진행현황](BizNode_추출_진행현황.md)(자동 생성)
 
 ---
 
-## 1. 전체 아키텍처
+## 1. 한 줄 정의
+
+DART 공시와 비즈니스 뉴스를 지식그래프로 결합해, 기업 간 **N차 연쇄 파급 리스크**를
+시각화하고 **모든 주장에 원문 근거를 붙여** 답하는 분석 플랫폼.
+
+## 2. 문제와 해법
+
+| 문제 | BizNode의 해법 |
+|---|---|
+| 공급망 리스크가 2~3단계 건너 오는데 개별 기업만 봐서는 안 보인다 | 지식그래프 + 질의 시점 파급 계산 |
+| LLM 요약은 그럴듯하지만 출처를 못 댄다 | **모든 엣지에 원문 문장·기사 URL** (현재 6,523/6,523 = 100%) |
+| 2년 전 끝난 계약이 현재 리스크로 표시된다 | 신선도 판정(current/stale/expired) + 종료 관계 탐지 |
+
+## 3. 차별점 — 팩트체크
 
 ```
-ETF 구성 종목 → Company Master 구축 (STEP 1)
-              ├─ DART API 구조화 데이터   (STEP 2, 완료)
-              └─ DART 원문 XML 비정형 데이터 (STEP 2, Phase 2 부분 구현)
-              → 정규화 → 검증 → Neo4j 적재
-                                              ▲
-                                      뉴스 Event 지속 업데이트 (미착수)
+엣지 클릭 → 관계 유형 · subtype 전체 · 방향 · 신선도 · 뒷받침 출처 수
+          → 원문 문장 그대로 인용
+          → 기사 제목 + URL (또는 DART 접수번호)
+          → 검증 이력 (방향 교정 · 유형 재분류 · 근거 검증 결과)
 ```
 
-| 단계             | 내용                                                                   | 상태                          |
-| ---------------- | ---------------------------------------------------------------------- | ----------------------------- |
-| STEP 1           | ETF 구성종목 → `Company`/`Sector`/`ETF` 그래프 적재                    | 완료                          |
-| STEP 2-A         | DART 구조화 데이터(최대주주/임원현황/타법인출자) 수집→정규화→검증→적재 | 완료                          |
-| STEP 2-B         | DART 원문 사업보고서 XML에서 "사업의 내용" 등 섹션 텍스트 추출         | 부분 구현 (다운로드/추출까지) |
-| STEP 3           | 추출 텍스트에 대한 LLM Entity Extraction                               | 미착수                        |
-| STEP 4           | 뉴스 Event 수집·그래프 반영                                            | 미착수                        |
-| STEP 5           | 변경분 증분 업데이트                                                   | 미착수                        |
-| API 서버(`app/`) | FastAPI 진입점                                                         | 스캐폴딩만 존재, 미구현       |
+추출한 관계는 자동 검사 7종을 거친다. 방향·대칭 병렬언급·양방향 공급·근거 정합성은
+현재 뉴스 엣지 **100% 커버리지**이며, 커버율과 사각지대는 `batch/audit/coverage.py`가
+매 배치마다 출력한다.
 
-## 2. 폴더 구조
+---
 
+## 4. 서비스 구성
+
+### 4-1. 홈
 ```
-BizNode-ETF/
-├── app/                        # FastAPI 진입점 (아직 미구현 스캐폴딩)
-│   ├── api/                    # 라우터 (비어 있음)
-│   ├── core/
-│   │   ├── config.py           # .env 값을 읽어오는 설정 모듈
-│   │   └── database.py         # Neo4jClient (드라이버 연결/해제)
-│   ├── services/
-│   │   └── graph_service.py    # 비어 있음
-│   └── main.py                 # 비어 있음
-│
-├── batch/                      # CLI 진입점 (인자 파싱 + pipeline 함수 호출만 담당)
-│   ├── fetch_dart_to_json.py       # [STEP 1] DART API 호출 → data/raw_dart/*.json
-│   ├── normalize_json.py           # raw_dart → 정규화 → 검증 → data/normalized/*.json
-│   ├── import_json_to_neo4j.py     # normalized JSON → Neo4j 적재
-│   ├── import_etf_list_to_neo4j.py # ETF 구성종목 마스터 리스트 → Neo4j 적재
-│   └── extract_company_report.py   # [Phase 2] 사업보고서 XML → 섹션 텍스트 추출 CLI
-│
-├── pipeline/                   # 공용 도메인 로직 (app, batch 모두 여기 의존)
-│   ├── normalizer/             # API별 정규화 규칙 + LLM 후처리(llm_postprocess.py)
-│   ├── validators/             # API별 정규화 결과 검증 규칙
-│   ├── importer/
-│   │   └── neo4j_importer.py   # entities[]/relationships[] 공통 스키마 → Cypher 적재
-│   └── extractors/dart/        # 사업보고서 원문 다운로드(downloader.py)·XML 파싱(xml_parser.py)·
-│                                # 텍스트 정제(text_cleaner.py)·섹션 추출(report_extractor.py)
-│
-├── schemas/                    # 파이프라인 전역에서 공유하는 DTO
-│   ├── dart_schemas.py         # entities[]/relationships[] 공통 스키마 DTO
-│   ├── company_report.py       # CompanyReport DTO (Phase 2 추출 결과)
-│   └── source.py               # 출처(Source) 정보 DTO
-│
-├── data/                       # 원본/중간/정규화 데이터 (.gitignore 처리, 저장소에 없음)
-│   ├── company_list/           # ETF 구성종목 리스트, DART corp_code 마스터
-│   ├── raw_dart/                # DART API 원본 응답 JSON (fetch_dart_to_json.py 산출물)
-│   ├── raw_reports/             # 사업보고서 원문 zip/xml (extract_company_report.py 산출물)
-│   └── normalized/              # 정규화·검증 완료 JSON (normalize_json.py 산출물)
-│
-├── documents/                  # 설계/작업 기록 문서 (.gitignore 처리, 저장소에 없음)
-├── requirements.txt
-└── .env                        # 환경변수 (저장소에 없음, 아래 3절 참고)
+통합 검색     기업 · 인물 · 사건 · 제품 + 이슈 의미검색(벡터DB)
+             → 검색 결과에서 '워크스페이스에 추가'
+트렌드        사건 발생 추이 (월별 리스크 건수)
+AI 인사이트   ❌ 추론 계층 필요
+빠른 탐색     기업 탐색 · 산업 지도(그래프) · 즐겨찾기
+최근 활동     ❌ 사용자 DB 필요
 ```
 
-## 3. 사전 준비
+### 4-2. 워크스페이스 ★핵심
+```
+┌───────────────┬──────────────────┬───────────────┐
+│ (좌) 상세·근거  │ (중) 그래프 캔버스  │ (우) AI 챗봇    │
+│                │                  │                │
+│ 노드 클릭       │ 노드 4,889        │ 심층 분석       │
+│  → 요약 카드    │ 엣지 6,523        │ ❌ 추론 계층    │
+│ 엣지 클릭       │ 유형 12종         │    필요        │
+│  → 원문 근거    │ 필터·확장·저장     │                │
+│ [상세 페이지 →] │                  │                │
+└───────────────┴──────────────────┴───────────────┘
+```
 
-- Python 3.10+
-- 접근 가능한 Neo4j 인스턴스 (Aura 또는 로컬)
-- 아래 API 키
-    - `DART_KEY` — [OpenDART](https://opendart.fss.or.kr) 오픈API 키
-    - `DATA_GO_KR_SERVICE_KEY` — data.go.kr 서비스 키
-    - `ANTHROPIC_API_KEY` — `normalize_json.py`의 LLM 후처리 단계(§1.2, Claude Haiku 4.5 배치 사용)에 필요
+**노드별 제공 정보**
 
-## 4. 설치
+| 노드 | 요약 (클릭) | 상세 (통합검색) |
+|---|---|---|
+| Company (시드 64) | 재무 3지표 · 관계 수 · 최근 리스크 3건 | 개요 · 재무 3개년 · 관계 전체 · 사건 전체 · 파급 분석 · 공급망 지도 |
+| Company (stub) | 이름 · 관계 목록 (「관계 정보만 있음」 표시) | 동일 |
+| Person | 이름 · 생년월 · 소속·직위 | + 관련 사건 |
+| Event | 유형(11종) · 리스크 여부 · 시점 · 근거 | + 연결 기업 · 파급 계산 |
+| Product | 이름 · 분류 | + 개발사 · 의존 기업 |
 
+### 4-3. 뉴스/이슈
+최신 뉴스 목록 (7,185건 · 기업·리스크 유형 필터)
+※ 수집이 배치라 **「실시간」이 아닌 「최신」**
+
+### 4-4. 리서치 보관함 · 마이페이지
+사용자 DB·인증 필요 — 미구현 (후순위)
+
+---
+
+## 5. 사용자 시나리오
+
+```
+1. "SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"
+     ↓ [그래프] event_type ∈ {사고재해, 공급망} · is_risk=true
+2. 사건 3건 — 청주공장 화재 · HBM4 라인 전환 연기 · 담합 피소
+     ↓ [벡터DB] evidence_id → 원문 회수
+3. 근거 문장 + 기사 URL 제시
+     ↓ [그래프] SUPPLIES_TO 하류로 파급 계산
+4. "어디까지 번지나" → 애플·구글·엔비디아 (영향도 0.41)
+   경로: 청주 화재 → SK하이닉스 → SUPPLIES_TO → 엔비디아
+     ↓
+5. 워크스페이스 저장 → 스냅샷 + AI 분석 보관
+```
+
+**「보도됨」과 「계산」을 구분해 제시한다.** 기사가 말한 파급과 그래프가 추론한 파급을
+섞지 않는 것이 신뢰의 핵심이다.
+
+---
+
+## 6. 아키텍처
+
+```
+┌─ 오프라인 (팀 운영 · 배치) ────────────────────────────┐
+│  DART API·공시 ──┐                                    │
+│                  ├─→ 추출 → 검증 → 마스터 그래프        │
+│  구글뉴스·네이버 ─┘        (batch/*.py)                 │
+└─────────────────────────────────────────────────────┘
+                          ↓ 조회만
+┌─ 온라인 (서비스) ──────────────────────────────────────┐
+│  Neo4j        관계·구조 (노드 4,889 · 엣지 6,523)       │
+│  ChromaDB     근거 청크 6,240 (원문+제목+URL · 의미검색) │
+│  PostgreSQL   재무 · 뉴스 메타 · 추출 대장 · 사용자 DB   │
+│      ↓                                                │
+│  app/services/graph_service.py                        │
+│    relations_of()    신선도 적용 조회                   │
+│    propagate_risk()  질의 시점 2홉 파급 계산             │
+│      ↓                                                │
+│  API ❌ → 프론트엔드 ❌                                 │
+└─────────────────────────────────────────────────────┘
+```
+
+**사용자가 기업을 추가해도 수집이 돌지 않는다.** 마스터 그래프를 조회할 뿐이고,
+사용자 DB에는 워크스페이스와 참조(기업 ID)만 저장한다.
+
+## 7. 기술 스택
+
+```
+저장   Neo4j 5 · ChromaDB · PostgreSQL 16(+pg_trgm) · Redis
+추출   OpenAI gpt-4o (트리플 추출) · gpt-4o-mini (라우터·검증·분류)
+수집   OpenDART API · 구글 뉴스 RSS · 네이버 검색 API · trafilatura
+언어   Python 3.11 · Docker Compose
+```
+
+---
+
+## 8. 현재 상태 (2026-08-01)
+
+```
+시드 64개사 중 뉴스 추출 완료   29개사
+그래프                        노드 4,883 · 엣지 6,518 · Event 566 (리스크 203)
+근거                          엣지 100%가 원문 보유
+검사 커버율                    뉴스 근거정합성 3,770/3,770 (100%)
+                              DART 본문파싱 원문대조 528/542 (97%)
+                              DART 구조화필드 12종 검사 · 매트릭스 위반 0건
+표시된 의심                    456건 / 6,518 (7.0%) — 삭제하지 않고 조회에서 거른다
+기업 상세                      개요 60개사 · 사업부문 201건(금액 신뢰 155)
+누적 추출 비용                 약 3.5만원
+```
+
+| 기능 | 상태 |
+|---|---|
+| 그래프 데이터 · 원문 팩트체크 | ✅ |
+| 이슈 의미검색 · 사건 분류(11종) | ✅ |
+| 리스크 파급 계산 | ✅ |
+| 기업 개요 · 사업부문 | ✅ 60개사 (신뢰 표시 포함) |
+| 주가 · 시세 | ⏸ 보류 (방법서 확장 테이블) |
+| 추론 계층 (자연어 질의 → 답변) | ❌ |
+| API · 프론트엔드 | ❌ |
+| 사용자 인증 · 보관함 | ❌ |
+
+**신뢰할 수 없는 값은 지우지 않고 표시한다.** 화면에 내보낼 때 걸러야 할 것:
+
+| 표시 | 뜻 | 화면 처리 |
+|---|---|---|
+| `grounding_suspect` + `unfounded`/`insufficient` | 근거가 관계를 뒷받침 못함 (431건) | **`relations_of()`가 이미 숨김** |
+| `grounding_suspect` + `wrong_type` | 관계는 실재하나 유형·방향이 틀림 | 숨기지 않고 점수 ×0.5 |
+| `field_suspect` | DART 필드 값이 범위·구조에 안 맞음 (11건) | 값을 표시하지 말 것 |
+| `parsed_suspect` | 사업보고서 원문에 그 이름이 없음 (14건) | 「출처 확인 중」 |
+| `business_segments.revenue_trusted=false` | 부문 매출 단위 판정 불가 (12개사) | 금액 감추고 비중만 |
+| `business_segments.ratio_trusted=false` | 비중 합계가 100%에서 벗어남 (7개사) | 비중 감추고 금액만 |
+| `eventness_suspect` | 사건 이름에 행위가 없음 | 개명 대기 |
+
+**조회 계층이 이미 거릅니다.** `relations_of()`·`propagate_risk()`가 근거 의심을
+필터링하므로 API는 그냥 부르면 됩니다. 검토 화면에서 의심분까지 보려면
+`relations_of(name, hide_verdicts=())`.
+
+---
+
+## 9. 실행
+
+### 준비
 ```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
+cp .env.example .env      # OPENAI_API_KEY · DART_API_KEY · NAVER_*
+docker compose up -d      # Neo4j · PostgreSQL · ChromaDB · Redis
 pip install -r requirements.txt
 ```
 
-`uv`를 쓰는 경우:
+### 데이터 구축
+```bash
+# 1) DART — 마스터·재무·지분·임원·공시·제품·거래처
+python -m batch.build.graph
+python -m batch.build.disclosures
+python -m batch.build.business_reports
+python -m batch.build.sales_customers
+python -m batch.build.company_detail       # 개요·사업부문
+
+# 2) 뉴스 — 3~5개사씩 나눠서 (구글 속도 제한 회피)
+python -m batch.ops.run_companies --plan 5 --years 5 --limit 240 \
+    --month-split --bucket month --resolve-factor 4
+
+# 3) 정리·검증 — 배치가 끝나면 한 번. **아래를 전부 순서대로 실행한다.**
+python -m batch.ops.finalize
+```
+
+`finalize`가 도는 순서(개별 실행도 가능):
 
 ```bash
-uv venv
-uv pip install -r requirements.txt
+# ① 회귀확인 — 프롬프트를 고쳤다면 여기서 먼저 걸린다 (150원·30초)
+python -m batch.audit.selftest                 # 추출기·검증기 양쪽 쏠림 검사
+
+# ② 정리 — 노드·엣지·근거를 제자리로 (대부분 0원)
+python -m batch.repair.node_names              # 이름이 불량한 노드 복구
+python -m batch.repair.event_names             # 사건 이름 다시 짓기
+python -m batch.repair.node_identity           # 정규화키 재계산 → 중복 병합
+python -m batch.repair.products                # 제품 표기 통일
+python -m batch.repair.edges                   # 엣지 정규화·클러스터링
+python -m batch.repair.subtypes                # subtype 수렴
+python -m batch.repair.executive_titles        # 근거에서 직위 복원
+python -m batch.repair.stake_subtypes          # 최대주주/자회사 라벨 교정
+python -m batch.repair.evidence                # 근거 청크 중복 병합 → 고아 삭제
+
+# ③ 검사 — 무엇이 틀렸나 (지우지 않고 표시만)
+python -m batch.audit.grounding --llm --apply --all --source news
+python -m batch.audit.grounding_fulltext       # 의심분을 기사 전문으로 다시
+python -m batch.repair.retypes                 # 유형오류 교정 (매트릭스 통과분만)
+python -m batch.audit.dart --apply             # DART 필드 범위 + 원문 대조 (0원)
+python -m batch.audit.relations --scope all    # 방향·대칭·양방향·사건성
+python -m batch.audit.freshness                # 종료된 관계 (뉴스 + DART 재적재)
+python -m batch.audit.graph                    # 구조 무결성
+python -m batch.audit.coverage                 # ★무엇을 아직 안 봤나
+
+# ④ 사건 분류 · 진행현황
+python -m batch.repair.event_types             # event_type 11종 + is_risk
+python -m batch.ops.status --write-doc
 ```
 
-## 5. 환경 변수
-
-프로젝트 루트에 `.env` 파일을 만들고 아래 키를 채웁니다(저장소에는 포함되지 않으므로 각자
-발급받아야 합니다).
-
-```env
-NEO4J_URI=
-NEO4J_USER=
-NEO4J_PASSWORD=
-NEO4J_DATABASE=
-DART_KEY=
-DATA_GO_KR_SERVICE_KEY=
-ANTHROPIC_API_KEY=
-```
-
-## 6. 실행 명령어
-
-모든 `batch/*` 스크립트는 `app.core.config` 등을 절대 임포트로 참조하므로, **반드시 프로젝트
-루트에서 `-m` 옵션으로 모듈처럼 실행**해야 합니다. `python batch/xxx.py`처럼 직접 실행하면
-`ModuleNotFoundError: No module named 'app'`이 발생합니다.
-
-### 6.1 ETF Universe 구축 (STEP 1)
-
+### 사람이 읽어야 하는 것
 ```bash
-python -m batch.import_etf_list_to_neo4j
+python -m batch.audit.spot_check --source news  # 표본 심층검사
+python -m batch.audit.queries                   # 실제 질의로 서비스 가능성 확인
+python -m batch.ops.lookup <검색어>              # 근거 원문 조회 CLI
 ```
 
-### 6.2 DART 구조화 데이터 파이프라인 (STEP 2-A)
+설계 근거·실측·운영 규칙은 **[데이터 수집 방법서](BizNode_데이터수집_방법서.md)** 참조.
 
-```bash
-# 1) DART API 호출 → data/raw_dart/*.json
-python -m batch.fetch_dart_to_json
+---
 
-# 2) 정규화 + 검증 → data/normalized/*.json
-python -m batch.normalize_json                      # 전체 corp_code 처리
-python -m batch.normalize_json --corp-code 00126380  # 특정 corp_code만 처리
-python -m batch.normalize_json --skip-llm            # LLM 후처리 생략(디버깅/빠른 반복용)
+## 10. 폴더 구조
 
-# 3) Neo4j 적재
-python -m batch.import_json_to_neo4j
-python -m batch.import_json_to_neo4j --corp-code 00126380  # 특정 corp_code만 적재
+**`batch/`는 동사로 나뉜다** — 만든다 / 고친다 / 검사한다 / 돌린다.
+파일 이름에 `build_`·`fix_`·`audit_` 접두어를 붙이지 않는다. 디렉터리가 그 역할이다.
+
+```
+batch/
+  build/     수집·적재 — 데이터를 **만든다**
+             graph · disclosures · business_reports · sales_customers
+             company_detail · major_reports · news · financials · corp_master
+             ownership · subtype_taxonomy · all
+  repair/    교정 — 이미 들어온 것을 **고친다** (대부분 LLM 없이 0원)
+             node_names · node_identity · edges · subtypes · products
+             event_names · event_types · evidence · executive_titles
+             stake_subtypes · segment_units · misclassified_edges · retypes
+  audit/     검사 — 무엇이 틀렸나 **본다** (지우지 않고 표시만)
+             grounding → grounding_fulltext   ← 2단: 저장 문장 → 기사 전문
+             dart          DART 전용 (필드 범위 + 원문 XML 대조)
+             relations · graph · freshness · coverage · spot_check
+             selftest      ★검사기 자체의 회귀 확인
+             queries       실제 질의로 서비스 가능성 확인
+  ops/       운영 — **돌린다·본다**
+             finalize · run_companies · pilot_company · status · lookup · refilter
+
+pipeline/    라이브러리 (CLI 없음)
+  extractors/  dart/ · news/ — 수집·파싱
+  importer/    정규화 → staging → Neo4j 적재 · 개체해소(ER)
+  normalizer/  이름·관계·제품·subtype 정규화
+  news/        수집·필터·라우터·트리플 추출
+  validators/  matrix.py — 노드-엣지 허용 매트릭스 ★적재 전 최종 방어선
+  vectorstore/ ChromaDB 래퍼
+  ontology.py  엣지 12종 정의 — 추출기·검증기가 **같은 문장**을 쓴다
+  freshness.py 관계 신선도 판정
+
+app/
+  core/        설정 · DB 커넥션
+  services/    graph_service.py — 신선도·근거 필터 조회 · 파급 계산
+  api/         (미구현)
+
+data/
+  company_list/ 시드 64개사
+  raw_reports/  사업보고서 원문 (재파싱 캐시 · audit.dart가 원문 대조에 씀)
+  documents/    공시 원문
 ```
 
-`--skip-llm` 없이 실행하면 전체 corp_code 처리가 끝난 뒤 LLM 후처리가 자동 호출됩니다.
-`ANTHROPIC_API_KEY`가 필요하며 Batch API 특성상 완료까지 수 분~1시간 정도 걸릴 수 있습니다.
-
-### 6.3 사업보고서 원문 섹션 추출 (STEP 2-B, Phase 2)
-
-```bash
-python -m batch.extract_company_report --company-id 005930 --rcept-no 20250318000763
-```
-
-### 6.4 API 서버 (아직 미구현)
-
-`app/main.py`는 현재 빈 파일입니다. FastAPI 앱이 구현되면 다음 형태로 실행할 예정입니다.
-
-```bash
-uvicorn app.main:app --reload
-```
-
-## 7. 유의사항
-
-- `batch/import_etf_list_to_neo4j.py`는 `Sector`/`ETF` 라벨만 삭제 후 재생성합니다. `Company`
-  라벨은 STEP 2 파이프라인과 공유되므로 `corp_code` 유니크 제약 기반 `MERGE`만 수행하며 삭제하지
-  않습니다 — 두 스크립트를 어떤 순서로 반복 실행해도 기존 데이터가 유실되지 않도록 설계돼
-  있습니다.
-- LLM 후처리(`normalize_json.py`, `--skip-llm` 미지정 시)는 비결정적입니다. 동일 입력이라도
-  재실행하면 일부 결과가 달라질 수 있으므로, 수작업으로 보정한 값이 있다면 재실행 시 되돌아간다는
-  점에 유의하세요.
+**의존 방향은 한 방향이다** — `batch/` → `pipeline/` → `app/core`.
+`pipeline/`은 CLI를 갖지 않고, `batch/`는 서로를 import하지 않는다
+(예외: `ops/finalize`가 다른 배치를 **서브프로세스로** 실행).

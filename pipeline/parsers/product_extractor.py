@@ -24,7 +24,9 @@ _SYSTEM = (
     "2. '外', '등', '기타' 같은 접미어는 제거하고 핵심 명칭만 남기세요.\n"
     "3. 너무 포괄적인 것(예: '제품', '상품')은 제외.\n"
     "4. category는 제품/기술/부품/소재/서비스 중 하나.\n"
-    "5. 최대 8개. 없으면 빈 배열."
+    "5. 최대 8개. 없으면 빈 배열.\n"
+    "6. description: 그 제품이 **무엇이고 어디에 쓰이는지**를 보고서 원문 표현으로 "
+    "한 문장. 근거 추적에 쓰이므로 지어내지 말고, 원문에 설명이 없으면 빈 문자열."
 )
 
 _SCHEMA = {
@@ -38,8 +40,9 @@ _SCHEMA = {
                     "name": {"type": "string"},
                     "category": {"type": "string",
                                  "enum": ["제품", "기술", "부품", "소재", "서비스"]},
+                    "description": {"type": "string"},
                 },
-                "required": ["name", "category"],
+                "required": ["name", "category", "description"],
                 "additionalProperties": False,
             },
         }

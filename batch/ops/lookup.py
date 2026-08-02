@@ -1,13 +1,13 @@
-"""[조회] 근거(evidence) 탐색 CLI — ChromaDB 원문 + Neo4j 엣지 + 원문 파일 경로.
+"""근거(evidence) 탐색 CLI — ChromaDB 원문 + Neo4j 엣지 + 원문 파일 경로.
 
 ChromaDB는 전용 UI가 없어 이 CLI로 조회한다.
 
 사용법:
-  python -m batch.lookup_evidence ev_599ae4f46bf15b7c     # id로 직접 조회(팩트체크)
-  python -m batch.lookup_evidence --search "파운드리 공급"   # 의미 검색
-  python -m batch.lookup_evidence --corp 00126380         # 기업의 근거 전체
-  python -m batch.lookup_evidence --edge SUPPLIES_TO -n 5 # 엣지타입별
-  python -m batch.lookup_evidence --stats                 # 컬렉션 통계
+  python -m batch.ops.lookup ev_599ae4f46bf15b7c     # id로 직접 조회(팩트체크)
+  python -m batch.ops.lookup --search "파운드리 공급"   # 의미 검색
+  python -m batch.ops.lookup --corp 00126380         # 기업의 근거 전체
+  python -m batch.ops.lookup --edge SUPPLIES_TO -n 5 # 엣지타입별
+  python -m batch.ops.lookup --stats                 # 컬렉션 통계
 """
 
 from __future__ import annotations

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from pipeline.importer.evidence import EvidenceRecord
+from pipeline.text import eun_neun
 
 
 def _fmt_ratio(value: Any) -> str:
@@ -21,7 +22,7 @@ def _fmt_ratio(value: Any) -> str:
 def _snippet_owns_stake(props: dict[str, Any], src_name: str, tgt_name: str) -> str:
     subtype = props.get("subtype") or "지분"
     ratio = _fmt_ratio(props.get("ratio"))
-    parts = [f"{src_name}은(는) {tgt_name}의 {subtype}로 지분 {ratio}를 보유하고 있다."]
+    parts = [f"{eun_neun(src_name)} {tgt_name}의 {subtype}로 지분 {ratio}를 보유하고 있다."]
 
     relation = props.get("shareholder_relation")
     if relation:
@@ -40,7 +41,7 @@ def _snippet_owns_stake(props: dict[str, Any], src_name: str, tgt_name: str) -> 
 
 def _snippet_executive(props: dict[str, Any], src_name: str, tgt_name: str) -> str:
     position = props.get("position") or props.get("subtype") or "임원"
-    parts = [f"{src_name}은(는) {tgt_name}의 {position}으로 재직 중이다."]
+    parts = [f"{eun_neun(src_name)} {tgt_name}의 {position}으로 재직 중이다."]
 
     duty = props.get("duty")
     if duty:
