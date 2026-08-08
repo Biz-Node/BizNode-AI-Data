@@ -57,7 +57,14 @@ RETURN elementId(c) AS eid, c.name AS name, c.norm_name AS norm,
 _SET_NORM = "MATCH (c:Company) WHERE elementId(c)=$eid SET c.norm_name=$norm"
 
 # 병합 — 시드/해소된 노드를 대표로 남긴다(정보가 더 많은 쪽)
-_MERGE = """
+#
+# ★이름이 `_MERGE`였는데 **같은 모듈 180행에 같은 이름이 또 있어 덮였다**
+#   (2026-08-07). 파이썬은 나중 정의가 이기므로, 여기서 `keep=`/`drop=`으로
+#   부르면 덮인 쪽이 요구하는 `$keep_id`/`$drop_id`가 없어 죽는다:
+#       ParameterMissing: Expected parameter(s): keep_id, drop_id
+#   `finalize`가 5단계에서 통째로 멈췄고, 원인이 「이름 충돌」이라 로그만 봐서는
+#   안 보였다. 두 쿼리는 병합 정책도 다르다(`discard` vs `combine`).
+_MERGE_STUB = """
 MATCH (a:Company) WHERE elementId(a)=$keep
 MATCH (b:Company) WHERE elementId(b)=$drop
 CALL apoc.refactor.mergeNodes([a, b], {properties:'discard', mergeRels:true})
@@ -111,7 +118,7 @@ def renormalize(dry_run: bool) -> int:
             )
             keep = ordered[0]
             for drop in ordered[1:]:
-                session.run(_MERGE, keep=keep["eid"], drop=drop["eid"])
+                session.run(_MERGE_STUB, keep=keep["eid"], drop=drop["eid"])
                 merged += 1
         print(f"✅ stub {merged}건 병합 ({len(collisions)}개 그룹)")
 

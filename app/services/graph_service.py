@@ -201,7 +201,25 @@ def summarize_freshness(rels: list[Relation]) -> str:
 #   섞여 근거를 구분할 수 없다. 계산 결과에는 항상 경로를 함께 돌려준다.
 
 # 홉마다 곱하는 감쇠. 2차 공급사까지 가면 영향이 희석되는 것을 반영한다.
-HOP_DECAY = 0.55
+#
+# ★채널이 둘이고 감쇠가 다르다(2026-08-03 추가).
+#
+#   공급 차질  사건이 난 회사가 **우리에게 납품**한다 → 생산이 즉시 막힌다
+#   매출 상실  사건이 난 회사가 **우리 고객**이다     → 매출이 서서히 준다
+#
+#   전에는 공급 차질만 계산했다. 방향을 유지한 건 옳았지만(방향 무시 147개 →
+#   유지 33개로 잡음이 걸렸다) **유효한 채널 하나가 같이 빠졌다.** 실측:
+#
+#       심텍          직접 2건 · 공급사 경유 0건 · 고객 경유 113건
+#       레인보우로보틱스   직접 3건 · 공급사 경유 0건 · 고객 경유  57건
+#
+#   중소형 공급사는 고객 경유가 **유일한 파급 채널**이다. 시드 64곳 대부분이
+#   그런 회사라, 이걸 빼면 「리스크 파급」이 사실상 빈 화면이 된다.
+#
+#   같은 감쇠를 쓰면 안 된다 — 공급이 끊기는 것과 고객이 흔들리는 것은
+#   급성/만성의 차이다. 매출 상실을 더 세게 깎는다.
+HOP_DECAY = 0.55            # 공급 차질 — 사건사 → 그 회사의 고객
+HOP_DECAY_DEMAND = 0.35     # 매출 상실 — 사건사 → 그 회사의 공급사
 
 # 허브 페널티 — **흔한 노드를 지나는 경로는 정보량이 적다**(검색의 IDF와 같은 원리).
 # 「삼성전자를 안다」는 거의 모두가 그러하므로 변별력이 없다.
@@ -222,10 +240,13 @@ class Propagation:
     score: float
     path: list[str]          # 사람이 읽을 경로 설명
     stated: bool             # 기사가 직접 말한 파급인가(1홉), 계산한 것인가
+    channel: str = ""        # supply(공급 차질) | demand(매출 상실) — 2홉만
 
     def describe(self) -> str:
         tag = "보도됨" if self.stated else f"계산 {self.hops}홉"
-        return f"[{tag}] {self.target}  (영향도 {self.score:.2f})\n     {' → '.join(self.path)}"
+        ch = {"supply": " · 공급 차질", "demand": " · 매출 상실"}.get(self.channel, "")
+        return (f"[{tag}{ch}] {self.target}  (영향도 {self.score:.2f})\n"
+                f"     {' → '.join(self.path)}")
 
 
 # 1홉: 기사가 말한 파급. 2홉: 거기서 공급망을 **방향 유지**로 타고 내려간다.
@@ -239,15 +260,32 @@ _HIDE = "(NOT coalesce({r}.grounding_suspect, false) OR {r}.grounding_stage1 = '
 
 _PROPAGATE = f"""
 MATCH (e:Event) WHERE e.name = $event
-MATCH (e)-[i:IMPACTS]->(c:Company)
+MATCH (e)-[i:IMPACTS]->(hit:Company)
 WHERE {_HIDE.format(r='i')}
-WITH e, c, i
-OPTIONAL MATCH (c)-[s:SUPPLIES_TO]->(d:Company)
+// ★사건이 **공장·사업부**에 붙었으면 모회사로 올린다(2026-08-03).
+//   「삼성전자 인도 공장 무기한 파업」이 공장 노드에만 붙어 있어서, 삼성전자의
+//   고객사 어디로도 안 퍼지고 있었다. 법적으로 그 공장은 삼성전자 그 자체다.
+//   엣지 타입은 12개로 고정이라 `PART_OF`를 못 만들어, 노드 속성을 조회 때 따라간다.
+//   감쇠는 없다 — 홉이 아니라 **같은 법인**이다.
+OPTIONAL MATCH (parent:Company)
+  WHERE hit.part_of_corp_code IS NOT NULL
+    AND parent.corp_code = hit.part_of_corp_code
+WITH e, i, coalesce(parent, hit) AS c, hit,
+     CASE WHEN parent IS NULL THEN null ELSE hit.part_of_unit END AS unit
+// ★방향을 유지하되 **양쪽 다** 탄다. `c`가 파는 쪽이면 `d`는 고객(공급 차질),
+//   `c`가 사는 쪽이면 `d`는 공급사(매출 상실). 둘을 `flow`로 구분해 감쇠를 달리한다.
+OPTIONAL MATCH (c)-[s:SUPPLIES_TO]-(d:Company)
 WHERE coalesce(s.is_current, true) AND {_HIDE.format(r='s')}
-RETURN e.name AS event, c.name AS direct,
+RETURN e.name AS event, c.name AS direct, unit,
+       CASE WHEN startNode(s) = c THEN 'supply' ELSE 'demand' END AS flow,
        coalesce(i.sign,'') AS sign, properties(i) AS i_props,
        d.name AS downstream, properties(s) AS s_props,
-       size([(c)-[s2:SUPPLIES_TO]->() WHERE {_HIDE.format(r='s2')} | 1]) AS c_out_degree
+       // 허브 감점은 **그 방향의 부채꼴 크기**로 센다. 파는 쪽으로 100곳에
+       // 뿌리는 회사와, 사오는 곳이 3곳뿐인 회사는 희석 정도가 다르다.
+       CASE WHEN startNode(s) = c
+            THEN size([(c)-[s2:SUPPLIES_TO]->() WHERE {_HIDE.format(r='s2')} | 1])
+            ELSE size([(c)<-[s3:SUPPLIES_TO]-() WHERE {_HIDE.format(r='s3')} | 1])
+       END AS c_out_degree
 """
 
 
@@ -270,29 +308,37 @@ def propagate_risk(event_name: str, *, today: Optional[date] = None,
         base = float((r["i_props"] or {}).get("confidence") or 0.7)
         s1 = base * f1.confidence_factor
         neg = (r["sign"] or "") == "negative"
+        # ★모회사로 올린 것이면 **어느 공장인지**를 경로에 남긴다. 「삼성전자가
+        #   위험」이 아니라 「삼성전자 인도 공장이 멈춰서 삼성전자가 위험」이어야
+        #   사용자가 근거를 되짚을 수 있다.
+        hop1 = (f"{r['direct']}({r['unit']})" if r.get("unit") else r["direct"])
         if s1 >= min_score:
             prev = out.get(r["direct"])
             if not prev or prev.score < s1:
                 out[r["direct"]] = Propagation(
                     r["direct"], 1, s1,
-                    [r["event"], f"IMPACTS({r['sign'] or '?'})", r["direct"]],
+                    [r["event"], f"IMPACTS({r['sign'] or '?'})", hop1],
                     stated=True)
 
         # ── 2홉: 공급망을 타고 계산 ───────────────────────
         if not r["downstream"]:
             continue
         f2 = assess(r["s_props"] or {}, today=today)
-        s2 = (s1 * HOP_DECAY * f2.confidence_factor
-              * _hub_penalty(r["c_out_degree"] or 1))
+        supply = r["flow"] == "supply"
+        decay = HOP_DECAY if supply else HOP_DECAY_DEMAND
+        s2 = s1 * decay * f2.confidence_factor * _hub_penalty(r["c_out_degree"] or 1)
         if s2 < min_score:
             continue
         prev = out.get(r["downstream"])
         if prev and prev.score >= s2:
             continue
+        # 경로 문구에 **어느 채널인지**를 적는다. 「왜 내가 영향을 받나」의
+        # 답이 「공급이 끊겨서」와 「고객이 흔들려서」로 전혀 다르다.
+        leg = "SUPPLIES_TO(공급 차질)" if supply else "SUPPLIES_TO←(매출 상실)"
         out[r["downstream"]] = Propagation(
             r["downstream"], 2, s2,
-            [r["event"], f"IMPACTS({r['sign'] or '?'})", r["direct"],
-             "SUPPLIES_TO", r["downstream"]],
-            stated=False)
+            [r["event"], f"IMPACTS({r['sign'] or '?'})", hop1,
+             leg, r["downstream"]],
+            stated=False, channel="supply" if supply else "demand")
 
     return sorted(out.values(), key=lambda p: -p.score)

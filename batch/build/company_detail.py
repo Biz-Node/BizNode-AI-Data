@@ -16,6 +16,7 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import sys
 
 from app.core.config import ETF_LIST_PATH
@@ -72,6 +73,10 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true", help="이미 있어도 다시 추출")
     ap.add_argument("--limit", type=int, help="처리 상한(비용)")
+    ap.add_argument("--only", nargs="+", metavar="기업명",
+                    help="이 기업만 다시 (부문이 덜 뽑힌 곳을 골라 재추출할 때)")
+    ap.add_argument("--untrusted", action="store_true",
+                    help="`revenue_trusted=false`인 기업만 다시 — 부문 누락이 원인인 것들")
     args = ap.parse_args()
 
     with open(ETF_LIST_PATH, encoding="utf-8") as f:
@@ -85,7 +90,26 @@ def main() -> int:
         done = {r[0] for r in conn.execute(
             "SELECT corp_code FROM company_profiles").fetchall()}
 
-    targets = [(c, r, d) for c, r, d in docs if args.force or c not in done]
+    # ★재추출 대상을 골라 부를 수 있어야 한다. 부문이 덜 뽑힌 5~6개사 때문에
+    #   60개사를 전부 다시 돌리면 2,400원이 나간다(기업당 40원).
+    pick: set[str] | None = None
+    if args.only:
+        want = set(args.only)
+        pick = {c for c, n in code2name.items() if n in want}
+        missing = want - {code2name[c] for c in pick}
+        if missing:
+            print(f"⚠ 시드 목록에 없는 기업: {' · '.join(sorted(missing))}\n")
+    elif args.untrusted:
+        with postgres_connection() as conn:
+            pick = {r[0] for r in conn.execute(
+                "SELECT DISTINCT corp_code FROM business_segments "
+                "WHERE revenue_trusted IS false "
+                "  AND coalesce(trust_reason,'') NOT LIKE '합계 행%'").fetchall()}
+        print(f"■ 부문 매출을 못 믿는 기업 {len(pick)}곳만 다시 뽑습니다 "
+              f"(약 {len(pick) * _COST_KRW:,}원)\n")
+
+    targets = [(c, r, d) for c, r, d in docs
+               if (pick is not None and c in pick) or (pick is None and (args.force or c not in done))]
     print(f"사업보고서 {len(docs)}건 · 이미 처리 {len(done)}건 · "
           f"대상 {len(targets)}건 (약 {len(targets)*_COST_KRW:,}원)\n")
     if args.limit:
@@ -159,6 +183,20 @@ def main() -> int:
             print(f"  ✗ 적재 실패 {code2name.get(code, code)}: {exc!r}")
     print(f"✅ company_profiles {loaded_p}건 · business_segments {loaded_s}건 적재"
           + (f" · 실패 {failed}건" if failed else ""))
+
+    # ★적재 직후 **단위 검증을 붙여서 끝낸다**(2026-08-03).
+    #
+    #   사업보고서의 품목별 매출 표는 「(단위: 백만원)」이 표 밖 캡션에 있어
+    #   본문만 보는 LLM이 환산을 놓친다. 실측으로 60개사 중 39개사가 틀렸고,
+    #   그걸 나중에 따로 고쳤다 — 그 사이 화면에 100만배 틀린 금액이 나갔다.
+    #
+    #   검증을 적재의 **일부**로 만들어 두면 신규 기업이 들어와도 그 일이 안 생긴다.
+    #   `segment_units`는 전량을 다시 보지만 무료·수초라 매번 돌려도 된다.
+    if loaded_s and not args.dry_run:
+        print("\n─ 부문 매출 단위 검증 ─")
+        rc = subprocess.run([sys.executable, "-m", "batch.repair.segment_units"]).returncode
+        if rc != 0:
+            print("⚠ 단위 검증이 실패했습니다 — 금액을 화면에 쓰기 전에 확인하세요")
     return 0 if failed == 0 else 2
 
 

@@ -343,14 +343,122 @@ def _report(label: str, ok_a: int, n_a: int, ok_r: int, n_r: int,
     return ok, (n_a - ok_a) + (n_r - ok_r)
 
 
+def check_help() -> list[str]:
+    """`--help`를 죽이는 도움말 문구를 **소스에서** 찾는다. 비용 0.
+
+    ★2026-08-03. `run_companies --help`가 `ValueError`로 죽고 있었다. 원인은
+      도움말 문구의 `%` 한 글자였다 — argparse가 help를 `% params`로 포매팅해서
+      「생존율이 27%라」의 `%라`를 포맷 지정자로 읽는다. `grounding`의
+      「커버율이 1%대」도 같았다. 도움말은 아무도 안 보는 자리라 몇 주가 지났다.
+
+    ★모듈을 임포트해 파서를 찾는 방식은 **못 잡는다.** 이 저장소는 파서를
+      전부 `main()` 안에서 만들기 때문에 모듈 전역에 파서가 없다. 그래서
+      소스를 AST로 훑어 `add_argument(help=...)` 문자열만 본다 — 임포트가
+      필요 없으니 DB도 API 키도 없이 돌아간다.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if ".venv" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and getattr(node.func, "attr", "") == "add_argument"):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "help":
+                    continue
+                text = "".join(x.value for x in ast.walk(kw.value)
+                               if isinstance(x, ast.Constant)
+                               and isinstance(x.value, str))
+                i = 0
+                while (i := text.find("%", i)) >= 0:
+                    # `%%`(이스케이프)와 `%(default)s`(argparse가 주는 값)는 정상
+                    if text[i + 1:i + 2] == "%" or text[i:].startswith("%("):
+                        i += 2
+                        continue
+                    rel = path.relative_to(root).as_posix()
+                    bad.append(f"{rel}:{node.lineno}  …{text[max(0, i - 20):i + 4]}…"
+                               f"  ← `%`는 `%%`로 쓰세요")
+                    break
+    return bad
+
+
+def check_shadowed() -> list[str]:
+    """같은 모듈에서 **상수 이름이 두 번 정의**되는 곳을 찾는다. 비용 0.
+
+    ★2026-08-07. `node_identity.py`에 `_MERGE`가 두 번 있었다. 파이썬은 나중
+      정의가 이기므로 앞쪽 호출부가 **덮인 쿼리**를 부르게 됐고, 파라미터 이름이
+      달라 `finalize`가 5단계에서 통째로 멈췄다:
+
+          ParameterMissing: Expected parameter(s): keep_id, drop_id
+
+      두 쿼리는 병합 정책까지 달랐다(`discard` vs `combine`) — 조용히 다른
+      동작을 했어도 이상했다. 로그만 봐서는 「이름 충돌」이 원인인 걸 못 본다.
+    """
+    import ast
+    import pathlib
+    from collections import Counter
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if ".venv" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        names: list[tuple[str, int]] = []
+        for node in tree.body:                       # 모듈 최상위만 본다
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    # 상수 규약(대문자)만 — 재대입이 정상인 변수는 제외
+                    if isinstance(t, ast.Name) and t.id.isupper():
+                        names.append((t.id, node.lineno))
+        for name, n in Counter(x[0] for x in names).items():
+            if n > 1:
+                lines = [ln for nm, ln in names if nm == name]
+                bad.append(f"{path.relative_to(root).as_posix()}: "
+                           f"{name} 이 {lines} 에 중복 정의 — 나중 것이 이깁니다")
+    return bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--only", choices=["extractor", "verifier"])
+    ap.add_argument("--only", choices=["extractor", "verifier", "help"])
     ap.add_argument("-v", "--verbose", action="store_true", help="판정 사유까지")
     args = ap.parse_args()
 
     good, failed = True, 0
+    if args.only in (None, "help"):
+        bad = check_help()
+        icon = "🔴" if bad else "✓"
+        print(f"{icon} [도움말] 모든 배치의 --help 렌더: "
+              f"{'실패 ' + str(len(bad)) + '건' if bad else '정상'} (0원)")
+        for b in bad:
+            print(f"     {b}")
+        good &= not bad
+
+        dup = check_shadowed()
+        icon = "🔴" if dup else "✓"
+        print(f"{icon} [이름충돌] 모듈 안에서 중복 정의된 상수: "
+              f"{str(len(dup)) + '건' if dup else '없음'} (0원)")
+        for d in dup:
+            print(f"     {d}")
+        good &= not dup
+
+        if args.only == "help":
+            return 0 if good else 1
+        print()
     if args.only in (None, "extractor"):
         print("■ 추출기 — 금지 규칙이 먹는가\n")
         o, f = _report("추출기", *run_extractor(args.verbose),

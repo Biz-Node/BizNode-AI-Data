@@ -21,14 +21,33 @@ TARGET_SECTIONS = {
 }
 
 
+# ★「사업보고서」라는 낱말이 든 다른 공시들. 이름만 보고 최신순으로 집으면
+#   본문이 없는 문서를 잡는다(2026-08-03 실측):
+#
+#     케이티     「해외증권거래소등에신고한사업보고서등의국내신고」  절 0개 · 5,634바이트
+#     제이브이엠  「[첨부정정]사업보고서」                        절 9개(감사보고서뿐)
+#
+#   둘 다 진짜 사업보고서가 며칠 앞서 따로 있었는데, **더 최신**이라 이것들이
+#   먼저 잡혔다. 그러면 「사업의 개요」·「주요 제품 및 서비스」 절이 없어
+#   개요·사업부문이 통째로 비는데, 화면에는 그냥 「데이터 없음」으로 보인다.
+_NOT_ANNUAL = ("반기", "분기", "해외증권거래소", "국내신고")
+
+# 정정 공시는 **본문을 다시 올리지 않는 경우가 있다**([첨부정정] 등).
+# 원본이 같은 기간에 있으면 원본을 쓰고, 정정본밖에 없으면 그거라도 쓴다.
+_AMENDED = ("[첨부정정]", "[첨부추가]")
+
+
 def find_business_report(corp_code: str, bgn_de: str, end_de: str) -> Optional[dict]:
-    """최신 사업보고서 공시(반기·분기 제외). 없으면 None."""
+    """최신 사업보고서 공시(반기·분기·해외신고·첨부정정 제외). 없으면 None."""
     filings = fetch_filings(corp_code, bgn_de, end_de)
-    for f in filings:  # list.json은 최신순
-        nm = f.get("report_nm", "")
-        if "사업보고서" in nm and "반기" not in nm and "분기" not in nm:
-            return f
-    return None
+    cands = [f for f in filings
+             if "사업보고서" in f.get("report_nm", "")
+             and not any(w in f.get("report_nm", "") for w in _NOT_ANNUAL)]
+    if not cands:
+        return None
+    plain = [f for f in cands
+             if not any(w in f.get("report_nm", "") for w in _AMENDED)]
+    return (plain or cands)[0]        # list.json은 최신순
 
 
 def get_report_sections(rcept_no: str) -> dict[str, str]:

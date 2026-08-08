@@ -181,8 +181,24 @@ CHECKS: list[tuple] = [
 
     ("W", "E-구조", "슈퍼노드(degree>150)",
      "MATCH (n) WITH n, size([(n)-[]-()|1]) AS d WHERE d>150 RETURN labels(n)[0]+':'+coalesce(n.name,'?')+' deg='+toString(d) AS v ORDER BY d DESC LIMIT 10", 0),
-    ("W", "E-구조", "고아 노드(엣지 0)",
-     "MATCH (n) WHERE NOT (n)-[]-() RETURN labels(n)[0]+':'+coalesce(n.name,'?') AS v LIMIT 10", 5),
+    # ★「고아 노드 N건」만 세던 것을 **표시 안 된 것**만 세도록 바꿨다(2026-08-03).
+    #   34건을 되짚어 보니 원인이 하나였다 — 관계 검사가 「나란한 언급」으로 판정해
+    #   마지막 엣지를 지운 자리. 엣지 삭제는 맞으니 이건 고칠 게 아니라 **치운 것**이다.
+    #   `repair.orphan_nodes`가 표시하고 벡터에서 뺀다. 여기서는 **아직 안 치운 것**만
+    #   띄운다 — 이미 처리한 34건이 매번 경고로 뜨면 사람이 무뎌진다.
+    ("W", "E-구조", "고아 노드(엣지 0, 미처리)",
+     "MATCH (n) WHERE NOT (n)-[]-() AND NOT coalesce(n.is_orphan, false) "
+     "RETURN labels(n)[0]+':'+coalesce(n.name,'?') AS v LIMIT 10", 5),
+    ("W", "E-구조", "표시해 뒀는데 엣지가 다시 붙음(표시 해제 필요)",
+     "MATCH (n) WHERE n.is_orphan = true AND (n)-[]-() "
+     "RETURN labels(n)[0]+':'+coalesce(n.name,'?') AS v LIMIT 10", 0),
+    # ★`first_seen`이 없으면 홈의 「알림」과 인사이트의 「변화」 축이 통째로 막힌다.
+    #   2026-08-04까지 보유율이 **0%**였는데 아무도 몰랐다 — 화면을 만들 때가 돼서야
+    #   드러났고, 그때는 이미 7,130개가 생성 시각 없이 쌓여 있었다.
+    #   적재기가 넣게 고쳤으니, 다시 새면 여기서 걸린다.
+    ("E", "E-구조", "생성 시각(first_seen) 없는 엣지",
+     "MATCH ()-[r]->() WHERE r.first_seen IS NULL "
+     "RETURN type(r) AS v LIMIT 10", 0),
 ]
 
 
@@ -220,20 +236,73 @@ def _special_checks(session) -> list[str]:
         flags.append(f"🔴 최대주주 지분합>100 ({len(rows)})")
 
     # F: 동일 이름 Person이 여러 person_key로 분산(겸직 미병합 의심)
-    q = ("MATCH (p:Person) WITH p.name AS nm, collect(DISTINCT p.person_key) AS keys "
-         "WHERE size(keys)>1 RETURN nm, size(keys) AS k ORDER BY k DESC LIMIT 8")
+    # ★생년월이 **둘 다 있고 서로 다르면 다른 사람**이다 — DART가 이미 구분해 준 것이라
+    #   합치면 안 된다. 그런데 전에는 이것까지 매번 띄웠다(8건 중 3건).
+    #   「봐도 할 게 없는 경고」는 사람을 무디게 해서, 진짜 후보까지 흘려보내게 한다.
+    #   합칠 수 있는 후보 — **한쪽이라도 생년월이 없는 쌍**만 남긴다.
+    q = ("MATCH (p:Person) WITH p.name AS nm, collect(p) AS ps WHERE size(ps) > 1 "
+         "WITH nm, ps, [x IN ps WHERE x.birth_year_month IS NULL] AS nobirth, "
+         "     size(apoc.coll.toSet([x IN ps | x.birth_year_month])) AS distinct_b "
+         "WHERE size(nobirth) > 0 "
+         "RETURN nm, size(ps) AS k, [x IN ps | coalesce(x.person_key,'?')] AS keys "
+         "ORDER BY k DESC LIMIT 8")
     rows = list(session.run(q))
     icon = "🟡" if rows else "✓"
-    print(f"  {icon} [F-통계] 동명이인/겸직 미병합 의심: {len(rows)}건")
+    print(f"  {icon} [F-통계] 합칠 수 있는 동명 Person(한쪽에 생년월 없음): {len(rows)}건")
     for r in rows:
-        print(f"        - {r['nm']}: {r['k']}개 키")
+        print(f"        - {r['nm']}: {r['keys']}")
     if rows:
-        flags.append(f"🟡 동명 Person 분산 ({len(rows)})")
+        print("          → 근거를 읽고 같은 사람이면 "
+              "`batch/repair/person_merge.py`의 CONFIRMED에 추가하세요")
+        flags.append(f"🟡 동명 Person 합병 후보 ({len(rows)})")
 
     flags += _matrix_check(session)
+    flags += _seed_identity_check(session)
     flags += _seed_merge_check(session)
+    flags += _report_body_check(session)
     flags += _pending_judgement(session)
     return flags
+
+
+def _report_body_check(session) -> list[str]:
+    """등록된 사업보고서에 **본문 절이 실제로 있나** — 이름만 보고 잡으면 빈 문서를 잡는다.
+
+    ★2026-08-03 실측. 「사업보고서」라는 낱말이 든 다른 공시를 최신순으로 집어
+      본문 없는 문서를 등록해 두고 있었다:
+
+        케이티     「해외증권거래소등에신고한사업보고서등의국내신고」  절 0개 · 5,634바이트
+        제이브이엠  「[첨부정정]사업보고서」                        절 9개(감사보고서뿐)
+
+      둘 다 진짜 사업보고서가 며칠 앞서 따로 있었는데 이것들이 더 최신이라 먼저 잡혔다.
+      그러면 개요·사업부문·제품이 통째로 비는데 **화면에는 「데이터 없음」으로만** 보인다.
+      파일 크기와 절 개수를 보면 바로 드러난다.
+    """
+    import glob
+    import os
+    from app.core.database import postgres_connection
+    from pipeline.extractors.dart.downloader import DEFAULT_DOWNLOAD_DIR
+
+    with postgres_connection() as conn:
+        docs = conn.execute(
+            "SELECT d.rcept_no, d.corp_code, c.name FROM documents d "
+            "JOIN companies c USING (corp_code) WHERE d.doc_type='사업보고서'").fetchall()
+
+    thin = []
+    for rcept, _code, name in docs:
+        files = glob.glob(os.path.join(DEFAULT_DOWNLOAD_DIR, rcept, "**", "*.xml"),
+                          recursive=True)
+        size = max((os.path.getsize(f) for f in files), default=0)
+        # 사업보고서 본문은 최소 수십만 바이트다. 10만 미만이면 본문이 아니다.
+        if size < 100_000:
+            thin.append((name, rcept, size))
+
+    icon = "🔴" if thin else "✓"
+    print(f"  {icon} [F-원문] 본문이 없는 사업보고서: {len(thin)}건 / {len(docs)}")
+    for name, rcept, size in thin[:5]:
+        print(f"        - {name}: {rcept} · {size:,}바이트 (본문이 아닌 문서를 잡았습니다)")
+    if thin:
+        print("          → documents에서 지우고 `batch.build.business_reports`를 다시 돌리세요")
+    return [f"🔴 본문 없는 사업보고서 ({len(thin)}건)"] if thin else []
 
 
 def _pending_judgement(session) -> list[str]:
@@ -251,9 +320,23 @@ def _pending_judgement(session) -> list[str]:
         tot, bad = conn.execute(
             "SELECT count(*), count(*) FILTER (WHERE press IS NULL OR press='' "
             "OR press LIKE '%.%') FROM news_articles").fetchone()
-        untrusted = conn.execute(
-            "SELECT count(*) FROM business_segments WHERE revenue_trusted IS false"
-        ).fetchone()[0]
+        # ★사유별로 나눈다(2026-08-03). 「17건 미검증」으로 뭉쳐 세고 있었는데
+        #   열어 보니 넷이 섞여 있었고 셋은 **고칠 게 없는 것**이었다:
+        #     합계 행 1  — 부문이 아니라 표의 총계 줄. 제외가 정상이다
+        #     숫자 없음 8 — 원문에 매출액이 아예 안 적혀 있다(나우로보틱스·파두)
+        #     대조 불가 5 — 전사 매출액이 없어 맞춰 볼 기준이 없다
+        #     안 맞음   3 — **이것만 진짜 미검증**이다
+        #   고칠 수 없는 것을 경고로 띄우면 사람이 경고를 안 본다.
+        seg = dict(conn.execute("""
+            SELECT CASE
+                     WHEN trust_reason LIKE '합계 행%%'          THEN 'total'
+                     WHEN trust_reason LIKE '부문 매출액이 전부 비어%%' THEN 'empty'
+                     WHEN trust_reason LIKE '전사 매출액이 없어%%'    THEN 'nobase'
+                     ELSE 'mismatch' END AS kind, count(*)
+            FROM business_segments WHERE revenue_trusted IS false
+            GROUP BY 1""").fetchall())
+        untrusted = seg.get("mismatch", 0)
+        no_source = seg.get("empty", 0) + seg.get("nobase", 0)
     ratio = bad * 100 // max(tot, 1)
     icon = "🟡" if ratio > 15 else "✓"
     print(f"  {icon} [F-표시] 기사 언론사명 결측: {bad}/{tot}건 ({ratio}%)")
@@ -263,27 +346,31 @@ def _pending_judgement(session) -> list[str]:
 
     # ② 사업부문 매출 단위를 못 믿는 것 — 화면이 금액을 그대로 쓰면 안 된다
     icon = "🟡" if untrusted else "✓"
-    print(f"  {icon} [C-값] 매출 단위 미검증 사업부문(revenue_trusted=false): {untrusted}건")
+    print(f"  {icon} [C-값] 매출 단위 미검증 사업부문: {untrusted}건 "
+          f"(원문에 금액이 없는 것 {no_source}건 · 합계 줄 {seg.get('total', 0)}건은 별개)")
     if untrusted:
         print("        → 어떤 배수로도 전사매출과 안 맞은 것. 화면에서 금액을 감추세요")
         flags.append(f"🟡 매출 단위 미검증 ({untrusted})")
 
-    # ③ 이름이 겹치는 Company — 자동 병합은 위험해서 **사람이 봐야 한다**
-    #   (실측 127쌍 중 대부분이 모/자회사·사업부문이라 합치면 안 된다)
-    rows = [dict(r) for r in session.run(
-        "MATCH (a:Company), (b:Company) "
-        "WHERE a.norm_name < b.norm_name AND size(a.norm_name) >= 4 "
-        "  AND b.norm_name CONTAINS a.norm_name "
-        "  AND NOT (a.corp_code IS NOT NULL AND b.corp_code IS NOT NULL "
-        "           AND a.corp_code <> b.corp_code) "
-        "RETURN a.name + ' ⟷ ' + b.name AS v LIMIT 200")]
-    icon = "🟡" if rows else "✓"
-    print(f"  {icon} [F-통계] 이름이 겹치는 Company(사람 판단 대기): {len(rows)}쌍")
-    for r in rows[:3]:
-        print(f"        - {r['v']}")
-    if rows:
-        print("        → python -m batch.repair.node_identity --only overlap")
-        flags.append(f"🟡 이름 겹침 미판정 ({len(rows)}쌍)")
+    # ③ 이름이 겹치는 Company — **조치할 것만** 센다
+    #
+    #   ★2026-08-03까지 「130쌍 판단 대기」를 그냥 띄우고 있었다. 사람이 130쌍을
+    #     볼 리 없으니 아무도 안 봤다. 열어 보니 여섯 종류가 섞여 있었고 그중
+    #     다섯은 **정상**이었다(해외법인·펀드·계열사·우연 겹침·사업부문).
+    #     `repair.name_overlap`이 분류해 주므로 여기서는 남는 것만 띄운다.
+    #     실측: 130쌍 → 조치 4쌍 → 확인·적용 후 0쌍.
+    from batch.repair.name_overlap import _PAIRS, _classify
+    pairs = [dict(r) for r in session.run(_PAIRS)]
+    todo = [(p, why) for p, t, why in ((p, *_classify(p)) for p in pairs)
+            if t == "조치"]
+    icon = "🟡" if todo else "✓"
+    print(f"  {icon} [F-통계] 이름 겹침 중 조치 필요: {len(todo)}쌍 "
+          f"(전체 {len(pairs)}쌍, 나머지는 해외법인·펀드·계열사 등 정상)")
+    for p, why in todo[:3]:
+        print(f"        - {p['an']} ⟷ {p['bn']} : {why}")
+    if todo:
+        print("        → python -m batch.repair.name_overlap  (분류를 보고 확인한 것만 --apply)")
+        flags.append(f"🟡 이름 겹침 조치 필요 ({len(todo)}쌍)")
     return flags
 
 
@@ -308,6 +395,59 @@ def _matrix_check(session) -> list[str]:
     for r in bad[:5]:
         print(f"        - {r['al']} -{r['t']}-> {r['bl']}  {r['n']}건")
     return [f"🔴 매트릭스 위반 ({len(bad)}종)"] if bad else []
+
+
+def _seed_identity_check(session) -> list[str]:
+    """시드가 **동명 다른 법인**을 가리키고 있지 않나 — 공시가 0건이면 의심한다.
+
+    ★2026-08-03 실측. 시드 목록의 corp_code가 틀려 있었다:
+
+        케이씨텍  01142729(비상장)  ← 잡혀 있던 것
+                 01261893(종목 281820)  ← 진짜
+        태성     01911907(비상장)  ← 잡혀 있던 것
+                 01366000(종목 323280)  ← 진짜
+
+      「태성」이라는 이름의 법인이 DART에 **15개**나 있다. ETF 종목명으로 마스터를
+      찾을 때 상장 여부를 안 보면 비상장 동명사를 잡는다. 그러면 DART 공시가
+      0건이라 재무·사업보고서가 통째로 비는데, **화면에는 그냥 「데이터 없음」**으로
+      보여서 원인을 알 수 없다.
+
+      상장 시드인데 마스터에 종목코드가 없으면 여기서 잡는다.
+    """
+    import json
+    from app.core.config import ETF_LIST_PATH
+    from app.core.database import postgres_connection
+    try:
+        seeds = json.load(open(ETF_LIST_PATH, encoding="utf-8"))["companies"]
+    except Exception as exc:
+        print(f"  ⚠ [G-시드] 시드 목록을 못 읽었습니다 ({exc!r})")
+        return []
+
+    with postgres_connection() as conn:
+        master = {r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT corp_code, corp_name, stock_code FROM corp_code_master").fetchall()}
+        by_name: dict[str, list] = {}
+        for code, (nm, sc) in master.items():
+            by_name.setdefault(nm, []).append((code, sc))
+
+    bad = []
+    for co in seeds:
+        cc, nm = co.get("corpCode"), co.get("companyName")
+        mine = master.get(cc)
+        if mine and mine[1]:            # 마스터에 종목코드가 있으면 상장 법인 ✓
+            continue
+        # 같은 이름으로 **상장된** 법인이 따로 있으면 그쪽이 맞다
+        alt = [(c, s) for c, s in by_name.get(nm, []) if s]
+        if alt:
+            bad.append((nm, cc, alt[0][0], alt[0][1]))
+
+    icon = "🔴" if bad else "✓"
+    print(f"  {icon} [G-시드] 시드가 동명 비상장 법인을 가리킴: {len(bad)}곳 / 시드 {len(seeds)}")
+    for nm, cur, right, sc in bad[:5]:
+        print(f"        - {nm}: {cur}(비상장) → {right}(종목 {sc})가 맞습니다")
+    if bad:
+        print("          → data/company_list/company_list_etf.json 을 고치고 DART를 다시 받으세요")
+    return [f"🔴 시드 corp_code 오지정 ({len(bad)}곳)"] if bad else []
 
 
 def _seed_merge_check(session) -> list[str]:
@@ -389,7 +529,16 @@ def _cross_db_checks(session) -> list[str]:
         "MATCH (c:Company) WHERE c.corp_code IS NOT NULL RETURN DISTINCT c.corp_code AS cc")}
 
     with postgres_connection() as pg, pg.cursor() as cur:
-        cur.execute("SELECT chunk_id FROM vector_chunks")
+        # ★`evidence` 컬렉션만 본다(2026-08-07). 예전엔 `vector_chunks` 전체를
+        #   가져와 「엣지가 참조하지 않는 것」을 고아로 셌는데, 거기엔 **기업 카드**
+        #   (`company` 컬렉션, `co_00126186` 꼴)도 들어 있다. 그건 통합 검색용이라
+        #   애초에 엣지가 참조할 대상이 아니다.
+        #
+        #   그래서 「고아 청크 2,205건」이 계속 떴는데, 세어 보니 company 카드
+        #   수와 **정확히 일치**했다 — 전부 오탐이었다. 정리기(`repair.evidence`)는
+        #   evidence만 봐서 옳게 돌고 있었고, 그래서 「정리할 고아가 없습니다」와
+        #   「고아 2,205건」이 동시에 뜨는 모순이 생겼다.
+        cur.execute("SELECT chunk_id FROM vector_chunks WHERE collection = 'evidence'")
         vchunks = {r[0] for r in cur.fetchall()}
         cur.execute("SELECT corp_code FROM corp_code_master")
         master = {r[0] for r in cur.fetchall()}
@@ -403,12 +552,31 @@ def _cross_db_checks(session) -> list[str]:
     if dangling_ev:
         flags.append(f"🔴 dangling evidence_id ({len(dangling_ev)})")
 
-    # D2: vector_chunks ∉ 엣지 참조 (고아 청크)
+    # D2: evidence 청크 ∉ 엣지 참조 (고아 청크)
     orphan_chunks = vchunks - edge_ev
     icon = "🟡" if orphan_chunks else "✓"
     print(f"  {icon} [D-크로스] 고아 evidence 청크(엣지 미참조): {len(orphan_chunks)}건")
     if orphan_chunks:
+        print("        → python -m batch.repair.evidence")
         flags.append(f"🟡 고아 청크 ({len(orphan_chunks)})")
+
+    # D4: 기업 카드가 그래프와 맞나 — evidence만 보다가 **아무도 안 보던 쪽**
+    #     검색으로 들어왔는데 그래프에 없는 회사면 빈 화면이 열린다(`is_orphan`과 같은 사고).
+    with postgres_connection() as pg, pg.cursor() as cur:
+        cur.execute("SELECT owner_key FROM vector_chunks WHERE collection = 'company'")
+        card_owner = {r[0] for r in cur.fetchall()}
+    live = {r["k"] for r in session.run(
+        "MATCH (c:Company) WHERE NOT coalesce(c.is_orphan, false) "
+        "RETURN coalesce(c.corp_code, c.name) AS k")}
+    stale_cards = card_owner - live
+    icon = "🟡" if stale_cards else "✓"
+    print(f"  {icon} [D-크로스] 그래프에 없는 기업 카드(검색하면 빈 화면): "
+          f"{len(stale_cards)}건 / 카드 {len(card_owner)}")
+    for v in list(stale_cards)[:5]:
+        print(f"        - {v}")
+    if stale_cards:
+        print("        → python -m batch.repair.orphan_nodes  (벡터에서 뺍니다)")
+        flags.append(f"🟡 유효하지 않은 기업 카드 ({len(stale_cards)})")
 
     # D3: Neo4j corp_code ∉ corp_code_master (유령 노드)
     ghost = node_corp - master

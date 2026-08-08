@@ -65,9 +65,14 @@ _STUB_PARTNERS = 4
 # (`graph_service.HIDE_VERDICTS`) 검색 색인에는 넣는다면 앞뒤가 안 맞는다.
 _CARD_QUERY = """
 MATCH (c:Company)
-WHERE (NOT coalesce(c.is_stub, false) AND c.corp_code IS NOT NULL)
-   OR ($stubs AND coalesce(c.is_stub, false)
-       AND c.sector_label IS NOT NULL AND c.entity_kind <> '불명')
+// ★엣지가 하나도 없는 회사는 넣지 않는다(2026-08-03). 검색으로 찾아 들어가면
+//   **관계가 하나도 없는 빈 화면**이 열린다. 코인원·키움증권·두산건설이 그랬다.
+//   전부 관계 검사가 「나란한 언급」으로 판정해 마지막 엣지를 지운 자리다.
+//   `is_orphan` 표시는 `repair.orphan_nodes`가 붙이고 엣지가 돌아오면 뗀다.
+WHERE NOT coalesce(c.is_orphan, false)
+  AND ((NOT coalesce(c.is_stub, false) AND c.corp_code IS NOT NULL)
+    OR ($stubs AND coalesce(c.is_stub, false)
+        AND c.sector_label IS NOT NULL AND c.entity_kind <> '불명'))
 OPTIONAL MATCH (c)-[d:DEVELOPS]->(p:Product)
   WHERE NOT coalesce(d.grounding_suspect, false)
 OPTIONAL MATCH (c)-[s:SUPPLIES_TO]->(buyer:Company)

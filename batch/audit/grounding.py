@@ -234,12 +234,27 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--llm", action="store_true", help="2차 LLM 검증까지")
     ap.add_argument("--apply", action="store_true", help="의심 엣지에 표시 남기기")
-    ap.add_argument("--limit", type=int, default=400, help="2차 검증 상한(비용)")
+    # ★상한을 「한 번에 볼 양」이 아니라 **한 회차 크기**로 바꿨다(2026-08-03).
+    #
+    #   전에는 400건에서 잘리고 나머지는 다음 실행으로 밀렸다. 그런데 다음 실행이
+    #   언제일지 정해져 있지 않아 **미검증분이 쌓인다.** 실측: 재수집 2개사만 했는데
+    #   신규 엣지 592건 중 146건(25%)이 검증 없이 남았다. 확장할수록 더 벌어진다.
+    #
+    #   검증은 엣지당 0.3원이라 다 봐도 몇백 원이다. 잘라서 아끼는 돈보다
+    #   **「검증했다」와 「안 했다」가 섞이는 손해**가 훨씬 크다.
+    #   이제 상한은 회차 크기이고, 남은 게 있으면 회차를 반복한다.
+    ap.add_argument("--limit", type=int, default=400,
+                    help="한 회차에 검증할 건수 (남으면 회차를 반복한다)")
+    ap.add_argument("--max-rounds", type=int, default=12,
+                    help="회차 상한 — 폭주 방지. 넘으면 남은 건수를 알리고 멈춘다")
+    ap.add_argument("--one-round", action="store_true",
+                    help="한 회차만 (예산을 딱 끊고 싶을 때)")
     ap.add_argument("--full", action="store_true",
                     help="이미 LLM 검증한 엣지까지 다시 (프롬프트 수정 후에만)")
     ap.add_argument("--all", action="store_true",
+                    # ★`%`는 `%%`로. argparse가 help를 포매팅해서 `--help`가 죽는다
                     help="1차에서 걸린 것만이 아니라 **근거를 가진 엣지 전부**를 "
-                         "LLM 검증 (기본은 의심분만 — 커버율이 1%대에 머문다)")
+                         "LLM 검증 (기본은 의심분만 — 커버율이 1%%대에 머문다)")
     ap.add_argument("--source", choices=["news", "dart", "any"], default="any",
                     help="출처 제한. news는 문장에서 추론한 것이라 우선순위가 높다")
     args = ap.parse_args()
@@ -310,22 +325,39 @@ def main() -> int:
         base = [s for s in base if s[0]["src"] == args.source]
     pool_rows = [s for s in base if args.full or not s[0]["checked"]]
     skipped = len(base) - len(pool_rows)
-    targets = [(r, texts.get(r["ev"], "") or next(
+    all_targets = [(r, texts.get(r["ev"], "") or next(
         (texts.get(e, "") for e in r["evs"] if texts.get(e)), ""))
         for r, _, _, _ in pool_rows]
-    targets = [t for t in targets if t[1]]
-    over = max(0, len(targets) - args.limit)
-    targets = targets[: args.limit]
-    print(f"\n[2차 · LLM] {len(targets)}건 검증 "
-          f"(약 {len(targets) * 0.0003 * 1380:.0f}원)"
-          + (f" · 기검증 {skipped}건 건너뜀" if skipped else ""))
-    # ★상한에 걸려 잘린 건 반드시 알린다. 조용한 절단은 "다 봤다"로 읽힌다.
-    if over:
-        print(f"  ⚠ --limit({args.limit})에 걸려 {over}건은 검증하지 못했습니다. "
-              f"--limit을 올려 다시 돌리세요.")
+    all_targets = [t for t in all_targets if t[1]]
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(_verify, targets))
+    # ★남은 게 없을 때까지 **회차를 돈다**(2026-08-03). 전에는 상한에서 잘라
+    #   나머지를 다음 실행으로 미뤘는데, 다음 실행이 언제일지 정해져 있지 않아
+    #   **미검증분이 쌓였다.** 실측: 재수집 2개사만 했는데 신규 엣지 592건 중
+    #   146건(25%)이 검증 없이 남았다. 확장할수록 더 벌어진다.
+    #
+    #   검증은 엣지당 0.3원이라 다 봐도 몇백 원이다. 잘라서 아끼는 돈보다
+    #   「검증했다」와 「안 했다」가 섞여 **커버율이 거짓이 되는 손해**가 훨씬 크다.
+    rounds = 1 if args.one_round else max(
+        1, min(args.max_rounds, -(-len(all_targets) // max(args.limit, 1))))
+    print(f"\n[2차 · LLM] 대상 {len(all_targets)}건 "
+          f"(약 {len(all_targets) * 0.0003 * 1380:.0f}원)"
+          + (f" · 기검증 {skipped}건 건너뜀" if skipped else "")
+          + (f" · {rounds}회차로 나눠 처리" if rounds > 1 else ""))
+    left = len(all_targets) - rounds * args.limit
+    if left > 0:
+        print(f"  ⚠ 회차 상한(--max-rounds {args.max_rounds})에 걸려 {left}건이 남습니다. "
+              f"다시 실행하면 이어서 봅니다.")
+
+    results = []
+    for rd in range(rounds):
+        chunk = all_targets[rd * args.limit:(rd + 1) * args.limit]
+        if not chunk:
+            break
+        if rounds > 1:
+            print(f"  · {rd + 1}/{rounds}회차 — {len(chunk)}건")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results.extend(pool.map(_verify, chunk))
+    targets = all_targets[:len(results)]
 
     failed = [(r, v) for r, v in results if v.get("failed")]
     ok_results = [(r, v) for r, v in results if not v.get("failed")]

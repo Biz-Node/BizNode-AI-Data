@@ -26,4 +26,11 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         # errors="backslashreplace" — 콘솔이 못 그리는 글자가 있어도 **죽지 않고**
         # 이스케이프로 남긴다. 로그가 조금 지저분한 편이 사라지는 것보다 낫다.
-        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        #
+        # ★line_buffering — 출력을 파일로 넘기면 파이썬이 8KB씩 모아 뒀다가
+        #   쓴다(2026-08-03). 뉴스 재수집을 로그로 돌렸더니 35분 동안 로그가
+        #   **빈 파일**이었다. 죽은 건지 도는 건지 알 수가 없어 프로세스 CPU를
+        #   재 봐야 했다. 몇 시간짜리 배치에서 그건 못 쓸 상태다.
+        #   줄 단위로 흘려보내면 `tail -f`로 그대로 따라갈 수 있다.
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace",
+                            line_buffering=True)

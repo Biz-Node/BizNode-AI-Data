@@ -140,6 +140,13 @@ VERIFY: list[Step] = [
     #   마지막 감사가 자기가 방금 만든 찌꺼기를 경고로 띄운다(실측 25건).
     Step("고아 근거 정리(2차)", "batch.repair.evidence",
          args=["--only", "prune"], halt_on_fail=False),
+    # ★기업 카드도 같은 이유로 찌꺼기가 남는다(2026-08-07). 앞 단계들이 노드를
+    #   병합·삭제하면 그래프에서는 사라지는데 **검색 카드는 남는다.** 검색으로
+    #   들어가면 관계가 하나도 없는 빈 화면이 열린다.
+    #   `repair.orphan_nodes`는 「엣지 0인 노드」만 봐서 이걸 못 잡는다 —
+    #   병합·삭제된 것은 노드 자체가 없기 때문이다.
+    Step("유효하지 않은 기업 카드 정리", "batch.repair.stale_cards",
+         halt_on_fail=False),
     Step("그래프 무결성 감사", "batch.audit.graph",
          halt_on_fail=False, takes_dry_run=False),
     # 마지막은 "무엇이 걸렸나"가 아니라 **"무엇을 아직 안 봤나"**다.

@@ -68,11 +68,23 @@ def _rel_ident(edge_type: str, props: dict[str, Any]) -> dict[str, Any]:
 #
 #   `last_seen`은 **공시 날짜**(사건이 일어난 때)이고 `loaded_at`은 **우리가 본 때**다.
 #   둘은 다르다 — 국민연금 5% 공시는 2024년 것이어도 오늘 적재될 수 있다.
+#
+# ★`first_seen`은 **처음 본 때**이고 두 값 어느 것으로도 대신할 수 없다(2026-08-04).
+#   `loaded_at`은 배치마다 덮어써지고 `last_seen`은 공시 날짜라, 「지난번 이후 새로
+#   생긴 관계」를 물으면 둘 다 답을 못 한다. 홈의 「알림」과 인사이트의 「변화」 축이
+#   전부 여기 걸려 있는데 실측 보유율이 **0%**였다.
+#
+#   `apoc.merge.relationship`의 onCreate(4번째)에만 넣고 onMatch(6번째)에는 넣지
+#   않는다 — 그래야 이미 있던 엣지의 최초 시각이 재적재로 덮이지 않는다.
 _QUERY = """
 UNWIND $rows AS row
-CALL apoc.merge.node([row.src_label], row.src_ident, row.src_props, {}) YIELD node AS s
-CALL apoc.merge.node([row.tgt_label], row.tgt_ident, row.tgt_props, {}) YIELD node AS t
-CALL apoc.merge.relationship(s, row.edge_type, row.rel_ident, row.rel_props, t, row.rel_props)
+CALL apoc.merge.node([row.src_label], row.src_ident,
+     apoc.map.merge(row.src_props, {first_seen: date($today)}), {}) YIELD node AS s
+CALL apoc.merge.node([row.tgt_label], row.tgt_ident,
+     apoc.map.merge(row.tgt_props, {first_seen: date($today)}), {}) YIELD node AS t
+CALL apoc.merge.relationship(s, row.edge_type, row.rel_ident,
+     apoc.map.merge(row.rel_props, {first_seen: date($today)}),
+     t, row.rel_props)
 YIELD rel
 SET rel.loaded_at = $loaded_at
 RETURN count(*) AS n
@@ -125,10 +137,11 @@ def load_staged_to_neo4j(only_corp: Optional[str] = None, batch_size: int = 500)
         # 배치 전체가 **같은** loaded_at을 갖게 한다. 행마다 datetime()을 부르면
         # 미세하게 달라져 "이번 배치에서 갱신됐나"를 판정할 수 없다.
         loaded_at = datetime.now(timezone.utc).isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         with neo4j_session() as session:
             for i in range(0, len(prepared), batch_size):
                 chunk = prepared[i : i + batch_size]
-                session.run(_QUERY, rows=chunk, loaded_at=loaded_at)
+                session.run(_QUERY, rows=chunk, loaded_at=loaded_at, today=today)
                 total += len(chunk)
 
         # 커밋 마커 (맨 마지막)

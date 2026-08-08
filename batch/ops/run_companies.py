@@ -127,10 +127,17 @@ def main() -> int:
     ap.set_defaults(month_split=True)
     ap.add_argument("--bucket", choices=["month", "quarter", "year"],
                     default="month", help="기간 균등 배분 단위")
+    # ★help 안의 `%`는 반드시 `%%`로 쓴다. argparse가 help를 `% params`로
+    #   포매팅하므로 「27%라」의 `%라`가 포맷 지정자로 잡혀 `--help` 자체가
+    #   ValueError로 죽는다. 실측: 이 한 글자 때문에 도움말을 아무도 못 봤다.
     ap.add_argument("--resolve-factor", type=int, default=4,
                     help="URL 해석 대상 = limit × 이 값. 대형사 실측 생존율이 "
-                         "27%라 3으로는 상한을 못 채운다(SK 240→193건)")
+                         "27%%라 3으로는 상한을 못 채운다(SK 240→193건)")
     ap.add_argument("--dry-run", action="store_true", help="목록만 보고 끝")
+    ap.add_argument("--ignore-block", action="store_true",
+                    help="구글 차단 대기시간을 무시하고 강행 (권장하지 않음)")
+    ap.add_argument("--pause", type=int, default=180, metavar="초",
+                    help="기업 사이 휴식(초). 기본 180 — 연속 질의를 끊어 준다. 0이면 없음")
     args = ap.parse_args()
 
     if args.recollect:
@@ -143,6 +150,25 @@ def main() -> int:
     if not names:
         print("돌릴 기업이 없습니다. 기업명을 주거나 --plan N / --recollect 를 쓰세요.")
         return 1
+
+    # ★차단은 「임계」가 아니라 **잠금**이다(2026-08-04 실측). 잠금 중에는
+    #   1질의도 안 통하므로, 지금 시작하면 첫 질의부터 503으로 끝난다.
+    #       0.3h·1.3h → 잠김   /   2.2h·5.6h·14h → 열림
+    #   잠금은 1.3~2.2시간에 풀리고, 풀리면 400질의쯤을 준다. 더 기다려도
+    #   허용량은 안 늘어난다(14시간 = 392, 2.5시간 = 400).
+    from pipeline.extractors.news.gnews import _MIN_WAIT_HOURS, hours_since_block
+    since = hours_since_block()
+    if since is not None and since < _MIN_WAIT_HOURS:
+        print(f"⛔ 마지막 구글 차단으로부터 {since:.1f}시간밖에 안 지났습니다 "
+              f"(권장 {_MIN_WAIT_HOURS:.0f}시간)")
+        print("   차단은 잠금이라 지금은 **첫 질의부터** 503으로 끝납니다.")
+        print("   실측: 0.3h·1.3h 잠김 → 2.2h부터 열림. 더 기다려도 허용량은 안 늘어납니다.")
+        print(f"   그래도 돌리려면: --ignore-block")
+        if not args.ignore_block:
+            return 3
+        print("   → --ignore-block 지정됨. 진행합니다.\n")
+    elif since is not None:
+        print(f"(마지막 구글 차단으로부터 {since:.1f}시간 지났습니다)\n")
 
     std = (args.years == 5 and args.limit == 240 and args.month_split)
     print(f"대상 {len(names)}개사 · {args.years}년 · 월별분할={args.month_split} · "
@@ -174,6 +200,15 @@ def main() -> int:
     results: list[tuple[str, bool, float]] = []
 
     for i, name in enumerate(names, 1):
+        # ★기업 사이에 쉰다(2026-08-06). 지금까지는 480질의를 끝내자마자 **곧바로**
+        #   다음 기업의 480질의를 시작했다. 몇 시간을 쉼 없이 같은 속도로 두드리는
+        #   건 봇 패턴 그 자체다. 사람이라면 한 회사를 보고 잠깐 멈춘다.
+        #   비용은 기업당 몇 분이고, 차단 한 번에 몇 시간을 잃는 것보다 싸다.
+        if i > 1 and args.pause > 0:
+            print(f"\n… 다음 기업까지 {args.pause}초 쉽니다 "
+                  f"(연속 질의를 끊어 주기 위함)", flush=True)
+            time.sleep(args.pause)
+
         elapsed = (time.time() - started) / 60
         print("\n" + "=" * 70)
         print(f"[{i}/{len(names)}] {name}   (경과 {elapsed:.0f}분)")

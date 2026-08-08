@@ -25,6 +25,40 @@ DART 「최대주주 및 특수관계인 현황」 API는 **그룹 전원**을 �
 
     python -m batch.repair.stake_subtypes --dry-run
     python -m batch.repair.stake_subtypes
+
+★지분을 다 판 관계를 끝난 것으로 표시한다 (2026-08-03 추가)
+
+「지분 기준 관계인데 지분 0.0%」인 엣지가 13건 있었다. 파싱 오류인 줄 알았는데
+DART 원문이 실제로 `보유비율 0.00`을 준다.
+
+  ★그런데 **0.00%의 뜻이 출처마다 달랐다.** 처음엔 13건을 다 「전량 처분」으로
+    보려다, 6건이 살아 있는 관계임을 발견해 7건으로 좁혔다.
+
+  ① 대량보유(5%룰) 7건 → **전량 처분이 맞다.** 증감이 같이 찍혀 있다
+
+        이준호           -44.17%p   증여/수증으로 특별관계 해소
+        세종텔레콤         -6.47%p   시간외 대량매매로 주식 전량 매각
+        키움-라피스        -5.42%p   전환사채 풋옵션 행사
+        프레스토제6호      -41.52%p
+
+     그런데 그래프는 `is_current=true`로 두어 **「지금도 주주다」라고 말하고 있었다.**
+
+  ② 사업보고서 최대주주현황 6건 → **반올림해서 0일 뿐 주식은 있다**
+
+        삼성에스디에스 신현한    900주 · 0.00%
+        원익홀딩스 오창희      2,900주 · 0.00%
+        카카오는 0.00%인 특수관계인이 **77명**
+
+     끝난 게 아니다. 표시하면 살아 있는 지배구조가 화면에서 사라진다.
+
+  ③ 국민연금공단 → NAVER는 또 다르다. DART가 「공단 본인 0.00% + 국민연금기금
+     특수관계인 9.25%」로 준다. 실제 보유는 기금 쪽이고 공단은 대표로 이름만
+     올라간 것 — 애초에 0을 보고한 것이지 판 게 아니다.
+
+  그래서 ①만 처리한다. 「출자」도 뺀다 — 출자 지분 0%는 정상이다(청산·평가손실 등).
+
+  지우지 않는다. `is_current=false`로 표시하면 신선도가 expired로 잡고
+  조회 계층이 화면에서 뺀다. 이력은 남는다.
 """
 
 from __future__ import annotations
@@ -63,6 +97,44 @@ _MAJORITY_RATIO = 50.0
 _APPLY = ("MATCH ()-[r]->() WHERE elementId(r) = $eid "
           "SET r.subtype = $new, r.subtype_corrected_from = $old")
 
+# ── 전량 처분 — 대량보유(5%룰)에서만 ────────────────────────────
+#
+# ★지분 0.00%의 뜻이 **출처마다 다르다**(2026-08-03 실측). 처음엔 13건을 모두
+#   「전량 처분」으로 보려다 6건이 살아 있는 관계임을 발견해 좁혔다:
+#
+#   대량보유(5%룰) 7건 → **전량 처분이 맞다.** 증감이 함께 찍혀 있다
+#       이준호 -44.17%p(증여로 특별관계 해소) · 세종텔레콤 -6.47%p(전량 매각)
+#       키움-라피스 -5.42%p(전환사채 풋옵션) · 프레스토제6호 -41.52%p
+#
+#   사업보고서 최대주주현황 6건 → **반올림해서 0일 뿐 주식은 있다**
+#       삼성에스디에스 신현한   900주 · 0.00%
+#       원익홀딩스 오창희     2,900주 · 0.00%
+#       카카오는 0.00%인 특수관계인이 **77명**
+#       → 끝난 게 아니다. 표시하면 살아 있는 지배구조가 화면에서 사라진다.
+#
+#   국민연금공단 → NAVER는 또 다르다. DART가 「공단 본인 0.00% + 국민연금기금
+#   특수관계인 9.25%」로 주는데, 실제 보유는 기금 쪽이고 공단은 대표로 올라간 것뿐이다.
+#
+#   그래서 **5%이상주주(대량보유)만** 본다. `shareholder_relation`이 있으면
+#   사업보고서에서 온 것이므로 제외한다.
+_RATIO_SUBTYPES = ["5%이상주주"]
+
+_FIND_ZERO = """
+MATCH (a)-[r:OWNS_STAKE_IN]->(b)
+WHERE r.subtype IN $subs AND toFloat(r.ratio) = 0.0
+  AND coalesce(r.is_current, true)
+  AND r.shareholder_relation IS NULL   // 사업보고서 최대주주현황이 아닌 것
+RETURN elementId(r) AS eid, a.name AS a, b.name AS b, r.subtype AS st,
+       coalesce(r.as_of, r.observed_at, r.last_seen) AS asof
+"""
+
+_END_ZERO = """
+MATCH ()-[r]->() WHERE elementId(r) = $eid
+SET r.is_current = false,
+    r.valid_until = coalesce(r.valid_until, $asof),
+    r.ended_reason = '지분 전량 처분 — DART 보유비율 0.00'
+"""
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
@@ -93,6 +165,23 @@ def main() -> int:
             if new != r["cur"]:
                 changes.append((r["eid"], r["a"], r["b"], r["cur"], new,
                                 f"지분 {r['ratio']:.2f}% — 50% 초과여야 자회사"))
+
+    # ── 전량 처분한 지분 관계를 끝난 것으로 ──────────────────
+    with neo4j_session() as session:
+        zeros = [dict(r) for r in session.run(_FIND_ZERO, subs=_RATIO_SUBTYPES)]
+        if zeros:
+            print(f"■ 지분 전량 처분 {len(zeros)}건 — 「지금도 주주」로 남아 있던 것")
+            for z in zeros[:8]:
+                print(f"   {str(z['a'])[:18]:20}→ {str(z['b'])[:16]:18}"
+                      f"{z['st']:10}지분 0.0% · {str(z['asof'] or '')[:10]}")
+            if len(zeros) > 8:
+                print(f"   … 외 {len(zeros) - 8}건")
+            if not args.dry_run:
+                for z in zeros:
+                    session.run(_END_ZERO, eid=z["eid"], asof=z["asof"])
+                print(f"   ✅ is_current=false · ended_reason 기록 "
+                      f"(삭제 아님 — 신선도가 expired로 잡습니다)")
+            print()
 
     if held:
         print(f"■ 보류 {len(held)}건 — 지분이 과반이라 라벨을 내리지 않습니다 (사람 확인)")

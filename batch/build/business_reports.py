@@ -41,16 +41,43 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contracts-only", action="store_true",
                         help="II-6 계약만 재추출(II-2 제품 LLM 호출 생략) — 재적재용")
+    # ★건너뛰기가 없어서 **매번 64개사 전부에 LLM을 다시 돌리고 있었다**(2026-08-03).
+    #   케이티·제이브이엠 두 곳만 필요했는데 15분이 걸렸다. `company_detail`에는
+    #   같은 이유로 이미 건너뛰기가 있는데 여기만 빠져 있었다.
+    #
+    #   판단 기준은 **같은 접수번호가 이미 등록돼 있나**다. 사업보고서가 새로 나오면
+    #   접수번호가 달라지므로 그때는 저절로 다시 돈다.
+    parser.add_argument("--force", action="store_true",
+                        help="이미 처리한 기업도 다시 (보고서가 갱신됐거나 프롬프트를 고친 뒤)")
+    parser.add_argument("--only", nargs="+", metavar="기업명",
+                        help="이 기업만")
     args = parser.parse_args()
 
     with open(ETF_LIST_PATH, encoding="utf-8") as f:
         seed = json.load(f)["companies"]
 
+    if args.only:
+        want = set(args.only)
+        seed = [c for c in seed if c["companyName"] in want]
+        missing = want - {c["companyName"] for c in seed}
+        if missing:
+            print(f"⚠ 시드 목록에 없는 기업: {' · '.join(sorted(missing))}\n")
+
+    # 이미 등록된 (기업, 접수번호) — 같으면 건너뛴다
+    done: set[tuple[str, str]] = set()
+    if not args.force:
+        with postgres_connection() as _c:
+            done = {(r[0], r[1]) for r in _c.execute(
+                "SELECT corp_code, rcept_no FROM documents WHERE doc_type='사업보고서'"
+            ).fetchall()}
+
     all_ev = []
-    tot_products = tot_contracts = no_report = 0
+    tot_products = tot_contracts = no_report = skipped = 0
 
     scope = "계약만" if args.contracts_only else "제품·계약"
-    print(f"[1/3] 사업보고서 수집·LLM 추출({scope})·스테이징")
+    print(f"[1/3] 사업보고서 수집·LLM 추출({scope})·스테이징"
+          + (f" · 대상 {len(seed)}개사" if args.only else "")
+          + ("" if args.force else " · 이미 처리한 곳은 건너뜁니다"))
     with postgres_connection() as conn:
         for i, c in enumerate(seed, 1):
             corp_code, name = c["corpCode"], c["companyName"]
@@ -59,6 +86,9 @@ def main() -> int:
                 no_report += 1
                 continue
             rcept_no = rpt["rcept_no"]
+            if (corp_code, rcept_no) in done:
+                skipped += 1
+                continue
             try:
                 sections = get_report_sections(rcept_no)
             except Exception as exc:
@@ -95,7 +125,8 @@ def main() -> int:
                 print(f"  [{i}/{len(seed)}] {name}: 제품 {n} ({names}){extra}")
 
         print(f"  → Product·DEVELOPS {tot_products}건, "
-              f"계약관계 {tot_contracts}건, 보고서 없음 {no_report}개사")
+              f"계약관계 {tot_contracts}건, 보고서 없음 {no_report}개사"
+              + (f", **건너뜀 {skipped}개사**" if skipped else ""))
 
         print(f"\n[2/3] evidence 임베딩 → ChromaDB + vector_chunks ({len(all_ev)}건)")
         upsert_evidence(conn, all_ev)

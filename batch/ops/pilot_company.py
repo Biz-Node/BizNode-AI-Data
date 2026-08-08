@@ -221,7 +221,10 @@ def main() -> int:
     print(f"{'='*72}\n{args.company} · 최근 {args.years}년 · 추출 상한 {args.limit}건\n{'='*72}")
 
     # ① 수집
-    print(f"\n[1/8] 구글 뉴스 수집")
+    # ★어떤 속도로 던졌는지 로그에 남긴다 — 나중에 「그때 왜 통과/차단됐나」를
+    #   되짚으려면 이 값이 있어야 한다(2026-08-04에 딜레이를 실험 중).
+    from pipeline.extractors.news.gnews import _DELAY as _GD
+    print(f"\n[1/8] 구글 뉴스 수집  (질의 간격 {_GD}초)")
     try:
         articles = collect_company(args.company, years=args.years,
                                    month_split=args.month_split)
@@ -231,6 +234,10 @@ def main() -> int:
         #   「수집 0 · 추출 0 · 완료」로 대장에 남아 다시 돌지 않게 됐다.
         print(f"\n❌ 수집 중단: {exc}")
         print(f"   대장에 기록하지 않습니다 — 나중에 다시 돌 수 있습니다.")
+        # ★여기까지 받아온 것은 **버리지 않는다**(2026-08-03). 이전에는 메모리의
+        #   458건이 통째로 사라져, 다음 실행이 2026-08부터 똑같은 400질의를 다시
+        #   던지고 또 같은 자리에서 막혔다 — 그래서 뒤쪽 기간에 영영 못 닿았다.
+        print(f"   ↻ 받아온 기간까지는 저장했습니다 — 다시 돌리면 **거기서 이어갑니다**")
         if FAILED_QUERIES:
             print(f"   실패한 질의 {len(FAILED_QUERIES)}건")
         return 3                     # 3 = 속도 제한 (배치가 구분할 수 있게)

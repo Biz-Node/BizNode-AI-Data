@@ -54,6 +54,7 @@ SELECT s.corp_code, co.name, s.bsns_year,
   JOIN companies  co ON co.corp_code = s.corp_code
   LEFT JOIN financials f
          ON f.corp_code = s.corp_code AND f.bsns_year = s.bsns_year
+ WHERE coalesce(s.trust_reason,'') NOT LIKE '합계 행%'
  GROUP BY s.corp_code, co.name, s.bsns_year
  ORDER BY co.name
 """
@@ -62,6 +63,7 @@ _APPLY = """
 UPDATE business_segments SET revenue = revenue * %s, revenue_trusted = TRUE,
        trust_reason = NULL
  WHERE corp_code = %s AND bsns_year = %s AND revenue IS NOT NULL
+   AND coalesce(trust_reason,'') NOT LIKE '합계 행%%'
 """
 
 # 못 믿는 값은 **지우지 않고 표시만** 한다. 부문 이름은 여전히 쓸모가 있고,
@@ -88,11 +90,84 @@ UPDATE business_segments SET ratio_trusted = TRUE
 # 각각 100%로 잡음) · 현대차증권 6%(증권사라 매출 구조가 제조업과 다름).
 _RATIO_LO, _RATIO_HI = 85.0, 115.0
 
-_RATIOS = """
+# ★합계 행은 집계에서 뺀다(`trust_reason`으로 표시해 둔 것).
+_NOT_TOTAL = "coalesce(s.trust_reason,'') NOT LIKE '합계 행%'"
+
+_RATIOS = f"""
 SELECT s.corp_code, co.name, s.bsns_year, sum(s.revenue_ratio) AS total, count(*) AS n
   FROM business_segments s JOIN companies co ON co.corp_code = s.corp_code
- WHERE s.revenue_ratio IS NOT NULL
+ WHERE s.revenue_ratio IS NOT NULL AND {_NOT_TOTAL}
  GROUP BY s.corp_code, co.name, s.bsns_year
+"""
+
+
+# ── 2차: 비중으로 금액을 되짚는다 ────────────────────────────
+#
+# ★배수 스냅이 실패해도 포기할 게 아니다(2026-08-03 추가). 실측:
+#
+#     LG전자   부문합 8.79조 · 전사 89.2조 · 배수 10.1  ← 표준 단위가 아니라 스냅 실패
+#              그런데 **비중 합계는 99%**다 — 부문은 다 뽑혔고 금액만 틀렸다는 뜻
+#     클로봇   배수 1.8 · 비중 100%
+#     뉴로메카  배수 100.0 · 비중 100%
+#
+#   비중이 100% 근처면 **전사매출 × 비중**으로 금액을 다시 만들 수 있다.
+#   이건 파싱된 금액보다 믿을 만하다 — 전사매출은 `financials`에서 온
+#   확정 수치이고, 비중은 표 안에 백분율로 적혀 있어 단위 문제가 없다.
+#
+#   되짚은 값은 원문 그대로가 아니므로 **출처를 표시**한다(`trust_reason`).
+_RATIO_TIGHT_LO, _RATIO_TIGHT_HI = 95.0, 105.0
+
+# ── 합계 행 걷어내기 ──────────────────────────────────────────
+#
+# ★사업보고서 표의 **맨 아래 합계 줄을 부문으로 뽑는 일**이 있다(2026-08-03).
+#
+#     에스피지  「AC Motor 외,Condenser/Contr…」  100.0%   ← 합계 줄
+#              AC Motor 외 35.8% · BLDC 21.1% · Condenser 20.5% · 기타 15.2% · DC 7.3%
+#                                                  나머지 합 99.9%
+#
+#   합계 줄이 섞이면 비중 합이 200%가 되어 「비중을 못 믿는다」로 넘어간다.
+#   실제로는 나머지가 정확히 99.9%라 **되짚기가 되는 데이터**였다.
+#
+#   판별: 비중이 100% 근처인 행이 있고, **그 행을 뺀 나머지 합도 100% 근처**면
+#   그 행은 부문이 아니라 합계다. 지우지 않고 `is_total`처럼 표시만 남긴다.
+_TOTAL_REASON = "합계 행 — 부문이 아니라 표의 총계 줄입니다(집계에서 제외)"
+
+_MARK_TOTAL = """
+UPDATE business_segments SET ratio_trusted = FALSE, revenue_trusted = FALSE,
+       trust_reason = %s
+ WHERE corp_code = %s AND bsns_year = %s AND segment_name = %s
+"""
+
+_SEG_ROWS = """
+SELECT corp_code, bsns_year, segment_name, revenue_ratio
+  FROM business_segments WHERE revenue_ratio IS NOT NULL
+"""
+
+
+def find_total_rows(conn) -> list[tuple]:
+    """합계 줄로 보이는 행 목록. (corp_code, year, segment_name)"""
+    groups: dict[tuple, list] = {}
+    for code, year, name, ratio in conn.execute(_SEG_ROWS).fetchall():
+        groups.setdefault((code, year), []).append((name, float(ratio)))
+    out = []
+    for (code, year), rows in groups.items():
+        if len(rows) < 3:                     # 합계+부문 1개면 판별할 수 없다
+            continue
+        for name, ratio in rows:
+            if not (98.0 <= ratio <= 102.0):
+                continue
+            rest = sum(r for n, r in rows if n != name)
+            if _RATIO_TIGHT_LO <= rest <= _RATIO_TIGHT_HI:
+                out.append((code, year, name))
+    return out
+
+_APPLY_FROM_RATIO = """
+UPDATE business_segments
+   SET revenue = round(%s::numeric * revenue_ratio / 100)::bigint,
+       revenue_trusted = TRUE,
+       trust_reason = '비중으로 되짚은 금액 (원문 금액은 단위가 어긋남)'
+ WHERE corp_code = %s AND bsns_year = %s AND revenue_ratio IS NOT NULL
+   AND coalesce(trust_reason,'') NOT LIKE '합계 행%%'
 """
 
 
@@ -115,6 +190,19 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    # ★합계 행부터 걷어낸다. 그래야 아래 비중 합계가 200%로 뜨지 않는다.
+    with postgres_connection() as conn:
+        totals = find_total_rows(conn)
+        if totals and not args.dry_run:
+            with conn.cursor() as cur:
+                for code, year, name in totals:
+                    cur.execute(_MARK_TOTAL, (_TOTAL_REASON, code, year, name))
+        if totals:
+            print(f"■ 합계 행으로 판별해 집계에서 뺀 것 {len(totals)}건")
+            for code, year, name in totals[:6]:
+                print(f"   {name[:46]}")
+            print()
+
     with postgres_connection() as conn:
         rows = conn.execute(_FETCH).fetchall()
 
@@ -133,8 +221,29 @@ def main() -> int:
         else:
             fixed.append((code, name, year, scale, int(seg_sum), int(total), n_rev))
 
-    print(f"대상 {len(rows)}개사 · 정상 {len(already)} · 교정 {len(fixed)} · "
-          f"판단보류 {len(unknown)} · 비교불가 {len(no_total)}\n")
+    # ── 2차: 배수 스냅 실패분을 **비중으로 되짚는다** ──────────────
+    with postgres_connection() as conn:
+        rsum = {(c, y): float(t) for c, _, y, t, _ in conn.execute(_RATIOS).fetchall()}
+    rebuilt, still = [], []
+    for code, name, year, seg_sum, total, mult in unknown:
+        rt = rsum.get((code, year))
+        if rt is not None and _RATIO_TIGHT_LO <= rt <= _RATIO_TIGHT_HI:
+            rebuilt.append((code, name, year, total, rt, mult))
+        else:
+            still.append((code, name, year, seg_sum, total, mult))
+    unknown = still
+
+    print(f"대상 {len(rows)}개사 · 정상 {len(already)} · 배수교정 {len(fixed)} · "
+          f"비중으로 되짚음 {len(rebuilt)} · 판단보류 {len(unknown)} · "
+          f"비교불가 {len(no_total)}\n")
+
+    if rebuilt:
+        print(f"■ 비중으로 되짚은 {len(rebuilt)}건 — 부문은 다 뽑혔는데 금액만 어긋난 경우")
+        print(f"   (비중 합계가 {_RATIO_TIGHT_LO:.0f}~{_RATIO_TIGHT_HI:.0f}%라 부문 누락이 아님이 확인됨)")
+        for _, name, year, total, rt, mult in sorted(rebuilt, key=lambda x: -x[5]):
+            print(f"   {name:14}{year}  원문 금액이 전사의 1/{mult:,.0f} · "
+                  f"비중합 {rt:.0f}% → 전사 {total:,}원 × 비중으로 재계산")
+        print()
 
     if fixed:
         print(f"{'기업':14}{'배수':>10}  {'부문합(교정 후)':>20}{'전사매출':>20}{'차이':>8}")
@@ -175,6 +284,10 @@ def main() -> int:
         with conn.cursor() as cur:
             for code, _, year, scale, *_ in fixed:
                 cur.execute(_APPLY, (scale, code, year))
+                n += cur.rowcount
+            # 비중으로 되짚기 — 배수 스냅이 실패했지만 부문은 다 있는 경우
+            for code, _, year, total, *_ in rebuilt:
+                cur.execute(_APPLY_FROM_RATIO, (int(total), code, year))
                 n += cur.rowcount
             # 교정 못 한 것은 **지우지 않고 못 믿는다고 표시**한다
             for code, _, year, _, _, m in unknown:

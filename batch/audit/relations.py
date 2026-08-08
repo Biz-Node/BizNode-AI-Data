@@ -592,10 +592,19 @@ def check_bidirectional(session, dry_run: bool, full: bool = False) -> tuple[int
         print(f"      {v.get('reason','')[:80]}")
         flagged += len(drop)
         if not dry_run:
+            # ★예전 전문 판정을 **같이 지운다**(2026-08-03). 안 지웠더니
+            #   「엔비디아 -SUPPLIES_TO-> 마이크론」이 `suspect=true` +
+            #   `verdict=confirmed`인 모순 상태로 남았다. 전문 검증은 「관계가
+            #   있나」만 보므로 방향이 반대여도 confirmed가 나온다 — 방향을
+            #   본 이 검사가 더 나중이자 더 정확한 판정이다.
+            #   `grounding.py::_MARK`도 같은 이유로 verdict를 지운다.
             session.run(
                 "MATCH ()-[r]->() WHERE elementId(r) IN $eids "
                 "SET r.grounding_suspect = true, "
-                "    r.grounding_reason = $why", eids=drop,
+                "    r.grounding_reason = $why, "
+                "    r.grounding_stage1 = 'unfounded', "
+                "    r.grounding_verdict = NULL, r.grounding_verdict_why = NULL",
+                eids=drop,
                 why=f"양방향 공급 검사: {v.get('reason','')[:160]}")
 
     if checked and not dry_run:
