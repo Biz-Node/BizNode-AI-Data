@@ -77,6 +77,14 @@ class Relation:
     corroboration: int
     freshness: Freshness
     props: dict[str, Any]
+    # source/target 노드의 안정 식별자·Neo4j 라벨(Task6). source_type(위 필드,
+    # evidence 출처 dart/news)과 이름이 겹치지 않도록 source_entity_type으로 뒀다.
+    # 우선순위는 graph_loader._company_ident()/batch/repair/first_seen.py의
+    # coalesce(corp_code, person_key, norm_name, event_id, name)과 동일.
+    source_id: str
+    source_entity_type: str
+    target_id: str
+    target_entity_type: str
 
     @property
     def verdict(self) -> str:
@@ -115,7 +123,11 @@ MATCH (a)-[r]->(b)
 WHERE ($name IS NULL OR a.norm_name = $name OR b.norm_name = $name)
   AND ($types IS NULL OR type(r) IN $types)
 RETURN coalesce(a.name, '?') AS source, coalesce(b.name, '?') AS target,
-       type(r) AS edge_type, properties(r) AS props
+       type(r) AS edge_type, properties(r) AS props,
+       coalesce(a.corp_code, a.person_key, a.norm_name, a.event_id, a.name) AS source_id,
+       labels(a)[0] AS source_entity_type,
+       coalesce(b.corp_code, b.person_key, b.norm_name, b.event_id, b.name) AS target_id,
+       labels(b)[0] AS target_entity_type
 """
 
 
@@ -126,7 +138,9 @@ def _to_relation(row: dict, today: Optional[date]) -> Relation:
         subtype=p.get("subtype") or "", source_type=p.get("source_type") or "",
         confidence=float(p.get("confidence") or 0.7),
         corroboration=int(p.get("corroboration") or 1),
-        freshness=assess(p, today=today), props=p)
+        freshness=assess(p, today=today), props=p,
+        source_id=row["source_id"], source_entity_type=row["source_entity_type"],
+        target_id=row["target_id"], target_entity_type=row["target_entity_type"])
 
 
 def relations_of(

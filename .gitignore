@@ -7,6 +7,8 @@ documents/
 .agents/
 .claude/
 .uv-cache/
+check_chroma.py
+
 
 # DB 덤프 — 팀원에게 **파일로 직접** 넘기는 것이지 저장소에 올리는 게 아니다.
 # (2026-08-08: 89MB. GitHub는 100MB 파일을 거부하고, 한번 커밋되면 이력에 남아
