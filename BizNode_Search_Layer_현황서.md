@@ -204,15 +204,41 @@ SearchOrchestrator(entity_resolver, query_router, graph_searcher, vector_searche
 
 ## 3. 남은 작업
 
-우선순위는 설계 문서(§4 컴포넌트 표)의 데이터 흐름 순서를 따릅니다.
+우선순위는 설계 문서(§4 컴포넌트 표)의 데이터 흐름 순서를 따르되, 아래 1번은 실사용
+정확도에 직결돼 있어 예외적으로 최우선으로 올렸습니다(2026-08-15 발견).
 
-1. **CacheService + RedisRepository** — Orchestrator 전체를 감싸는 cross-cutting 캐시. Redis가
+1. **[신규, 최우선] 자연어 문장에서 기업명 추출** — SearchOrchestrator는 `request.query`
+   원문 전체를 그대로 `EntityResolver.resolve()`에 넘긴다. "삼성전자"처럼 기업명만 단독으로
+   오면 잘 해소되지만, 실사용 문장인 "삼성전자에 납품하는 기업" 같은 전체 문장을 그대로
+   넘기면 exact match는 물론 pg_trgm fuzzy match도 threshold(0.50)를 못 넘어 해소 실패한다
+   → `resolved_entities=[]` → GraphSearcher가 **anchor 없는 경로**로 빠져, "삼성전자와
+   관련된 관계"가 아니라 "SUPPLIES_TO 관계 전체 그래프에서 점수 상위 5+5건"을 반환한다
+   (실측: `run_test.py`로 "삼성전자에 납품하는 기업" 실행 시 엔비디아·마이크론·포스코처럼
+   무관한 기업이 섞여 나옴, 삼성전자 자신도 낌 — 확인 세션: 2026-08-15).
+
+   **왜 지금 바로 안 고쳤는지**: 간단한 substring/조사 기반 휴리스틱은 `SUPPLIES_TO`/
+   `OWNS_STAKE_IN`/`SUES` 3종(조사 패턴이 있는 "깊은 규칙")에만 적용 가능하고, 나머지
+   9종(대표 키워드 1개만 매핑된 "얕은 규칙")은 문장에서 기업명 위치를 잡을 조사 단서가
+   아예 없다. 또한 "삼성전자 최근 투자 기업"처럼 조사가 없는 케이스도 있어 3종 안에서도
+   항상 적용되진 않는다. 잘못 추출해 엉뚱한 기업에 fuzzy 매칭되면 지금(anchorless, 최소한
+   "정직하게 무관함")보다 더 나쁜 "확신에 찬 오답"이 날 수 있어, 이 프로젝트의 다른
+   컴포넌트들과 같은 수준(§6-6 실제 DB 검증, 여러 접근법 비교)으로 별도 Task로 설계하는
+   게 낫다고 판단.
+
+   **후보 접근법(다음 Task 스펙 작성 시 참고)**:
+   - QueryRouter가 감지한 edge_type 키워드의 위치를 기준으로, 그 앞의 조사(에/에게/를/을/
+     가/이)를 잘라 남은 부분을 EntityResolver 후보로 시도(깊은 규칙 3종만 커버).
+   - 질의 전체가 아니라 어절(공백) 단위로 슬라이딩하며 `resolve_candidates()`를 시도해
+     가장 점수 높은 매칭을 채택(모든 edge_type에 적용 가능하지만 DB 조회 비용 증가).
+   - `corp_code_master`를 in-memory Aho-Corasick 등으로 만들어 질의 문자열 안에 등장하는
+     기업명 substring을 한 번에 찾는 방식(정확도는 높으나 별도 인덱스 구축 필요).
+2. **CacheService + RedisRepository** — Orchestrator 전체를 감싸는 cross-cutting 캐시. Redis가
    프로젝트 어디에서도 실사용된 적이 없어 후순위입니다.
-2. **SearchController(API)** — FastAPI `POST /api/search` 엔드포인트, 요청 검증, 에러 → HTTP
+3. **SearchController(API)** — FastAPI `POST /api/search` 엔드포인트, 요청 검증, 에러 → HTTP
    status 매핑.
-3. **Agent Tool 연동** — `search_company`/`search_relationship`/`search_semantic`/
+4. **Agent Tool 연동** — `search_company`/`search_relationship`/`search_semantic`/
    `search_evidence` thin wrapper.
-4. **Docker / 배포** — ChromaDB 클라이언트-서버 버전 고정 체크리스트 반영.
+5. **Docker / 배포** — ChromaDB 클라이언트-서버 버전 고정 체크리스트 반영.
 
 ---
 
@@ -220,6 +246,7 @@ SearchOrchestrator(entity_resolver, query_router, graph_searcher, vector_searche
 
 | 이슈 | 내용 |
 |---|---|
+| **[신규, 최우선] 자연어 문장에서 기업명 추출 미구현** | SearchOrchestrator가 `request.query` 전체를 그대로 `EntityResolver.resolve()`에 넘겨, "삼성전자에 납품하는 기업"처럼 서술어가 붙은 실사용 문장은 해소 실패 → GraphSearcher가 anchor 없는 경로로 빠져 질의와 무관한 전역 top 결과를 반환한다(실측: 엔비디아·마이크론·포스코 혼입). 상세 원인·재현·후보 접근법은 §3 "남은 작업" 1번 참고 — 별도 Task로 분리하기로 함(2026-08-15) |
 | anchor 없을 때 source/target 슬롯 간 전역 dedup 없음 | ✅ **해소(Task7)** — GraphSearcher는 의도적으로 dedup 안 하고 넘기며, ResultRanker가 RRF 적용 전 `entity_id` 기준 소스 내부 dedup(순위 높은 쪽만 유지)으로 흡수. 회귀 테스트로 "dedup 없으면 RRF 점수가 이중 기여로 부풀려짐"을 확인 |
 | 여러 `Resolution` 동시 조회 미구현 | GraphSearcher는 점수 최고 1건만 사용, 나머지는 무시 |
 | 저신뢰 키워드(9종) 정확도 미검증 | QueryRouter의 대표 키워드 1개씩만 등록, 실데이터 정확도 검증 안 함 |
