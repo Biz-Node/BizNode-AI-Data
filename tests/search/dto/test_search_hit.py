@@ -29,6 +29,7 @@ def test_minimal_valid_hit_defaults_evidence_to_empty_list():
     assert hit.freshness is None
     assert hit.verdict is None
     assert hit.relations is None
+    assert hit.kind is None
 
 
 def test_full_hit_with_optional_fields():
@@ -38,11 +39,13 @@ def test_full_hit_with_optional_fields():
         verdict="supported",
         relations=[{"edge_type": "SUPPLIES_TO", "target": "삼성전자"}],
         evidence=[{"evidence_id": "ev_599ae4f46bf15b7c", "snippet": "..."}],
+        kind="기업",
     ))
     assert hit.freshness == {"status": "current", "reason": "180일 경과"}
     assert hit.verdict == "supported"
     assert hit.relations == [{"edge_type": "SUPPLIES_TO", "target": "삼성전자"}]
     assert len(hit.evidence) == 1
+    assert hit.kind == "기업"
 
 
 def test_unknown_source_is_rejected():

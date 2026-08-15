@@ -39,3 +39,25 @@ def graph_searcher():
     from search.service.graph_searcher import GraphSearcher
 
     return GraphSearcher()
+
+
+@pytest.fixture(scope="session")
+def vector_searcher(chroma_repo):
+    from search.service.vector_searcher import VectorSearcher
+
+    return VectorSearcher(chroma_repo)
+
+
+@pytest.fixture(scope="session")
+def result_ranker():
+    from search.service.result_ranker import ResultRanker
+
+    return ResultRanker()
+
+
+@pytest.fixture(scope="session")
+def orchestrator(entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker):
+    from search.service.orchestrator import SearchOrchestrator
+
+    return SearchOrchestrator(
+        entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker)

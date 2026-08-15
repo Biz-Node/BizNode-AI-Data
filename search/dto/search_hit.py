@@ -24,6 +24,7 @@ class SearchHit(BaseModel):
     name: str
     score: float
     sources: list[SourceName]
+    kind: Optional[str] = None
     freshness: Optional[dict] = None
     verdict: Optional[str] = None
     relations: Optional[list[dict]] = None

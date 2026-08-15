@@ -7,7 +7,7 @@ documents/
 .agents/
 .claude/
 .uv-cache/
-check_chroma.py
+run_chroma.py
 
 
 # DB 덤프 — 팀원에게 **파일로 직접** 넘기는 것이지 저장소에 올리는 게 아니다.
