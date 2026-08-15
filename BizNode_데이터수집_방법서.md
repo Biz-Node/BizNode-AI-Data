@@ -1,8 +1,9 @@
 # BizNode 데이터 수집 방법서
 
 > DART + 뉴스 → 지식그래프 → Neo4j · ChromaDB · PostgreSQL
-> 설계·스키마·파이프라인·운영 규칙 통합본 · 최종 갱신 2026-08-01
-> 프로젝트 개요·서비스 구성은 [README](README.md), 진행 상태는 [추출 진행현황](BizNode_추출_진행현황.md)
+> 설계·스키마·파이프라인·운영 규칙 통합본 · 최종 갱신 2026-08-15
+> 프로젝트 개요·서비스 구성은 [README](README.md) · 스키마 구조는 [ERD](BizNode_데이터베이스_ERD.md)
+> 진행 상태는 `python -m batch.ops.status` (대장은 PostgreSQL `extraction_runs`)
 
 ---
 
@@ -106,6 +107,77 @@ L3 Subtype (개방)   상세 패널 표시. 관리 목록으로 수렴 (subtype_
 일어난 때), `loaded_at`은 우리가 본 때다. 국민연금 2024년 공시를 오늘 적재하면
 각각 2024년·오늘이다. 「재적재에서 사라졌나」는 `loaded_at`으로만 판정된다.
 
+> **`loaded_at`은 그래프에 남겨야 한다.** 검사 사유·이력 37종을 PostgreSQL
+> `edge_audits`로 내릴 때 이것까지 같이 옮겼다가 되돌렸다 — `audit/freshness.run_dart`가
+> 이 값으로 재적재 누락을 판정하는데, 옮기니 「적재시각 있는 것 0건」이 되어
+> 검사가 통째로 멈췄다.
+
+## 4-2. subtype(L3) — 무엇을 담고 무엇을 담지 않나
+
+**subtype은 근거에서 읽어낸 「무엇을」이다.** 엣지 타입이 이미 하는 말을
+되풀이하지 않고, 다른 필드가 이미 담고 있으면 비운다.
+
+이 원칙은 실측에서 나왔다(2026-08-11). subtype이 **엣지 타입 이름을 되풀이하기만
+하는 비율**을 재 보니 출처에 따라 극단으로 갈렸는데, 잘 되는 둘(`OWNS_STAKE_IN`·
+`IS_EXECUTIVE_OF`)의 공통점이 **LLM이 만들지 않는다**는 것이었다. 그리고
+`ontology.py`가 `COMPETES_WITH`에만 「**무엇을** 두고 다투는가를 근거에서 집어
+적어라」라고 물었는데, 그 타입의 값이 「HBM 시장」·「TV 시장」 — 정확히 원하는
+형태였다. **물어본 타입만 답이 옳았다.**
+
+**A군 — 양 끝이 회사·인물. subtype이 「무엇을」을 맡는다 (8종)**
+
+| 엣지 타입 | 담을 것 | 예 |
+|---|---|---|
+| `SUPPLIES_TO` | 무엇을 파는가 | 반도체 PCB · TC 본더 · 카메라모듈 |
+| `PARTNERS_WITH` | 무엇을 함께 하는가 | 합작법인 설립 · MOU · 공동 연구 |
+| `SUES` | 무엇을 두고 다투는가 | 특허침해 · 손해배상 · 가처분 |
+| `COMPETES_WITH` | 무엇을 두고 겨루는가 | HBM 시장 · NAND 점유율 |
+| `REGULATES` | 무엇을 하는가 | 압수수색 · 과징금 · 수출규제 |
+| `ACQUIRES` | 무엇을 인수하는가 | 경영권 · 사업부문 · 지분 일부 |
+| `OWNS_STAKE_IN` | 어떤 성격의 지분 | 최대주주 · 자기주식 |
+| `IS_EXECUTIVE_OF` | 어떤 직위 | 대표이사 · 사외이사 |
+
+**B군 — 노드나 다른 필드가 이미 말한다 (4종)**
+
+| 엣지 타입 | 이미 말하는 것 | subtype |
+|---|---|---|
+| `HAS_EVENT` | `e.name` + `e.event_type` | **비움** (대신 `role`) |
+| `IMPACTS` | `e.name` + `sign` | **비움** |
+| `DEVELOPS` | Product 이름 | **비움** |
+| `DEPENDS_ON` | Product 이름 | `공급의존` / `매출의존` 둘 중 하나 |
+
+### 값을 정하는 순서
+
+```
+1순위  근거에 나온 말을 **그대로**       "카메라모듈"  ← 번역 금지
+2순위  근거의 핵심을 짧은 명사구로       "성과급 협상"
+3순위  그래도 없으면 **빈 문자열**        타입 이름 금지
+```
+
+**3순위가 핵심이다.** 비워야 「정보 없음」이 통계로 잡히고 프롬프트를 고칠 근거가 된다.
+`_DEFAULT_SUBTYPE`으로 빈 값을 채우던 것을 없앤 이유이기도 하다 — 채우면
+「영향」 899건처럼 **아무도 안 읽는 값**이 쌓인다.
+
+### 정규화 사전은 영문·쓰레기값만 접는다
+
+| | 처리 |
+|---|---|
+| 남김 | 영문 → 한글 (`vendor`→공급 · `patentinfringement`→특허침해) |
+| 남김 | 쓰레기값 접기 (`other` · `test` · `synergy` · `/`) |
+| **제거** | 한글 설명어 접기 — 설명을 지우고 타입 이름으로 되돌리고 있었다 |
+
+`OWNS_STAKE_IN`·`IS_EXECUTIVE_OF`는 **건드리지 않는다.** 규칙 기반이라 이미 잘 된다.
+
+### 검토했다가 폐기한 안 — 다시 꺼내지 않기 위해
+
+| 안 | 폐기 이유 |
+|---|---|
+| subtype에 `SUPPLIES_TO`용 「무엇을」 칸을 따로 신설 | subtype이 그 일을 맡으면 칸을 더 만들 이유가 없다. **한 칸 한 가지 일** |
+| 「`SUPPLIES_TO`인데 subtype에 공급어가 없으면 오류」 검사 | 적용했다 되돌림. 97건 중 **90건이 멀쩡한 관계**였다 — 타입이 이미 `SUPPLIES_TO`인데 subtype에도 「공급」을 요구하는 중복이었다. 금지어 기반(공사·매각·전환사채)으로 뒤집어 3건 잡는 검사로 교체 |
+| `IMPACTS`에 `severity`(high/medium/low) 신설 | **근거에 안 쓰여 있다.** 「8명 병원 이송」이 high인지 medium인지는 판단이고 기사마다 흔들린다. 닫힌 값은 **틀려도 그럴듯해서** 전파 계산이 그대로 믿는다 |
+| `DEVELOPS`에 `revenue_share` 신설 | `DEPENDS_ON/매출의존`과 같은 사실을 두 군데 적게 된다. 어긋나면 어느 쪽이 맞는지 알 수 없다 |
+| `raw_expression`을 엣지에 적재 | 넣었다 되돌림. 이 필드는 원래 **12종에 안 맞는 관계의 탈출구**다 — `map_other`가 보고 되살리고, 실패하면 `unmapped_relations`에 쌓여 무엇을 놓치는지 추적한다. **적재에 성공한 엣지에는 답할 질문이 없다** |
+
 ## 5. Event 속성
 
 ```cypher
@@ -139,41 +211,64 @@ L3 Subtype (개방)   상세 패널 표시. 관리 목록으로 수렴 (subtype_
 | 정량·서술 속성 (한 기업에 종속) | **PostgreSQL** |
 | 근거 원문 (의미검색·팩트체크) | **ChromaDB** |
 
-## 7. PostgreSQL
+## 7. PostgreSQL — 27표 + 뷰 1
 
-**현행 (구현됨)**
+**빈 표는 없다.** 예전엔 「스키마가 곧 계획서」라며 미구현 표를 남겨 뒀는데,
+계획이 실현되거나 폐기되면서 전부 정리됐다(2026-08-15).
+
 ```
-corp_code_master   DART 전체 기업 마스터 (118,535건 · pg_trgm GIN으로 ER 블로킹)
-companies          시드 64 (corp_code PK · name · stock_code · market · sector
-                            · ceo_nm · induty · est_dt · is_seed)
-financials         재무 3개년 (corp_code+bsns_year+reprt_code PK
-                            · revenue · operating_profit · net_profit
-                            · total_assets · total_equity · total_liabilities)
-documents          공시 원문 메타 (rcept_no PK · doc_type · title · rcept_dt · raw_path)
-staged_edges       적재 전 스테이징 ★권위(source of truth)
-vector_chunks      ChromaDB 청크 레지스트리 (chunk_id · collection · owner_key)
-news_articles      뉴스 메타 (url PK · title · press · published_at
-                            · rule_passed · llm_relevant · extracted_at ★중복방지)
-extraction_runs    추출 대장 (기업별 깔때기 실측 · 비용)
-edge_subtypes      subtype 관리 목록
+기업 마스터·상세
+  corp_code_master   DART 전체 법인 (118,535 · pg_trgm GIN으로 ER 블로킹)
+  company_attributes 기업 상세 (node_key PK — corp_code 또는 norm_name)
+  company_aliases    별칭 사전 (source 우선순위 hand > dart > llm > first_seen)
+
+숫자와 원문
+  financials         연도별 재무 (corp_code+bsns_year+reprt_code PK · fs_div로 연결/별도)
+  business_segments  사업부문 매출·비중 + 단위 신뢰 플래그
+  business_overview  사업보고서 「사업의 내용」 원문 그대로
+  company_profiles   같은 절의 LLM 요약 (역할이 다르다 — 아래)
+  documents          공시 원문 메타 (rcept_no PK · raw_path)
+
+시장 정보
+  market_data        일별 시세 (stock_code+trade_date PK · pykrx · 무료)
+  listed_shares      유통주식수 (발행총수 − 자기주식 · 보통주만 · suspect 플래그)
+  market_metrics     ★뷰 — 시총·PER·PBR·PSR을 조회할 때 계산
+
+뉴스와 적재
+  news_articles      뉴스 메타 (url PK · 본문은 저장 안 함 · extracted_at ★중복방지)
+  staged_edges       적재 전 스테이징 ★권위(source of truth)
+  vector_chunks      ChromaDB 청크 레지스트리
+
+레지스트리 — 판정을 쌓아 명부 노릇을 하게 한다 (7)
+  edge_subtypes · event_merge_verdicts · name_verdicts · product_names
+  name_merge_verdicts · corp_code_verdicts · person_merge_verdicts
+
+스스로에 대한 기록 (5)
+  edge_audits · purged_edges · purged_nodes · extraction_runs · unmapped_relations
 ```
 
-**미구현 (확장)**
-```
-market_data           일별 종가·시총 (KIS OpenAPI 또는 pykrx) — 보류
-company_profiles      기업 개요 요약 (사업보고서 「사업의 개요」에서 생성)
-business_segments     사업부문 (사업보고서 「주요 제품 및 서비스」에서 생성)
-shareholder_summaries 주주 요약
-ingest_runs           적재 실행 이력
-```
+**계산되는 값은 저장하지 않는다.** `market_metrics`가 표가 아니라 뷰인 이유다.
+저장하면 원본이 갱신될 때 어긋난다 — 엣지에서 실제로 겪었다(`ratio_change`
+1,306건 중 15건이 `ratio − previous_ratio`와 안 맞았다). 그래서 파생 속성 6종을
+엣지에서도 걷어냈다.
+
+**같은 절을 두 표에 담는 이유** — `company_profiles`는 LLM 요약이라 챗봇이
+검색하고, `business_overview`는 원문이라 화면이 인용한다. 요약만 있으면
+**「사업보고서에 이렇게 적혀 있습니다」라고 인용을 못 한다** — 우리가 쓴 문장은
+근거가 되지 못한다.
+
+**「무덤」 표를 두는 이유** — 사용자가 담아 둔 노드가 검사에 걸려 사라질 수 있다.
+그때 조회는 404가 아니라 **「검증 결과 제외됐습니다」 + 사유**로 답해야 한다.
 
 ## 8. ChromaDB — 컬렉션 = 벡터 공간
 
 ```
-evidence     관계 근거 청크 (현재 6,240) — 원문 문장 + 기사 제목 + URL
-profile      기업 요약 (미구현)
-document     원문 청크 (선별)
+evidence     관계 근거 청크 (10,510) — 원문 문장 + 기사 제목 + URL
+company      기업 소개 카드 (2,432) — 개요 + 제품 + 거래처
 ```
+
+**둘뿐이다.** 스키마 주석에 `profile`·`document`도 적혀 있었지만 만들지 않았다 —
+원문 전체 임베딩은 비용뿐 아니라 **검색 정확도를 떨어뜨린다**(설계 원칙 ③).
 
 **레코드 형태**
 ```
