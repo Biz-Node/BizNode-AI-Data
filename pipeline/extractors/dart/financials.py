@@ -1,7 +1,7 @@
 """DART 단일회사 주요계정(fnlttSinglAcnt) → financials 테이블 + 노드 스냅샷.
 
 한 번 호출로 당기/전기/전전기 3년치를 얻는다. 연결(CFS) 우선, 없으면 별도(OFS).
-재무는 RDB 전용(§6-2) — Neo4j 노드엔 최신 매출 스냅샷만.
+재무는 RDB 전용 — Neo4j 노드엔 최신 매출 스냅샷만.
 """
 
 from __future__ import annotations
@@ -18,9 +18,8 @@ FNLTT_ALL_URL = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
 
 # 계정명 → financials 컬럼 (sj_div 후보, 매칭 키워드)
 #
-# ★`sj_div`가 API마다 다르다(2026-08-03 발견). 요약 재무제표는 손익계산서를 `IS`로
-#   주는데, **전체 재무제표는 `CIS`(포괄손익계산서)로 준다.** `IS`만 보면 전체
-#   재무제표에서 아무것도 못 건진다.
+# ★`sj_div`가 API마다 다름. 요약 재무제표는 손익계산서를 `IS`로 주는데,
+# 전체 재무제표는 `CIS`(포괄손익계산서)로 준다. `IS`만 보면 전체 재무제표에서 아무것도 못 건진다.
 _ACCOUNT_MAP = {
     "revenue": (("IS", "CIS"), ("매출액", "영업수익")),
     "operating_profit": (("IS", "CIS"), ("영업이익",)),

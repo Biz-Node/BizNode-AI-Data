@@ -99,7 +99,11 @@ def build_contract_document(
             "subtype": SUPPLY_SUBTYPE,
             "direction": "outbound",
             "revenue_ratio": info.revenue_ratio,
-            "contract_amount": info.contract_amount,
+            # ★`contract_amount` → `amount` (2026-08-12). 뉴스에서도 금액을
+            #   뽑기 시작하면서 같은 사실이 두 이름으로 갈릴 뻔했다 — `sector_label`이
+            #   갈렸던 것과 같은 병이다. 「이 관계에 걸린 돈(원)」 하나로 통일한다.
+            #   타입마다 세는 대상은 다르다(`ontology.AMOUNT_RULES`).
+            "amount": info.contract_amount,
             **meta,
         }
         relationships.append(RelationshipDTO("SUPPLIES_TO", from_ref, tgt_ref, props))

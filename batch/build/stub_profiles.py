@@ -45,7 +45,8 @@ import argparse
 import sys
 import time
 
-from app.core.database import neo4j_session
+from app.core.database import neo4j_session, postgres_connection
+from pipeline.normalizer.ksic import KSIC_CHOICES, KSIC_DIVISIONS
 from pipeline.extractors.dart.company_info import (
     CORP_CLS_MARKET,
     fetch_company_info,
@@ -61,25 +62,47 @@ _DART_SLEEP = 0.05   # DART 초당 호출 제한 여유
 
 # ─────────────────────────── 1단계 · DART ───────────────────────────
 
+# ★「이미 채운 곳」 판정이 **노드가 아니라 PG** 를 본다(2026-08-15).
+#   `induty` 를 PG 로 옮겼으므로 노드에서 그걸 찾으면 전건이 매번 대상이 된다.
 _NEED_DART = """
 MATCH (c:Company)
 WHERE coalesce(c.is_stub, false) AND c.corp_code IS NOT NULL
-  AND (c.induty IS NULL OR $refresh)
+  AND ($refresh OR NOT c.corp_code IN $done)
 RETURN c.corp_code AS corp_code, c.name AS name
 """
 
+_DONE_DART = ("SELECT corp_code FROM company_attributes "
+              "WHERE corp_code IS NOT NULL AND induty IS NOT NULL")
+
+# ★노드에는 **탐색·표시에 쓰는 것만** 남긴다(2026-08-15).
+#   `induty`·`est_dt`·`ceo_nm`·`name_en` 은 경로를 따라갈 때 안 쓰고 상세 화면에서
+#   한 건씩 볼 뿐이라 PostgreSQL `company_attributes` 로 간다. 여기서 노드에 다시
+#   쓰면 정리한 게 되돌아온다 — 실제로 그런 적이 있다.
 _SET_DART = """
 MATCH (c:Company {corp_code: $corp_code})
-SET c.induty = $induty, c.market = $market, c.est_dt = $est_dt,
-    c.ceo_nm = coalesce($ceo_nm, c.ceo_nm),
-    c.name_en = coalesce($name_en, c.name_en),
-    c.sector_source = 'dart'
+SET c.market = coalesce($market, c.market)
+"""
+
+# 상세 속성은 PG 로. 노드 식별자(corp_code 또는 norm_name)를 키로 쓴다.
+_SET_DART_PG = """
+INSERT INTO company_attributes (node_key, corp_code, name, induty, est_dt, ceo_nm, name_en)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (node_key) DO UPDATE SET
+    corp_code = EXCLUDED.corp_code,
+    induty    = COALESCE(EXCLUDED.induty,  company_attributes.induty),
+    est_dt    = COALESCE(EXCLUDED.est_dt,  company_attributes.est_dt),
+    ceo_nm    = COALESCE(EXCLUDED.ceo_nm,  company_attributes.ceo_nm),
+    name_en   = COALESCE(EXCLUDED.name_en, company_attributes.name_en),
+    updated_at = now()
 """
 
 
 def run_dart(refresh: bool, dry: bool) -> None:
+    with postgres_connection() as conn, conn.cursor() as cur:
+        cur.execute(_DONE_DART)
+        done = [r[0].strip() for r in cur.fetchall()]
     with neo4j_session() as session:
-        targets = [dict(r) for r in session.run(_NEED_DART, refresh=refresh)]
+        targets = [dict(r) for r in session.run(_NEED_DART, refresh=refresh, done=done)]
     print(f"■ 1단계 DART 기업개황 — 국내 stub {len(targets)}곳 (무료)")
     if dry or not targets:
         if targets:
@@ -87,7 +110,7 @@ def run_dart(refresh: bool, dry: bool) -> None:
         return
 
     ok = listed = 0
-    with neo4j_session() as session:
+    with neo4j_session() as session, postgres_connection() as conn:
         for i, t in enumerate(targets, 1):
             try:
                 info = fetch_company_info(t["corp_code"])
@@ -97,11 +120,14 @@ def run_dart(refresh: bool, dry: bool) -> None:
             if not info:
                 continue
             market = CORP_CLS_MARKET.get(info.get("corp_cls", ""))
-            session.run(_SET_DART, corp_code=t["corp_code"],
-                        induty=info.get("induty_code"), market=market,
-                        est_dt=to_iso_date(info.get("est_dt")),
-                        ceo_nm=info.get("ceo_nm") or None,
-                        name_en=info.get("corp_name_eng") or None)
+            # 노드에는 market 만 — 나머지는 상세 화면용이라 PG 로
+            session.run(_SET_DART, corp_code=t["corp_code"], market=market)
+            with conn.cursor() as cur:
+                cur.execute(_SET_DART_PG,
+                            (t["corp_code"], t["corp_code"], t["name"],
+                             info.get("induty_code"), to_iso_date(info.get("est_dt")),
+                             info.get("ceo_nm") or None,
+                             info.get("corp_name_eng") or None))
             ok += 1
             if market in ("KOSPI", "KOSDAQ", "KONEX"):
                 listed += 1
@@ -112,27 +138,41 @@ def run_dart(refresh: bool, dry: bool) -> None:
 
 # ─────────────────────────── 2단계 · LLM ───────────────────────────
 
+# ★대상 판정이 노드의 `sector_label` 이 아니라 **`entity_kind`·`ksic`** 을 본다
+#   (2026-08-15). 설명 필드를 PG 로 옮겼으므로 노드에서 그걸 찾으면 전건이 매번
+#   대상이 된다. 이 둘이 노드에 남은 「분류 결과」다.
+#   `불명` 도 다시 본다 — 규칙으로 임시로 채운 값이라 LLM 이 고칠 수 있다.
 _NEED_LABEL = """
 MATCH (c:Company)
-WHERE coalesce(c.is_stub, false) AND (c.sector_label IS NULL OR $refresh)
+WHERE coalesce(c.is_stub, false)
+  AND (c.entity_kind IS NULL OR c.entity_kind = '불명' OR c.ksic IS NULL OR $refresh)
 OPTIONAL MATCH (c)-[r]->(o) WHERE NOT coalesce(r.grounding_suspect, false)
 WITH c, collect(DISTINCT type(r) + '→' + coalesce(o.name, ''))[..5] AS out
 OPTIONAL MATCH (i)-[r2]->(c) WHERE NOT coalesce(r2.grounding_suspect, false)
 WITH c, out, collect(DISTINCT coalesce(i.name, '') + '-' + type(r2) + '→')[..5] AS inn
 OPTIONAL MATCH (c)-[any]-()
-RETURN c.name AS name, c.induty AS induty, out, inn, count(any) AS deg
+RETURN c.name AS name, c.corp_code AS corp_code, c.norm_name AS norm_name,
+       out, inn, count(any) AS deg
 ORDER BY deg DESC
 """
 
+# ★노드에는 `entity_kind`(노드를 가르는 값)와 `ksic`(탐색 필터)만 쓴다.
+#   한 줄 설명(`sector_label`)과 신뢰도·출처는 PG 로 간다 — 화면 상세에서만 쓴다.
 _SET_LABEL = """
 UNWIND $rows AS row
 MATCH (c:Company {name: row.name})
-SET c.sector_label = row.label, c.entity_kind = row.kind,
-    c.sector_confidence = row.conf,
-    c.sector_source = coalesce(c.sector_source, 'llm')
+SET c.entity_kind = row.kind,
+    c.ksic = coalesce(row.ksic, c.ksic)
 """
 
-_SYSTEM = """당신은 한국 반도체·로봇 산업 그래프의 회사 정보를 정리한다.
+_SET_LABEL_PG = """
+INSERT INTO company_attributes (node_key, corp_code, name, norm_name, sector_label)
+VALUES (%s, %s, %s, %s, %s)
+ON CONFLICT (node_key) DO UPDATE SET
+    sector_label = EXCLUDED.sector_label, updated_at = now()
+"""
+
+_SYSTEM = f"""당신은 한국 반도체·로봇 산업 그래프의 회사 정보를 정리한다.
 
 각 이름에 대해 **정체 한 줄**을 붙인다. 근거는 함께 주는 「관계」다.
 관계는 그래프에서 실제로 뽑힌 것이며, 예를 들어
@@ -153,7 +193,33 @@ confidence:
   high = 널리 알려진 회사이거나, 관계만으로 업종이 분명하다
   low  = 이름을 모르겠고 관계도 부족하다 → label은 관계에서 읽히는 것만 쓴다
 
-**모르면 지어내지 말고 kind="불명", confidence="low"로 둔다.**
+ksic(업종 표준코드)는 **아래 목록에서 하나만** 고른다. label 은 사람이 읽는 한
+줄이고, ksic 은 **묶어 세기 위한 표준축**이다 — 「IT 서비스 회사가 몇 곳이야」에
+답하려면 코드가 같아야 한다.
+
+★**label에 업종을 썼으면 ksic도 반드시 골라야 한다. 둘은 같은 정보다.**
+  실제로 이렇게 어긋난 적이 있다(2026-08-12, 290곳):
+      label "미국 AI 연구개발 기업"      → ksic "99"  ✗   ✓ 62 또는 70
+      label "러시아 IT 기업"            → ksic "99"  ✗   ✓ 63
+      label "국내 패션·라이프스타일 기업"  → ksic "99"  ✗   ✓ 47
+  업종을 한 줄로 쓸 수 있다면 **모르는 게 아니다.** 가장 가까운 코드를 고른다.
+
+  자주 헷갈리는 것:
+    · AI·소프트웨어·SI            → 62 컴퓨터 프로그래밍·시스템통합
+    · 포털·플랫폼·데이터 서비스     → 63 정보서비스업
+    · 게임·콘텐츠 퍼블리싱         → 58 출판업
+    · 펀드·투자조합·자산운용        → 64 금융업
+    · 증권·보험 중개              → 66 금융·보험 관련 서비스업
+    · 반도체·디스플레이·전자부품     → 26 전자부품·컴퓨터·영상·음향·통신장비
+    · 로봇·공작기계·반도체 장비      → 29 기타 기계·장비
+    · 순수 R&D 법인·연구소         → 70 연구개발업
+
+**"99"는 「업종을 모르겠다」가 아니라 「이건 회사가 아니거나 정체 불명」일 때만**
+쓴다(추출 오류로 생긴 문장 조각, 공장·건물 이름 등).
+
+{KSIC_CHOICES}
+
+**모르면 지어내지 말고 kind="불명", confidence="low", ksic="99"로 둔다.**
 이름이 회사가 아니라 추출 오류로 보이면(문장 조각, 숫자 등) kind="불명"."""
 
 _SCHEMA = {
@@ -169,9 +235,11 @@ _SCHEMA = {
                              "enum": ["기업", "금융기관", "공공기관", "대학·연구소",
                                       "펀드·조합", "사업부문", "불명"]},
                     "label": {"type": "string"},
+                    "ksic": {"type": "string",
+                             "enum": sorted(KSIC_DIVISIONS)},
                     "confidence": {"type": "string", "enum": ["high", "low"]},
                 },
-                "required": ["name", "kind", "label", "confidence"],
+                "required": ["name", "kind", "label", "ksic", "confidence"],
                 "additionalProperties": False,
             },
         }
@@ -185,7 +253,7 @@ def _render(rows: list[dict]) -> str:
     out = []
     for r in rows:
         ctx = " ".join(r["out"] + r["inn"]) or "(관계 정보 없음)"
-        code = f" 표준산업분류코드={r['induty']}" if r.get("induty") else ""
+        code = ""      # `induty` 는 PG 로 갔다 — 관계만으로 판단한다
         out.append(f"- {r['name']}{code}\n    관계: {ctx}")
     return "\n".join(out)
 
@@ -199,6 +267,15 @@ def run_labels(refresh: bool, dry: bool, limit: int | None) -> None:
           f"(약 {len(targets) // _BATCH + 1}회 호출, 대략 {len(targets) * 0.035:.0f}원)")
     if not targets:
         return
+
+    # ★dry-run은 **한 배치만** 부른다(2026-08-12).
+    #   전에는 전건을 다 호출하고 기록만 안 했다 — 즉 **미리보기가 본실행과 같은
+    #   값이 들었다.** 1,897곳을 미리 보려다 66원을 그냥 썼다. dry-run의 목적은
+    #   「대상이 맞나 · 값이 그럴듯한가」를 보는 것이고, 그건 25곳이면 안다.
+    if dry and limit is None:
+        targets = targets[:_BATCH]
+        print(f"   [dry-run] 앞 {len(targets)}곳만 호출합니다 "
+              f"(전건을 보려면 --limit 을 주세요)")
 
     labelled: list[dict] = []
     failed = 0
@@ -214,13 +291,22 @@ def run_labels(refresh: bool, dry: bool, limit: int | None) -> None:
                 # ★실패는 표시하고 **기록하지 않는다** — 다음 실행이 다시 집는다
                 failed += len(chunk)
                 continue
-            known = {c["name"] for c in chunk}
+            known = {c["name"]: c for c in chunk}
             done = [{"name": it["name"], "label": it["label"][:40],
-                     "kind": it["kind"], "conf": it["confidence"]}
+                     "kind": it["kind"], "conf": it["confidence"],
+                     "ksic": it.get("ksic") or "99"}
                     for it in got["items"] if it["name"] in known]
             labelled += done
             if done and not dry:
                 session.run(_SET_LABEL, rows=done)
+                # 한 줄 설명은 PG 로 — 상세 화면에서만 쓴다
+                with postgres_connection() as conn, conn.cursor() as cur:
+                    for d in done:
+                        src = known[d["name"]]
+                        key = src.get("corp_code") or src.get("norm_name") or d["name"]
+                        cur.execute(_SET_LABEL_PG, (key, src.get("corp_code"),
+                                                    d["name"], src.get("norm_name"),
+                                                    d["label"]))
             if (i // _BATCH) % 10 == 0:
                 print(f"   … {min(i + _BATCH, len(targets))}/{len(targets)}")
 

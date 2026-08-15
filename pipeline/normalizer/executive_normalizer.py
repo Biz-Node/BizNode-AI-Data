@@ -27,7 +27,7 @@ from pipeline.normalizer.entities import build_person, master_company_ref
 # 사외이사 subtype
 _OUTSIDE_DIRECTOR_SUBTYPE = "사외이사"
 
-# Person 노드 폭발 방지(방법서 §10[2]) — 미등기 실무임원(상무·전무 등)은 제외하고
+# Person 노드 폭발 방지 — 미등기 실무임원(상무·전무 등)은 제외하고
 # 이사회 구성원(등기)만 노드화. 단 대표/회장/사장은 미등기라도 유지.
 _TOP_POSITION_MARKERS = ("대표", "회장", "사장")
 

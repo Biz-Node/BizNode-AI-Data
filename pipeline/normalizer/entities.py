@@ -2,7 +2,7 @@
 
 resolver(corp_code_master)로 corp_code를 해소하고, 실패 시 unresolved stub을
 만든다. 펀드·신탁·조합은 Company로 흡수(market="펀드"). 지배 의도는 노드가 아니라
-OWNS_STAKE_IN.subtype/ratio/purpose가 담는다(ERD §3-1).
+OWNS_STAKE_IN.subtype/ratio/purpose가 담는다.
 """
 
 from __future__ import annotations
@@ -19,31 +19,23 @@ from schemas.dart_schemas import (
 )
 from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.common import is_investment_vehicle
-from pipeline.normalizer.resolver import resolve
+from pipeline.normalizer.legal_forms import looks_like_company as _by_notation
+from pipeline.normalizer.resolver import candidates, resolve
 
-# 개인이 아닌 법인/단체를 시사하는 표기
-_COMPANY_MARKERS = ("㈜", "(주)", "(유)", "주식회사", "유한회사", "회사", "재단", "조합", "Inc", "Ltd", "Corp")
-
-# 비기업 기관(Organization) 표기 — 연구기관·재단·협회 등 (기업 아님)
-_ORG_MARKERS = ("연구원", "연구소", "재단법인", "협회", "진흥원", "위원회", "학회", "진흥회")
-
-
-def looks_like_organization(name: str) -> bool:
-    """비기업 기관 판별. 단 ㈜·주식회사 등 법인격 표기가 있으면 회사다
-    (예: ㈜인공지능연구원, 디엠비마케팅연구소㈜는 '연구원/연구소'가 들어가도 주식회사).
-    """
-    if any(m in name for m in _COMPANY_MARKERS):
-        return False
-    return any(m in name for m in _ORG_MARKERS)
+# 법인격·기관 표기는 `legal_forms.py` 한 곳에서만 정한다(2026-08-13).
+# 전에는 이 파일이 자기 목록을 들고 있어 **노조를 기관으로 못 잡았다**
+# (「전국금속노동조합」 → Company). 합친 목록이 그 빈칸을 메운다.
+from pipeline.normalizer.legal_forms import looks_like_organization
 
 
 def looks_like_company(name: str) -> bool:
     """주주명이 법인인지 판별 — 표기 마커 또는 corp_code 해소 성공."""
     if is_investment_vehicle(name):
         return True
-    if any(marker in name for marker in _COMPANY_MARKERS):
+    if _by_notation(name):
         return True
-    return resolve(name) is not None
+    # 모호해도 회사다 — 어느 회사인지 모를 뿐이다
+    return resolve(name) is not None or bool(candidates(name))
 
 
 def build_company(name: str) -> tuple[EntityDTO, str]:
@@ -52,7 +44,7 @@ def build_company(name: str) -> tuple[EntityDTO, str]:
     P1 경로 A(정형)는 전부 Company로 둔다(펀드·연구소·재단 포함). Organization
     (규제기관·정부·협회) 타이핑은 P2(소송·규제 주체)에서 처리 — 정형 소스로는
     회사/기관을 안정적으로 구분할 수 없고(㈜연구원 등 실명 회사도 많음), 무리한
-    분류가 ER 이중화를 유발한다. looks_like_organization은 P2용으로 보존.
+    분류가 ER 이중화를 유발한다.
     """
     norm = normalize_company_name(name)
     vehicle = is_investment_vehicle(name)
@@ -70,6 +62,20 @@ def build_company(name: str) -> tuple[EntityDTO, str]:
             is_stub=True, resolution_status="resolved",
         )
         return EntityDTO("Company", r.corp_code, dto.to_properties()), make_entity_ref("Company", r.corp_code)
+
+    # ★후보는 있는데 못 좁힌 경우와 후보가 아예 없는 경우를 가른다(2026-08-13).
+    #   명부에 동명 법인이 13,452곳이라 「신우」·「태성산업」처럼 못 좁히는 이름이
+    #   실제로 나온다. 전에는 둘 다 그냥 unresolved였는데, 그러면 화면에서
+    #   「모르는 회사」와 「어느 회사인지 모르는 회사」가 구분되지 않는다.
+    #   corp_code를 붙이지 않는 건 같지만 **후보를 남겨** 나중에 물어볼 수 있게 한다.
+    cands = candidates(name)
+    if len(cands) > 1:
+        dto = CompanyDTO(name=name, norm_name=norm, is_stub=True,
+                         resolution_status="ambiguous")
+        props = dto.to_properties()
+        props["candidate_corp_codes"] = [c.corp_code for c in cands[:10]]
+        props["candidate_count"] = len(cands)
+        return EntityDTO("Company", norm, props), make_entity_ref("Company", norm)
 
     dto = CompanyDTO(name=name, norm_name=norm, is_stub=True, resolution_status="unresolved")
     return EntityDTO("Company", norm, dto.to_properties()), make_entity_ref("Company", norm)

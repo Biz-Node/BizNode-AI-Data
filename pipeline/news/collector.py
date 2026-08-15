@@ -6,7 +6,7 @@
 비용이 싼 관문부터 배치하되, **본문이 필요한 판정 앞에는 크롤링을 둔다**.
 크롤링은 돈이 아니라 시간을 쓰므로 LLM 관문보다 앞에 오는 게 유리하다.
 
-**본문은 저장하지 않는다**(방법서 §8) — 통과분의 본문은 메모리로만 전달해
+**본문은 저장하지 않는다** — 통과분의 본문은 메모리로만 전달해
 관계 추출(P2C)에서 소비하고 폐기한다. DB에는 길이만 남긴다.
 """
 
@@ -141,15 +141,8 @@ def collect_and_screen(conn, *, limit_router: Optional[int] = None,
 
     by_url = {r["url"]: r for r in rows}
 
-    # ★라우터보다 **먼저** 본문을 확보한다(실측 2026-07-28로 순서 교정).
-    # 네이버 검색 API는 약관상 요약을 저장할 수 없어 body가 빈 채로 온다. 크롤링을
-    # 라우터 뒤에 두면 라우터가 **제목만 보고** 판정하게 되는데, 제목은 시황 기사와
-    # 관계 기사를 구분하지 못한다("[특징주] 테스, BSD 수주 기대감에 12%↑" → 수주
-    # 기사처럼 보이지만 본문은 주가 시황). 본문을 먼저 확보하면 라우터 정밀도가
-    # 오르고, 그 뒤 gpt-4o 추출 비용을 헛되이 쓰지 않는다.
-    #   ※ 규칙 필터는 본문 없이(제목만) 두는 편이 낫다 — 본문 기반 재판정 실측에서
-    #     복구 22/24건이 입시·시황·칼럼이었다. 넓은 본문은 85개 키워드 중 하나를
-    #     반드시 포함해 필터가 무력화된다.
+    # 라우터보다 **먼저** 본문을 확보한다
+    # 본문을 먼저 확보하면 라우터 정밀도가 오르고, 그 뒤 gpt-4o 추출 비용을 헛되이 쓰지 않는다.
     if crawl_bodies:
         need_body = [a for a, _, _ in rule_passed if not a.body]
         if need_body:
@@ -164,9 +157,7 @@ def collect_and_screen(conn, *, limit_router: Optional[int] = None,
     routable = [(a, c, n) for a, c, n in rule_passed if a.body]
     dropped_no_body = len(rule_passed) - len(routable)
 
-    # 라우터 예산은 채널별로 **균등 배분**한다. 리스트 순서대로 자르면 먼저 담기는
-    # RSS가 예산을 전부 소진해 네이버(수율이 훨씬 높은 채널)가 굶는다 — 실제로
-    # 1차 운영에서 네이버 264건이 한 건도 라우터에 도달하지 못했다.
+    # 라우터 예산은 채널별로 **균등 배분**한다.
     targets = _allocate_by_channel(routable, limit_router) if limit_router else routable
 
     print(f"\n[4/5] 2차 LLM 라우터 ({len(targets)}건"

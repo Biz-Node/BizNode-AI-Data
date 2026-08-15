@@ -112,13 +112,19 @@ def build_corp_document(corp_code: str) -> NormalizedDocument:
     return NormalizedDocument(entities=entities, relationships=relationships)
 
 
+# ★`origin`을 상수 'dart'로 박아 두었더니 **뉴스 엣지가 전부 dart로 기록**됐다
+#   (2026-08-15 실측: 19,512행 전부 origin='dart'인데 properties.source_type은
+#   news 16,684 · dart 2,690 · dart_filing 138).
+#
+#   이 컬럼의 존재 이유가 「뉴스에서 나온 관계가 DART에도 있는지 SQL로 대조」인데,
+#   전부 dart면 그 대조가 통째로 안 된다. 엣지 속성에서 받아 쓴다.
 _INSERT_SQL = """
 INSERT INTO staged_edges
   (src_node_type, src_key, tgt_node_type, tgt_key, edge_type, subtype,
    properties, origin, source_doc, validated, validation_error)
 VALUES
   (%(src_type)s, %(src_key)s, %(tgt_type)s, %(tgt_key)s, %(edge_type)s, %(subtype)s,
-   %(properties)s, 'dart', %(source_doc)s, %(validated)s, %(validation_error)s)
+   %(properties)s, %(origin)s, %(source_doc)s, %(validated)s, %(validation_error)s)
 """
 
 
@@ -164,6 +170,10 @@ def stage_document(conn, source_doc: str, doc: NormalizedDocument) -> tuple[int,
                 "tgt_type": tgt_type, "tgt_key": tgt_key,
                 "edge_type": rel.type, "subtype": rel.properties.get("subtype"),
                 "properties": json.dumps(props, ensure_ascii=False),
+                # 엣지가 스스로 밝힌 출처를 쓴다. 없으면 source_doc 접두로 가른다
+                # (뉴스 경로는 'news:URL' 꼴로 넘어온다).
+                "origin": (props.get("source_type")
+                           or ("news" if str(source_doc).startswith("news:") else "dart")),
                 "source_doc": source_doc,
                 "validated": ok, "validation_error": None if ok else why,
             })

@@ -63,6 +63,24 @@ _STUB_NAMES = """
 MATCH (c:Company) WHERE coalesce(c.is_stub, false)
 RETURN c.norm_name AS norm, c.name AS name, size([(c)-[]-() | 1]) AS deg
 """
+
+# ★설명형 이름은 `Company` stub 에만 생기는 게 아니다(2026-08-12).
+#   실측으로 `Organization`·`Product` 에서도 나왔다:
+#       [Orga] 미국 소비자 14명과 중소 PC조립·유통업체 3곳     deg=3
+#       [Orga] 소비자와 오프라인 소매업체를 대표하는 원고들       deg=3
+#       [Prod] 전공정 반도체 소자회로 제작에서 발생하는 패턴 결함을 검사하는 장비
+#       [Prod] 락(위상) 고정 루프(PLL) 회로 및 이를 포함하는 디스플레이 구동기
+#   앞의 둘은 소송 원고를 한 덩이로 부른 것이고, 뒤의 둘은 **특허 명칭**이
+#   제품명이 됐다. `is_stub` 조건이 없어 4단계 stub 목록에 안 잡혔다.
+#
+#   ★`corp_code`가 있으면 건드리지 않는다 — DART에 실재하는 법인이다.
+_DESC_NODES = """
+MATCH (n) WHERE (n:Organization OR n:Product)
+  AND coalesce(n.corp_code, '') = ''
+RETURN elementId(n) AS id, labels(n)[0] AS lb, n.name AS name,
+       size([(n)-[]-() | 1]) AS deg
+"""
+_DELETE_BY_ID = "MATCH (n) WHERE elementId(n) = $id DETACH DELETE n"
 _MERGE_INTO_RESOLVED = """
 MATCH (stub:Company {norm_name:$stub_norm})
 MATCH (target:Company {corp_code:$corp_code})
@@ -162,6 +180,17 @@ def main() -> int:
             print(f"  ✗ {name} (deg={s['deg']}, {reason})")
             if not dry_run:
                 session.run(_DELETE_STUB, norm=s["norm"])
+            deleted_stubs += 1
+
+        # ── Organization·Product 도 같은 기준으로 본다 ──────
+        for n in [dict(r) for r in session.run(_DESC_NODES)]:
+            reason = generic_reason(n["name"] or "")
+            if reason is None or reason not in CERTAIN_REASONS:
+                continue
+            print(f"  ✗ [{n['lb'][:4]}] {n['name'][:48]} "
+                  f"(deg={n['deg']}, {reason})")
+            if not dry_run:
+                session.run(_DELETE_BY_ID, id=n["id"])
             deleted_stubs += 1
 
     close_resolver()

@@ -108,7 +108,7 @@ def pending(conn, seeds: list[dict], *, min_extracted: int = 1) -> list[dict]:
 def resolve_corp_code(conn, name: str) -> Optional[str]:
     """기업명 → corp_code (시드 우선)."""
     with conn.cursor() as cur:
-        cur.execute("SELECT corp_code FROM companies WHERE name = %s LIMIT 1", (name,))
+        cur.execute("SELECT corp_code FROM company_attributes WHERE name = %s AND corp_code IS NOT NULL LIMIT 1", (name,))
         row = cur.fetchone()
         if row:
             return row[0]

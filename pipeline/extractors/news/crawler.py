@@ -1,14 +1,13 @@
-"""언론사 원문 본문 크롤러 — robots.txt 준수.
+"""언론사 원문 본문 크롤러.
 
 네이버 검색 API는 URL만 주므로 본문을 직접 확보해야 한다. **네이버 페이지가 아니라
-언론사 원문(originallink)** 을 대상으로 한다 — 네이버 robots.txt는 AI/RAG 용도를
-명시적으로 금지하지만, 언론사 자체 사이트는 대개 그런 조항이 없다.
+언론사 원문(originallink)** 을 대상으로 한다.
 
 준수 사항:
   · robots.txt 사전 확인 (도메인별 캐시)
   · ClaudeBot/anthropic-ai를 명시 차단하는 매체는 화이트리스트에서 제외
   · 요청 간 딜레이, User-Agent에 연락 가능 정보 명시
-  · **본문 저장 금지** — 관계 추출에만 쓰고 URL만 보관(방법서 §8)
+  · **본문 저장 금지** — 관계 추출에만 쓰고 URL만 보관
 """
 
 from __future__ import annotations
@@ -27,6 +26,11 @@ import trafilatura
 
 USER_AGENT = "BizNode-Research/0.1 (academic knowledge-graph project; contact via project repo)"
 _TIMEOUT = 15
+# 한 기사에 쓸 **전체** 시간 상한. `_TIMEOUT`은 바이트 사이 침묵만 재므로
+# 느리게 흘리는 서버를 못 막는다(2026-08-13 실측: 141분 정지).
+_TOTAL_TIMEOUT = 25
+_MAX_BYTES = 3_000_000        # 기사 본문에 3MB를 넘길 이유가 없다
+_CHUNK = 65_536
 _DELAY = 1.2          # **같은 도메인** 요청 간 딜레이(초) — 서버 부하 방지
 _MIN_BODY = 200       # 이보다 짧으면 추출 실패로 간주
 _WORKERS = 8          # 동시 크롤링 매체 수(도메인 간 병렬, 도메인 내 순차)
@@ -98,12 +102,32 @@ def fetch_body(url: str, *, delay: float = _DELAY) -> Optional[str]:
     if not allowed:
         return None
 
+    # ★`timeout`은 **바이트 사이 침묵**에만 걸린다 — 서버가 14초마다 1바이트씩
+    #   흘리면 `requests.get`은 영원히 안 끝난다. 실측(2026-08-13): 클로봇 수집이
+    #   이 상태로 **141분간 CPU 0%**로 멈춰 있었다(연결 6개가 열린 채 무응답).
+    #   그래서 `stream=True`로 헤더만 먼저 받고, 본문은 **전체 시간과 크기**를
+    #   직접 제한하며 읽는다.
     try:
-        resp = requests.get(url, timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(url, timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT},
+                            stream=True)
         resp.raise_for_status()
+        deadline = time.monotonic() + _TOTAL_TIMEOUT
+        chunks: list[bytes] = []
+        size = 0
+        for chunk in resp.iter_content(_CHUNK):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > _MAX_BYTES or time.monotonic() > deadline:
+                break
+        resp._content = b"".join(chunks)      # `.text` 가 이 값을 쓴다
+        resp._content_consumed = True
     except Exception:
         return None
     finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
         time.sleep(delay)
 
     # trafilatura: 광고·메뉴·관련기사를 걷어내고 본문만 추출

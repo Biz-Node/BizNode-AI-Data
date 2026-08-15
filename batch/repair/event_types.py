@@ -16,7 +16,7 @@
     python -m batch.repair.event_types
 
 【두 축으로 나눈다】
-  event_type : 무슨 종류의 일인가 (11종 고정)
+  event_type : 무슨 종류의 일인가 (12종 고정)
   is_risk    : 기업에 **부정적**인 일인가
 
 둘을 나누는 이유 — 같은 유형이라도 방향이 다를 수 있다:
@@ -42,7 +42,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 _WORKERS = 8
 
-# ── 고정 유형 11종 ────────────────────────────────────────────
+# ── 고정 유형 12종 ────────────────────────────────────────────
 # 리스크 조회에 쓸 수 있도록 **원인별로** 나눈다. 「뉴스이슈」 하나로는
 # 「어떤 악재가 있나」에 답할 수 없었다.
 EVENT_TYPES = [
@@ -51,6 +51,10 @@ EVENT_TYPES = [
     "규제수사",    # 과징금·제재·압수수색·기소·시정명령·수출규제
     "분쟁소송",    # 소송·특허침해·경영권분쟁·주주갈등
     "품질",       # 리콜·결함·불량·수율 문제
+    # ★2026-08-15 신설. 「기타」 146건을 열어 보니 15건이 여기였다 —
+    #   「삼성전자 반도체 핵심기술 유출」·「코미코 해킹 피해」·「개인정보 유출 사건」.
+    #   규제수사도 분쟁소송도 아니고, **반도체 산업에서는 핵심 리스크**다.
+    "정보유출",    # 기술·영업비밀·개인정보 유출 · 해킹 · 산업스파이
     "실적",       # 적자·어닝쇼크·신용등급·상장폐지
     "공급망",      # 공급차질·감산·생산중단·조달 문제
     "사업확장",    # 증설·착공·신공장·양산개시·수주
@@ -59,13 +63,17 @@ EVENT_TYPES = [
     "기타",
 ]
 
+# ★「기타」도 다시 본다(2026-08-15). 「뉴스이슈」만 대상이면 한 번 「기타」로
+#   떨어진 것은 영영 그대로 남는다 — 근거가 늘어도 다시 안 묻는다.
+#   사건 국면이 병합되면 이름이 구체적으로 바뀌므로 재판정 가치가 있다.
 _FIND = """
 MATCH (e:Event)
-WHERE $full OR e.event_type IS NULL OR e.event_type = '뉴스이슈'
+WHERE $full OR e.event_type IS NULL OR e.event_type IN ['뉴스이슈', '기타']
 OPTIONAL MATCH (e)-[r]-(c:Company)
 RETURN e.event_id AS eid, e.name AS name,
        collect(DISTINCT c.name)[0..4] AS companies,
-       collect(DISTINCT coalesce(r.occurred_at, r.valid_from))[0..2] AS dates
+       collect(DISTINCT coalesce(r.occurred_at, r.valid_from))[0..2] AS dates,
+       e.timeline AS timeline
 """
 
 _APPLY = """
@@ -75,12 +83,15 @@ SET e.event_type = $etype, e.is_risk = $risk, e.classified_at = datetime()
 
 _SYSTEM = f"""사건에 **유형**과 **리스크 여부**를 붙이세요.
 
-【유형 — 아래 11종 중 하나만】
+【유형 — 아래 12종 중 하나만】
 · 사고재해 : 화재·폭발·누출·붕괴·사망·중대재해·안전사고
 · 노무     : 파업·임단협·노사갈등·쟁의·성과급 분쟁
 · 규제수사 : 과징금·제재·압수수색·기소·시정명령·수출규제·조사 착수
 · 분쟁소송 : 소송·특허침해·경영권 분쟁·주주 갈등·가처분
 · 품질     : 리콜·결함·불량·수율 문제
+· 정보유출 : 기술·영업비밀·개인정보 유출 · 해킹 · 산업스파이 · 보안 사고
+            ★수사로 이어져도 **유출 자체가 사건**이면 여기입니다.
+              「핵심기술 유출 혐의로 기소」 → 정보유출 (규제수사 아님)
 · 실적     : 적자·어닝쇼크·신용등급 변동·상장폐지·급감
 · 공급망   : 공급 차질·감산·생산중단·조달 문제·물량 배분
 · 사업확장 : 증설·착공·신공장·양산 개시·수주·투자 결정
@@ -147,6 +158,14 @@ def _classify(row: dict) -> tuple[dict, dict]:
     user = (f"사건: 「{row['name']}」\n"
             f"연결 기업: {', '.join(comps[:4]) or '(없음)'}\n"
             f"시점: {', '.join(dates[:2]) or '(미상)'}")
+    # ★국면이 있으면 함께 준다(2026-08-15). 사건 이름 하나만으로는 「뉴스이슈」로
+    #   떨어지던 것이, 국면을 보면 성격이 드러난다:
+    #       「HBM4」 만으로는 모름 → 국면에 「양산 일정 연기」·「생산라인 전환」이
+    #       보이면 공급망이다.
+    phases = [p.split("|")[1] for p in (row.get("timeline") or [])
+              if isinstance(p, str) and "|" in p]
+    if phases:
+        user += "\n국면: " + " → ".join(phases[:6])
     return row, ask_json(_SYSTEM, user, schema=_SCHEMA, name="event_class",
                          fallback={"event_type": "기타", "is_risk": False,
                                    "reason": ""})

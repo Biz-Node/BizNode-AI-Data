@@ -138,6 +138,16 @@ def main() -> int:
                     help="구글 차단 대기시간을 무시하고 강행 (권장하지 않음)")
     ap.add_argument("--pause", type=int, default=180, metavar="초",
                     help="기업 사이 휴식(초). 기본 180 — 연속 질의를 끊어 준다. 0이면 없음")
+    # 기업을 다 돈 뒤, 상한에 걸려 못 본 기사를 마저 뽑는다(구글 안 씀).
+    # ★기본은 **안 돈다**(2026-08-13). 남은 것의 91%가 대형 4곳
+    #   (현대모비스·LG전자·삼성전자·SK하이닉스)에 몰려 있는데, 이 넷은 이미
+    #   연결이 제일 많다. 더 붙이면 그래프가 좋아지는 게 아니라 **더 쏠린다**
+    #   — 워크스페이스 그래프에서 삼성전자(연결 1,334)가 모든 걸 이어버리는
+    #   문제가 심해진다. 필요할 때만 명시적으로 켠다.
+    ap.add_argument("--leftover", action="store_true",
+                    help="기업을 다 돈 뒤 상한에 걸려 못 본 기사도 추출 (구글 안 씀)")
+    ap.add_argument("--leftover-limit", type=int, metavar="N",
+                    help="못 본 기사를 N건까지만 (비용 통제)")
     args = ap.parse_args()
 
     if args.recollect:
@@ -198,6 +208,7 @@ def main() -> int:
 
     started = time.time()
     results: list[tuple[str, bool, float]] = []
+    halted = ""          # "google" | "net" — 중단 사유. 뒤에서 후속 작업을 가른다
 
     for i, name in enumerate(names, 1):
         # ★기업 사이에 쉰다(2026-08-06). 지금까지는 480질의를 끝내자마자 **곧바로**
@@ -229,20 +240,53 @@ def main() -> int:
         results.append((name, ok, took))
         print(f"\n[{name}] {'완료' if ok else f'실패(코드 {proc.returncode})'} "
               f"· {took:.1f}분", flush=True)
-        if proc.returncode == 3:
-            # ★속도 제한은 **전체를 멈춘다**. 한 기업의 문제가 아니라 우리가
-            #   차단당한 것이므로, 다음 기업을 돌려도 똑같이 실패한다.
+        if proc.returncode in (3, 5):
+            # ★수집이 막히면 **전체를 멈춘다**. 한 기업의 문제가 아니라 회선이나
+            #   구글 쪽이 막힌 것이므로, 다음 기업을 돌려도 똑같이 실패한다.
             #   2026-07-31에 이 처리가 없어 심텍이 480질의를 전부 실패하며
             #   73분을 버렸고, 이어서 리노공업도 같은 길을 갔다.
+            #
+            # ★다만 **원인에 따라 안내가 달라야 한다**(2026-08-12).
+            #   전에는 회선 오류에도 「구글 속도 제한 — 시간을 두고 재개하세요」라고
+            #   찍었다. 실제로는 바로 재시도해도 되는 상황이었는데 몇 시간을 기다리게
+            #   만드는 안내였다. `pilot_company`가 5로 구분해 준다.
+            net = proc.returncode == 5
+            halted = "net" if net else "google"
             print(f"\n{'='*70}")
-            print(f"⛔ 구글 속도 제한 — 배치를 중단합니다 ({name}에서 발생)")
-            print(f"   지금까지 {i-1}개사 완료. 시간을 두고(수십 분~수 시간) 재개하세요.")
+            if net:
+                print(f"⛔ 회선 오류 — 배치를 중단합니다 ({name}에서 발생)")
+                print(f"   지금까지 {i-1}개사 완료. **구글 차단이 아닙니다** — "
+                      f"연결이 되는지 확인하고 바로 다시 돌려도 됩니다.")
+            else:
+                print(f"⛔ 구글 속도 제한 — 배치를 중단합니다 ({name}에서 발생)")
+                print(f"   지금까지 {i-1}개사 완료. "
+                      f"시간을 두고(수십 분~수 시간) 재개하세요.")
             print(f"   재개: 같은 명령을 다시 실행하면 미진행 기업부터 이어갑니다.")
+            print(f"   (중간본이 남아 있어 앞선 질의는 다시 쓰지 않습니다)")
             print(f"{'='*70}")
             break
         if not ok:
             # 그 외 실패는 그 기업만의 문제이므로 계속한다.
             print(f"  → 다음 기업으로 계속합니다.", flush=True)
+
+    # ★못 본 기사 마저 뽑기 (2026-08-13 추가).
+    #
+    #   `pilot_company`가 라우터 통과분을 `--limit`까지만 추출하므로 대형 기업은
+    #   남는다(실측 553건 — 현대모비스 123 · LG전자 113 · 삼성전자 4 …).
+    #   그런데 이 배치는 **대장에 없는 기업**만 집으므로 그 셋은 영영 안 잡힌다.
+    #   기업을 다시 돌리는 건 구글을 처음부터 다시 치는 일이라 쓸 수 없다.
+    #
+    #   ★구글 차단으로 멈췄을 때야말로 이걸 돌릴 때다 — 이 작업은 **구글을
+    #     안 쓴다.** 몇 시간 기다리는 동안 놀리지 않는다.
+    #   ★회선 오류(코드 5)면 건너뛴다 — 크롤링도 어차피 실패한다.
+    if args.leftover and halted != "net":
+        print("\n" + "=" * 70)
+        print("■ 못 본 기사 마저 추출 (구글 안 씀)")
+        print("=" * 70, flush=True)
+        cmd = [sys.executable, "-u", "-m", "batch.ops.leftover_extract"]
+        if args.leftover_limit:
+            cmd += ["--limit", str(args.leftover_limit)]
+        subprocess.run(cmd)
 
     print("\n" + "=" * 70)
     ok_n = sum(1 for _, ok, _ in results if ok)

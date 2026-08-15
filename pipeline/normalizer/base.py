@@ -76,8 +76,9 @@ def is_total_row(name: Optional[str]) -> bool:
     """최대주주/타법인출자 리스트의 총계 행("계"/"합계") 여부."""
     return (name or "").strip() in _TOTAL_ROW_NAMES
 
-# 주주명이 개인이 아닌 법인/단체임을 시사하는 표기들. "(주)"/"(유)" 괄호 표기도
-_COMPANY_NAME_MARKERS = ("㈜", "(주)", "(유)", "주식회사", "유한회사", "회사", "재단", "조합")
+# 법인격 표기는 `normalizer/legal_forms.py` 한 곳에서만 정한다(2026-08-13).
+# 전에는 이 파일·`entities.py`·`repair/node_identity.py`에 여섯 벌로 흩어져 있었다.
+from pipeline.normalizer.legal_forms import CORP_MARKERS as _COMPANY_NAME_MARKERS
 
 def is_company_name(name: str) -> bool:
     if any(marker in name for marker in _COMPANY_NAME_MARKERS):
@@ -194,29 +195,11 @@ InvesteeMatch = tuple[str, Optional[str], Optional[str]]
 # (name, stock_code, market) — corp_code 기준 역인덱스 조회 결과.
 CorpCodeInfo = tuple[str, Optional[str], Optional[str]]
 
-# 영문 법인격 접미어 — 한글 `㈜`·`주식회사`에 해당한다.
+# 영문 법인격 접미어 제거 — 한글 `㈜`·`주식회사` 제거와 같은 일이다.
 # 이걸 안 떼면 "Applied Materials, Inc"와 "Applied Materials Inc."가 **다른 노드**가 된다
 # (stub Company는 norm_name이 곧 식별자다). 실제로 해외 자회사·거래처에서 다발했다.
-_EN_LEGAL_SUFFIXES = frozenset({
-    "inc", "incorporated", "corp", "corporation", "co", "company",
-    "ltd", "limited", "llc", "llp", "lp", "plc",
-    "gmbh", "ag", "sa", "nv", "bv", "as", "ab", "oy", "spa", "srl", "sas",
-    "pty", "pte", "kk", "kabushiki", "kaisha", "holdings", "holding",
-})
-# 토큰 분리용 — 쉼표·마침표·괄호는 경계로 본다
-_TOKEN_SPLIT_RE = re.compile(r"[\s,.()\[\]]+")
-
-
-def _strip_en_legal_suffix(name: str) -> str:
-    """뒤쪽 법인격 토큰을 반복 제거. 'ROBOTIS Beijing Co., Ltd.' → 'ROBOTIS Beijing'.
-
-    **뒤에서부터만** 떼므로 이름 가운데의 'Co'는 건드리지 않는다
-    (예: 'Coway'는 토큰이 통째로 'coway'라 대상 아님).
-    """
-    tokens = [t for t in _TOKEN_SPLIT_RE.split(name) if t]
-    while tokens and tokens[-1].lower() in _EN_LEGAL_SUFFIXES:
-        tokens.pop()
-    return " ".join(tokens) if tokens else name
+# 목록은 `legal_forms.py`가 갖고 있고, **제거용은 `Holdings`를 뺀 좁은 집합**이다.
+from pipeline.normalizer.legal_forms import strip_en_legal_suffix as _strip_en_legal_suffix
 
 
 def normalize_company_name(name: str) -> str:
