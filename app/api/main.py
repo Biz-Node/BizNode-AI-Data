@@ -35,12 +35,12 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import examples as ex
-from app.services import search_service
+from app.services import company_service, search_service, workspace_service
 from app.api.schemas import (
     AskRequest, CompanyDetail, CompanySummary, ErrorResponse, Event,
     Filing, GraphResponse, InsightCard, MarketResponse, NewsFeedResponse,
     NewsItem, Propagation, Relation, RelationDetail, RetrieveResponse,
-    RiskEvent, SearchResponse, TrendingItem, WorkspaceChangesRequest,
+    RiskEvent, SearchResponse, Suggestion, TrendingItem, WorkspaceChangesRequest,
     WorkspaceChangesResponse, WorkspaceGraphRequest, WorkspaceSuggestRequest,
     WorkspaceSuggestResponse, WorkspaceSummaryRequest,
 )
@@ -84,6 +84,7 @@ app.add_middleware(
 
 
 # ★실제 DB 를 읽는 라우트. 하나씩 진짜로 바뀔 때마다 여기 추가한다.
+_REAL_PREFIX = ("/search", "/companies/", "/workspace/")
 _REAL: set[str] = {"/search"}
 
 
@@ -95,7 +96,7 @@ async def _mark_stub(request, call_next):
     3단계에서 하나씩 갈아끼울 때마다 `_REAL` 에 넣으면 헤더가 사라진다.
     """
     resp: Response = await call_next(request)
-    if request.url.path not in _REAL:
+    if not request.url.path.startswith(_REAL_PREFIX):
         resp.headers["X-Stub"] = "true"
     return resp
 
@@ -177,11 +178,10 @@ def company_detail(key: str) -> CompanyDetail:
     ★지배구조는 **양방향**입니다 — `owned_by`(이 회사를 소유한 쪽)와
     `owns`(이 회사가 소유한 쪽)로 나눠 보냅니다.
     """
-    if key in ("엔비디아", "nvidia", "NVIDIA"):
-        return ex.COMPANY_RELATIONS_ONLY
-    if key == "없는키":
+    got = company_service.company_detail(key)
+    if got is None:
         raise HTTPException(404, "해당 키의 기업이 없습니다")
-    return ex.COMPANY_FULL
+    return CompanyDetail(**got)
 
 
 @app.get("/companies/{key}/graph", response_model=GraphResponse, tags=["기업"],
@@ -190,7 +190,8 @@ def company_graph(key: str, depth: int = Query(1, ge=1, le=2)) -> GraphResponse:
     """`depth=2` 는 **허브를 지나면 폭발합니다.** 연결 150 초과 노드가 14곳이라
     삼성전자를 거쳐 두 칸을 가면 거의 모든 회사가 딸려옵니다.
     `degree` 를 함께 보내니 화면이 흐리게 그리거나 접을 수 있습니다."""
-    return ex.COMPANY_GRAPH
+    return GraphResponse(**workspace_service.workspace_graph([key], expand=False,
+                                                             refs=True))
 
 
 @app.get("/companies/{key}/market", response_model=MarketResponse, tags=["기업"],
@@ -210,9 +211,7 @@ def market_of(key: str, days: int = Query(30, ge=1, le=365)) -> MarketResponse:
     ★유통주식수를 못 믿는 기업(DART 공시 단위 오류)도 `null` 로 나갑니다.
     그대로 두면 시가총액 순위가 통째로 뒤집힙니다.
     """
-    if key in ("엔비디아", "nvidia", "NVIDIA"):
-        return ex.MARKET_UNLISTED
-    return ex.MARKET_RESPONSE
+    return MarketResponse(**company_service.market_of(key, days=days))
 
 
 @app.get("/companies/{key}/events", response_model=list[Event], tags=["기업"],
@@ -224,7 +223,7 @@ def events_of(key: str) -> list[Event]:
 
     ★`role` 을 보세요. `mentioned` 는 **당사자가 아니라 이름만 나온 것**입니다.
     이걸 당사자로 세면 「이 기업에 난 일」 집계가 부풀려집니다."""
-    return ex.EVENTS_OF
+    return [Event(**e) for e in company_service.events_of(key)]
 
 
 @app.get("/companies/{key}/news", response_model=list[NewsItem], tags=["기업"],
@@ -232,14 +231,14 @@ def events_of(key: str) -> list[Event]:
 def news_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[NewsItem]:
     """★**본문은 저장하지 않습니다**(저작권). 제목·언론사·발행일·링크까지입니다.
     인용이 필요하면 관계의 근거 문장(`/relations/{id}`)을 쓰세요."""
-    return ex.NEWS_OF
+    return [NewsItem(**n) for n in company_service.news_of(key, limit=limit)]
 
 
 @app.get("/companies/{key}/filings", response_model=list[Filing], tags=["기업"],
          summary="DART 공시 목록")
 def filings_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[Filing]:
     """★시드 64곳에만 있습니다."""
-    return ex.FILINGS_OF
+    return [Filing(**f) for f in company_service.filings_of(key, limit=limit)]
 
 
 @app.get("/companies/{key}/relations", response_model=list[Relation], tags=["관계"],
@@ -252,7 +251,7 @@ def relations_of(key: str) -> list[Relation]:
     보도하고 **종료는 보도하지 않기** 때문에, 오래됐다고 지우면 살아 있는
     관계를 잃습니다. 대신 **언제 봤는지**를 함께 보내니
     「2024-06에 그렇게 보도됨」으로 표시하세요."""
-    return ex.RELATIONS_OF
+    return [Relation(**r) for r in company_service.relations_of(key)]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -299,7 +298,10 @@ def company_summary(body: WorkspaceSummaryRequest) -> CompanySummary:
 
     ★워크스페이스 자체는 **백엔드가 저장합니다.** 이 API 는 키 목록을
     받을 뿐 누구의 워크스페이스인지 모릅니다."""
-    return ex.COMPANY_SUMMARY
+    got = company_service.company_summary(body.key, body.workspace_keys)
+    if got is None:
+        raise HTTPException(404, "해당 키의 기업이 없습니다")
+    return CompanySummary(**got)
 
 
 @app.post("/workspace/graph", response_model=GraphResponse, tags=["워크스페이스"],
@@ -322,7 +324,8 @@ def workspace_graph(body: WorkspaceGraphRequest) -> GraphResponse:
 
     ★`nodes[].role` 로 **담은 기업(`pinned`)과 이어주려고 딸려온 노드(`bridge`)**
     를 가릅니다. 다리를 흐리게 그리면 한눈에 구별됩니다."""
-    return ex.WORKSPACE_GRAPH
+    return GraphResponse(**workspace_service.workspace_graph(
+        body.keys, expand=body.expand, max_nodes=body.max_nodes))
 
 
 @app.post("/workspace/suggest", response_model=WorkspaceSuggestResponse,
@@ -356,7 +359,10 @@ def workspace_suggest(body: WorkspaceSuggestRequest) -> WorkspaceSuggestResponse
         3  POST /workspace/suggest  다음에 담을 것
         4  POST /workspace/graph    다시 그린다
     """
-    return WorkspaceSuggestResponse(keys=body.keys, suggestions=ex.SUGGESTIONS[:body.limit])
+    return WorkspaceSuggestResponse(
+        keys=body.keys,
+        suggestions=[Suggestion(**x) for x in
+                     workspace_service.suggest(body.keys, limit=body.limit)])
 
 
 @app.post("/workspace/changes", response_model=WorkspaceChangesResponse,
@@ -376,8 +382,8 @@ def workspace_changes(body: WorkspaceChangesRequest) -> WorkspaceChangesResponse
     비교 대상이 없습니다. 다음 DART 재적재 이후에 채워집니다 —
     **필드는 미리 열어 두었으니 그때 계약이 바뀌지 않습니다.**
     """
-    return WorkspaceChangesResponse(since=body.since, total=len(ex.CHANGES),
-                                    changes=ex.CHANGES)
+    return WorkspaceChangesResponse(
+        **workspace_service.changes(body.keys, body.since))
 
 
 # ══════════════════════════════════════════════════════════════════
