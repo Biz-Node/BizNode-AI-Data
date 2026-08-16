@@ -9,6 +9,8 @@
   - companies.sector @> '"반도체"' 로 35개 회사(삼성전자 포함) 존재
 """
 
+import pytest
+
 from pipeline.normalizer.resolver import Resolution
 
 
@@ -102,3 +104,20 @@ def test_find_corp_codes_by_sector(postgres_repo):
 def test_find_corp_codes_by_sector_no_match(postgres_repo):
     corp_codes = postgres_repo.find_corp_codes_by_sector(["존재하지않는섹터ZZZ"])
     assert corp_codes == []
+
+
+def test_best_candidate_match_returns_top_scoring_candidate(postgres_repo):
+    result = postgres_repo.best_candidate_match(["삼성전자에", "삼성전자", "납품하는"])
+    assert result is not None
+    matched_candidate, score = result
+    assert matched_candidate == "삼성전자"
+    assert score == pytest.approx(1.0)
+
+
+def test_best_candidate_match_returns_none_for_empty_candidates(postgres_repo):
+    assert postgres_repo.best_candidate_match([]) is None
+
+
+def test_best_candidate_match_returns_none_when_nothing_matches(postgres_repo):
+    result = postgres_repo.best_candidate_match(["최근", "소송", "관련"])
+    assert result is None

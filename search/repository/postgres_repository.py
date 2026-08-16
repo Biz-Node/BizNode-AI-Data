@@ -118,3 +118,40 @@ class PostgresRepository:
                 (list(sectors),),
             )
             return [row[0] for row in cur.fetchall()]
+
+    def best_candidate_match(self, candidates: list[str]) -> Optional[tuple[str, float]]:
+        """후보 문자열 목록 중 corp_code_master와 가장 유사한 1건을 고른다
+        (AnchorExtractor 전용, Task 9). resolve_candidates()와 달리 다중
+        후보를 반환하지 않는다 — "이 후보들 중 실제 회사명에 제일 가까운 게
+        뭔가"라는 존재 확인 질의라 최고점 1건이면 충분하다.
+
+        `corp_name % ANY(candidates)`로 GIN 인덱스(idx_corp_name_trgm)를 그대로
+        타면서(Task 9 실측: Bitmap Index Scan, 후보 4~8개 기준 15~25ms) 후보
+        전체를 단일 쿼리로 처리한다. `word_similarity()`/`<%` 연산자는 이
+        컬럼 구조에서 인덱스를 타지 않아(Task 9 실측: Seq Scan, 400~800ms)
+        채택하지 않았다 — gin_trgm_ops opclass가 `%`/`%>`만 지원하고 우리가
+        필요한 방향(단어가 문장 안에 있는지)에 대응하는 `<%`는 인덱스
+        전략이 없다.
+        """
+        if not candidates:
+            return None
+        with postgres_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  (SELECT c FROM unnest(%(candidates)s::text[]) AS c
+                   ORDER BY similarity(corp_name, c) DESC LIMIT 1) AS matched_candidate,
+                  (SELECT max(similarity(corp_name, c))
+                   FROM unnest(%(candidates)s::text[]) AS c) AS score
+                FROM corp_code_master
+                WHERE corp_name %% ANY(%(candidates)s::text[])
+                ORDER BY score DESC
+                LIMIT 1
+                """,
+                {"candidates": candidates},
+            )
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return None
+            matched_candidate, score = row
+            return (matched_candidate, float(score))
