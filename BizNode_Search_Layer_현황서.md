@@ -6,7 +6,7 @@
 > `BizNode_Search_Layer_구현_현황서.md`)를 통합·재구성했습니다. 작업이 끝날 때마다
 > 이 문서를 갱신합니다.
 
-마지막 갱신: 2026-08-15 · **전체 테스트 188개 전부 PASS**(실제 Docker PostgreSQL/Neo4j/
+마지막 갱신: 2026-08-16 · **전체 테스트 214개 전부 PASS**(실제 Docker PostgreSQL/Neo4j/
 ChromaDB 대상, mock 없음 — 단 코드 호출 계약을 확인하는 일부 단위 테스트는 예외적으로 monkeypatch/fake repo 사용)
 
 ## 1. 구현 현황 요약
@@ -14,14 +14,15 @@ ChromaDB 대상, mock 없음 — 단 코드 호출 계약을 확인하는 일부
 | 컴포넌트 | 상태 | 코드 위치 | 테스트 |
 |---|---|---|---|
 | DTO(`SearchRequest`/`SearchQuery`/`SearchHit`/`SearchResult`) / `EntityType`/`SearchMode`/`Direction` enum | ✅ 완료 | `search/dto/*.py`, `search/model/enums.py` | 31 PASS |
-| PostgresRepository | ✅ 완료 | `search/repository/postgres_repository.py` | 13 PASS |
+| PostgresRepository | ✅ 완료 | `search/repository/postgres_repository.py` | 16 PASS |
 | ChromaRepository | ✅ 완료 | `search/repository/chroma_repository.py` | 9 PASS |
 | EntityResolver | ✅ 완료 | `search/service/entity_resolver.py` | 19 PASS |
 | QueryRouter | ✅ 완료 | `search/service/query_router.py` | 21 PASS |
 | GraphSearcher(엔티티 메타데이터·anchor 없는 검색 포함) | ✅ 완료 | `search/service/graph_searcher.py`, `app/services/graph_service.py`(확장) | 28 PASS |
+| AnchorExtractor(질의 문장에서 기업명 후보 추출) | ✅ 완료 | `search/service/anchor_extractor.py`, `search/repository/postgres_repository.py`(확장) | 18 PASS |
 | VectorSearcher | ✅ 완료 | `search/service/vector_searcher.py` | 18 PASS |
 | ResultRanker | ✅ 완료 | `search/service/result_ranker.py` | 13 PASS |
-| SearchOrchestrator | ✅ 완료 | `search/service/orchestrator.py` | 22 PASS |
+| SearchOrchestrator | ✅ 완료 | `search/service/orchestrator.py` | 27 PASS |
 | CacheService / RedisRepository | 🔴 미구현(설계상 후순위) | `search/service/cache_service.py`, `search/repository/redis_repository.py`(둘 다 없음) | - |
 | SearchController(API) | 🔴 미구현 | `search/api/`(디렉토리 자체 없음), `app/api/`는 `__init__.py`뿐 | - |
 | Agent Tool 연동 | 🔴 미구현 | - | - |
@@ -114,6 +115,50 @@ GraphSearcher().search(
   검색 전체를 죽이지 않고 해당 엔티티만 조용히 제외합니다.
 - `limit`은 모든 `relations_of()` 호출에 무조건 지정합니다(하드캡 100 — 실측 없는 잠정치).
 
+### AnchorExtractor
+자연어 질의 문장에서 기업명(anchor) 후보를 추출한다(Task 9). SearchOrchestrator가
+`request.query` 원문 전체를 그대로 `EntityResolver.resolve_candidates()`에 넘겨
+"삼성전자에 납품하는 기업" 같은 문장이 fuzzy threshold를 못 넘고 해소 실패 →
+GraphSearcher가 anchor 없는 전역 top-N 경로로 빠지는 버그(§3-1, 실측: 엔비디아·
+마이크론·포스코 혼입)를 고친다.
+
+```text
+PostgresRepository.best_candidate_match(candidates: list[str]) -> Optional[tuple[str, float]]
+AnchorExtractor(repo=None)
+  .extract(raw_query: str) -> Optional[str]
+```
+
+- **접근법 선정**: 어절(공백 분리) 단위로 원본 + 조사 제거 후보를 만들고
+  (`_strip_trailing_josa`, 긴 조사부터 검사), `pipeline.normalizer.generic_names.
+  is_generic_name()`으로 "기업"/"업체" 같은 일반명사를 사전 필터링한 뒤,
+  `PostgresRepository.best_candidate_match()` **단일 쿼리**(`corp_name % ANY(candidates)`)
+  로 가장 유사한 후보 1건을 찾는다.
+- **`word_similarity()`/`<%` 연산자는 폐기**했다 — `corp_code_master`(118,535건)에서
+  `gin_trgm_ops` opclass가 `%`/`%>`만 지원하고 우리가 필요한 방향(단어가 문장 안에
+  있는지)에 대응하는 `<%`는 인덱스 전략이 없어 Seq Scan(400~800ms)으로 떨어진다
+  (실측, `EXPLAIN ANALYZE`). 대신 기존 `%` 연산자를 `corp_name % ANY(candidates)`
+  형태로 묶으면 같은 GIN 인덱스(`idx_corp_name_trgm`)를 그대로 타면서(15~25ms) 어절
+  후보 전체를 단일 쿼리로 처리할 수 있다 — 어절 수만큼 Postgres를 왕복하던 원래
+  "어절 슬라이딩" 안의 단점을 없앤다.
+- **`_CONFIDENCE_THRESHOLD = 0.50`**: 정답 후보는 1.0(정확 일치) 또는 0.5 이상(부분
+  일치)에 몰리고, 노이즈 어절("기업"→기업은행 0.33, "뉴스"→뉴스1 0.4)은 0.33~0.4에
+  몰린다(실측) — 그 사이 간격이 뚜렷해 EntityResolver의 기존 fuzzy threshold와 같은
+  값을 재사용한다.
+- **정밀도 우선**: 확신 없으면 추출하지 않는다(`None` 반환) — 잘못 추출해 엉뚱한
+  기업에 매칭되는 게, anchor 없이 정직하게 무관한 결과를 내는 것보다 나쁘다는
+  원칙. `SearchQuery.normalized_query`(공백 전부 제거됨)가 아니라 원본 `raw_query`
+  (공백 보존)를 어절 분리 입력으로 쓴다.
+- **적용 범위는 `edge_types` 있는 분기(GraphSearcher 경로)로 한정**했다(Keep Changes
+  Minimal) — NAME/SEMANTIC 분기(`edge_types` 없음)는 이번 Task에서 건드리지 않는다.
+  `SearchOrchestrator.__init__`에 `anchor_extractor` 인자가 추가돼(6번째 위치 인자),
+  `edge_types` 분기에서 `AnchorExtractor.extract(request.query)`를 먼저 호출하고
+  결과가 `None`이면 원문을 그대로 `resolve_candidates()`에 넘기는 기존 동작으로
+  폴백한다 — **DB 왕복 횟수가 이 분기에 한해 1회 → 2회로 늘었다**(`best_candidate_match`
+  + `resolve_candidates`).
+- 실측 검증(`run_test.py`, "삼성전자에 납품하는 기업"): 수정 전 엔비디아·마이크론·
+  포스코가 섞여 나왔던 결과가, 수정 후 SFA반도체·솔브레인·세메스·원익IPS 등 실제
+  공급사 7건만 반환됨을 확인.
+
 ### VectorSearcher
 `company` 컬렉션(ChromaDB) 의미 검색 결과를 `SearchHit`으로 변환. `ChromaRepository.
 search_company()`를 그대로 호출(embedding·컬렉션 접근 로직 신규 작성 없음).
@@ -204,41 +249,15 @@ SearchOrchestrator(entity_resolver, query_router, graph_searcher, vector_searche
 
 ## 3. 남은 작업
 
-우선순위는 설계 문서(§4 컴포넌트 표)의 데이터 흐름 순서를 따르되, 아래 1번은 실사용
-정확도에 직결돼 있어 예외적으로 최우선으로 올렸습니다(2026-08-15 발견).
+우선순위는 설계 문서(§4 컴포넌트 표)의 데이터 흐름 순서를 따릅니다.
 
-1. **[신규, 최우선] 자연어 문장에서 기업명 추출** — SearchOrchestrator는 `request.query`
-   원문 전체를 그대로 `EntityResolver.resolve()`에 넘긴다. "삼성전자"처럼 기업명만 단독으로
-   오면 잘 해소되지만, 실사용 문장인 "삼성전자에 납품하는 기업" 같은 전체 문장을 그대로
-   넘기면 exact match는 물론 pg_trgm fuzzy match도 threshold(0.50)를 못 넘어 해소 실패한다
-   → `resolved_entities=[]` → GraphSearcher가 **anchor 없는 경로**로 빠져, "삼성전자와
-   관련된 관계"가 아니라 "SUPPLIES_TO 관계 전체 그래프에서 점수 상위 5+5건"을 반환한다
-   (실측: `run_test.py`로 "삼성전자에 납품하는 기업" 실행 시 엔비디아·마이크론·포스코처럼
-   무관한 기업이 섞여 나옴, 삼성전자 자신도 낌 — 확인 세션: 2026-08-15).
-
-   **왜 지금 바로 안 고쳤는지**: 간단한 substring/조사 기반 휴리스틱은 `SUPPLIES_TO`/
-   `OWNS_STAKE_IN`/`SUES` 3종(조사 패턴이 있는 "깊은 규칙")에만 적용 가능하고, 나머지
-   9종(대표 키워드 1개만 매핑된 "얕은 규칙")은 문장에서 기업명 위치를 잡을 조사 단서가
-   아예 없다. 또한 "삼성전자 최근 투자 기업"처럼 조사가 없는 케이스도 있어 3종 안에서도
-   항상 적용되진 않는다. 잘못 추출해 엉뚱한 기업에 fuzzy 매칭되면 지금(anchorless, 최소한
-   "정직하게 무관함")보다 더 나쁜 "확신에 찬 오답"이 날 수 있어, 이 프로젝트의 다른
-   컴포넌트들과 같은 수준(§6-6 실제 DB 검증, 여러 접근법 비교)으로 별도 Task로 설계하는
-   게 낫다고 판단.
-
-   **후보 접근법(다음 Task 스펙 작성 시 참고)**:
-   - QueryRouter가 감지한 edge_type 키워드의 위치를 기준으로, 그 앞의 조사(에/에게/를/을/
-     가/이)를 잘라 남은 부분을 EntityResolver 후보로 시도(깊은 규칙 3종만 커버).
-   - 질의 전체가 아니라 어절(공백) 단위로 슬라이딩하며 `resolve_candidates()`를 시도해
-     가장 점수 높은 매칭을 채택(모든 edge_type에 적용 가능하지만 DB 조회 비용 증가).
-   - `corp_code_master`를 in-memory Aho-Corasick 등으로 만들어 질의 문자열 안에 등장하는
-     기업명 substring을 한 번에 찾는 방식(정확도는 높으나 별도 인덱스 구축 필요).
-2. **CacheService + RedisRepository** — Orchestrator 전체를 감싸는 cross-cutting 캐시. Redis가
+1. **CacheService + RedisRepository** — Orchestrator 전체를 감싸는 cross-cutting 캐시. Redis가
    프로젝트 어디에서도 실사용된 적이 없어 후순위입니다.
-3. **SearchController(API)** — FastAPI `POST /api/search` 엔드포인트, 요청 검증, 에러 → HTTP
+2. **SearchController(API)** — FastAPI `POST /api/search` 엔드포인트, 요청 검증, 에러 → HTTP
    status 매핑.
-4. **Agent Tool 연동** — `search_company`/`search_relationship`/`search_semantic`/
+3. **Agent Tool 연동** — `search_company`/`search_relationship`/`search_semantic`/
    `search_evidence` thin wrapper.
-5. **Docker / 배포** — ChromaDB 클라이언트-서버 버전 고정 체크리스트 반영.
+4. **Docker / 배포** — ChromaDB 클라이언트-서버 버전 고정 체크리스트 반영.
 
 ---
 
@@ -246,7 +265,10 @@ SearchOrchestrator(entity_resolver, query_router, graph_searcher, vector_searche
 
 | 이슈 | 내용 |
 |---|---|
-| **[신규, 최우선] 자연어 문장에서 기업명 추출 미구현** | SearchOrchestrator가 `request.query` 전체를 그대로 `EntityResolver.resolve()`에 넘겨, "삼성전자에 납품하는 기업"처럼 서술어가 붙은 실사용 문장은 해소 실패 → GraphSearcher가 anchor 없는 경로로 빠져 질의와 무관한 전역 top 결과를 반환한다(실측: 엔비디아·마이크론·포스코 혼입). 상세 원인·재현·후보 접근법은 §3 "남은 작업" 1번 참고 — 별도 Task로 분리하기로 함(2026-08-15) |
+| 자연어 문장에서 기업명 추출 미구현 | ✅ **해소(Task 9)** — `AnchorExtractor`가 어절 단위 조사 제거 + `PostgresRepository.best_candidate_match()`(GIN 트라이그램 인덱스 활용 단일 쿼리)로 anchor를 추출해 `edge_types` 분기에 연동됨. 실측(`run_test.py`, "삼성전자에 납품하는 기업"): 엔비디아·마이크론·포스코 혼입 사라지고 실제 공급사 7건만 반환. 상세는 §2 "AnchorExtractor" 절 참고 |
+| AnchorExtractor의 `_CONFIDENCE_THRESHOLD=0.50`/`_MAX_WORDS=10` 잠정치 | 실측(Task 9, 2026-08-16) 기반값: 정답 후보는 0.5 이상, 노이즈 어절은 0.33~0.4에 몰려 EntityResolver와 같은 threshold를 재사용했으나 별도 튜닝 데이터셋으로 재검증은 안 함. `_MAX_WORDS`는 실측 근거 없는 안전장치 |
+| AnchorExtractor는 `edge_types` 없는 분기(NAME/SEMANTIC) 미적용 | Task 9는 GraphSearcher 경로(관계 질의)에만 anchor 추출을 연동했다(Keep Changes Minimal) — "삼성전자 관련 뉴스"처럼 `edge_types`가 비어 있으면서 문장 속에 기업명이 파묻힌 케이스는 여전히 원문 전체가 그대로 `EntityResolver.resolve()`에 전달되어 미해결로 남아 있음 |
+| `word_similarity()`/`<%` 연산자는 인덱스 미지원으로 폐기(Task 9) | `corp_code_master`(118,535건)에서 `gin_trgm_ops`가 `%`/`%>`만 지원, 필요 방향(`<%`)은 인덱스 전략 없어 Seq Scan(400~800ms)으로 떨어짐(실측) — `% ANY(...)` 배치 쿼리(15~25ms)로 대체 |
 | anchor 없을 때 source/target 슬롯 간 전역 dedup 없음 | ✅ **해소(Task7)** — GraphSearcher는 의도적으로 dedup 안 하고 넘기며, ResultRanker가 RRF 적용 전 `entity_id` 기준 소스 내부 dedup(순위 높은 쪽만 유지)으로 흡수. 회귀 테스트로 "dedup 없으면 RRF 점수가 이중 기여로 부풀려짐"을 확인 |
 | 여러 `Resolution` 동시 조회 미구현 | GraphSearcher는 점수 최고 1건만 사용, 나머지는 무시 |
 | 저신뢰 키워드(9종) 정확도 미검증 | QueryRouter의 대표 키워드 1개씩만 등록, 실데이터 정확도 검증 안 함 |
