@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pipeline.normalizer.generic_names import is_generic_name
+from search.repository.postgres_repository import PostgresRepository
 
 # Task 9 실측(2026-08-16): 정답 후보는 1.0(정확 일치) 또는 0.5 이상(부분
 # 일치)에 몰리고, 노이즈 어절("기업"→기업은행 0.33, "뉴스"→뉴스1 0.4)은
@@ -74,3 +75,22 @@ def _build_candidates(raw_query: str) -> list[str]:
             seen.add(candidate)
             candidates.append(candidate)
     return candidates
+
+
+class AnchorExtractor:
+    def __init__(self, repo: Optional[PostgresRepository] = None):
+        self._repo = repo or PostgresRepository()
+
+    def extract(self, raw_query: str) -> Optional[str]:
+        """문장에서 기업명 후보 1개를 뽑는다. 확신(threshold 이상) 없으면
+        None — 호출부는 None을 "원문을 그대로 쓰라"는 신호로 해석한다."""
+        candidates = _build_candidates(raw_query)
+        if not candidates:
+            return None
+        match = self._repo.best_candidate_match(candidates)
+        if match is None:
+            return None
+        matched_candidate, score = match
+        if score < _CONFIDENCE_THRESHOLD:
+            return None
+        return matched_candidate
