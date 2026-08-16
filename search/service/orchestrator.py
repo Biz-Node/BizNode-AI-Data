@@ -39,6 +39,7 @@ from search.dto.search_query import SearchQuery
 from search.dto.search_request import SearchRequest
 from search.dto.search_result import SearchResult
 from search.model.enums import EntityType, SearchMode
+from search.service.anchor_extractor import AnchorExtractor
 from search.service.entity_resolver import EntityResolver
 from search.service.graph_searcher import GraphSearcher
 from search.service.query_router import QueryRouter
@@ -75,12 +76,14 @@ class SearchOrchestrator:
         graph_searcher: GraphSearcher,
         vector_searcher: VectorSearcher,
         result_ranker: ResultRanker,
+        anchor_extractor: AnchorExtractor,
     ) -> None:
         self._entity_resolver = entity_resolver
         self._query_router = query_router
         self._graph_searcher = graph_searcher
         self._vector_searcher = vector_searcher
         self._result_ranker = result_ranker
+        self._anchor_extractor = anchor_extractor
 
     def search(
         self, request: SearchRequest, *, today: Optional[date] = None,
@@ -91,7 +94,9 @@ class SearchOrchestrator:
         routing = self._query_router.route(normalized_query)
 
         if routing.edge_types:
-            resolved_entities = self._entity_resolver.resolve_candidates(request.query)
+            anchor = self._anchor_extractor.extract(request.query)
+            resolve_query = anchor if anchor is not None else request.query
+            resolved_entities = self._entity_resolver.resolve_candidates(resolve_query)
             graph_hits = self._graph_searcher.search(
                 resolved_entities, routing.edge_types, routing.direction,
                 top_k=request.top_k,

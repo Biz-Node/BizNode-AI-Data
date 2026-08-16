@@ -43,7 +43,8 @@ def _hit(entity_id, *, score=0.8, sources=("neo4j",)):
 
 
 def _make_orchestrator(*, route, resolve=None, resolve_candidates=None,
-                        graph_search=None, vector_search=None, rank=None):
+                        graph_search=None, vector_search=None, rank=None,
+                        extract=None):
     entity_resolver = MagicMock()
     entity_resolver.resolve.return_value = resolve
     entity_resolver.resolve_candidates.return_value = resolve_candidates or []
@@ -55,17 +56,21 @@ def _make_orchestrator(*, route, resolve=None, resolve_candidates=None,
     vector_searcher.search.return_value = vector_search or []
     result_ranker = MagicMock()
     result_ranker.rank.return_value = rank if rank is not None else []
+    anchor_extractor = MagicMock()
+    anchor_extractor.extract.return_value = extract
 
     orchestrator = SearchOrchestrator(
-        entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker)
-    return orchestrator, entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker
+        entity_resolver, query_router, graph_searcher, vector_searcher,
+        result_ranker, anchor_extractor)
+    return (orchestrator, entity_resolver, query_router, graph_searcher,
+            vector_searcher, result_ranker, anchor_extractor)
 
 
 # ── Tier A: 순수 호출 계약(mock) ────────────────────────────────────────────
 
 def test_edge_types_present_calls_graph_searcher_only():
     graph_hit = _hit("00164742")
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=Direction.INCOMING),
         resolve_candidates=[_SAMSUNG],
         graph_search=[graph_hit], rank=[graph_hit],
@@ -89,7 +94,7 @@ def test_edge_types_present_and_graph_searcher_empty_never_calls_vector_searcher
     있으면 VectorSearcher로 폴백하지 않는다. 이전에 정했던 "빈 결과 시 자동 폴백"
     정책은 실측(§6-6 "삼성전자에 납품하는 기업")에서 VectorSearcher가 실제 공급사를
     0건 맞히고 계열사만 반환한 사고로 철회됐다."""
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=Direction.INCOMING),
         resolve_candidates=[_SAMSUNG],
         graph_search=[], rank=[],
@@ -108,7 +113,7 @@ def test_edge_types_present_and_graph_searcher_empty_never_calls_vector_searcher
 def test_graph_searcher_zero_results_from_nonexistent_relation_combo_is_honest_empty_list():
     """§7 두 번째 회귀 케이스 — "존재하지 않는 관계 조합"도 정직하게 빈 리스트를
     반환하고 VectorSearcher 호출 흔적이 없어야 한다."""
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUES"], direction=None),
         resolve_candidates=[],
         graph_search=[], rank=[],
@@ -123,7 +128,7 @@ def test_graph_searcher_zero_results_from_nonexistent_relation_combo_is_honest_e
 
 
 def test_edge_types_empty_and_entity_resolved_returns_name_hit_only():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=[], direction=None),
         resolve=_SAMSUNG,
     )
@@ -147,7 +152,7 @@ def test_edge_types_empty_and_entity_resolved_returns_name_hit_only():
 
 def test_edge_types_empty_and_entity_unresolved_calls_vector_searcher_only():
     vector_hit = _hit("00164742", sources=["chroma"])
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=[], direction=None),
         resolve=None,
         vector_search=[vector_hit], rank=[vector_hit],
@@ -167,7 +172,7 @@ def test_edge_types_empty_and_entity_unresolved_calls_vector_searcher_only():
 # ── top_k / today 전달 ──────────────────────────────────────────────────────
 
 def test_top_k_propagates_through_graph_branch():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=None),
     )
     request = SearchRequest(query="질의", top_k=5)
@@ -179,7 +184,7 @@ def test_top_k_propagates_through_graph_branch():
 
 
 def test_top_k_propagates_through_vector_branch():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=[], direction=None), resolve=None,
     )
     request = SearchRequest(query="질의", top_k=5)
@@ -211,7 +216,7 @@ def test_today_uses_provided_value():
 # ── normalized_query / raw_query 분리 ───────────────────────────────────────
 
 def test_normalized_query_strips_whitespace_and_lowercases():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=[], direction=None), resolve=None,
     )
     request = SearchRequest(query="HBM을 만드는 기업")
@@ -223,7 +228,7 @@ def test_normalized_query_strips_whitespace_and_lowercases():
 
 
 def test_raw_query_passed_untouched_to_entity_resolver_and_vector_searcher():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=[], direction=None), resolve=None,
     )
     request = SearchRequest(query="HBM을 만드는 기업")
@@ -234,7 +239,7 @@ def test_raw_query_passed_untouched_to_entity_resolver_and_vector_searcher():
 
 
 def test_raw_query_passed_untouched_to_resolve_candidates():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=None),
     )
     request = SearchRequest(query="Samsung 에 납품하는 기업")
@@ -247,7 +252,7 @@ def test_raw_query_passed_untouched_to_resolve_candidates():
 # ── SearchQuery 필드 소스(routing 우선, request 아님) ───────────────────────
 
 def test_edge_types_and_direction_flow_from_router_not_request():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=Direction.INCOMING),
     )
     request = SearchRequest(query="질의", edge_types=["SUPPLIES_TO"])
@@ -259,7 +264,7 @@ def test_edge_types_and_direction_flow_from_router_not_request():
 
 
 def test_entity_types_and_filters_are_bookkeeping_only():
-    orch, er, qr, gs, vs, rr = _make_orchestrator(
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
         route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=None),
     )
     request = SearchRequest(
@@ -375,3 +380,47 @@ def test_query5_lawsuit_relationship_mode_never_touches_vector_searcher(
     assert result.used_semantic_fallback is False
     spy.assert_not_called()
     assert 0 < len(result.hits) <= request.top_k
+
+
+# ── AnchorExtractor 연동(Task 9) ────────────────────────────────────────────
+
+def test_anchor_extractor_result_used_instead_of_raw_query():
+    """AnchorExtractor가 anchor를 찾으면 그 결과로 resolve_candidates를
+    호출한다(원문이 아니라)."""
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
+        route=RoutingResult(edge_types=["SUPPLIES_TO"], direction=None),
+        resolve_candidates=[_SAMSUNG], extract="삼성전자",
+    )
+    request = SearchRequest(query="삼성전자에 납품하는 기업", edge_types=["SUPPLIES_TO"])
+
+    orch.search(request)
+
+    ae.extract.assert_called_once_with("삼성전자에 납품하는 기업")
+    er.resolve_candidates.assert_called_once_with("삼성전자")
+
+
+def test_falls_back_to_raw_query_when_anchor_extraction_returns_none():
+    """AnchorExtractor가 확신하지 못하면(None) 지금까지와 동일하게 원문을
+    그대로 resolve_candidates에 넘긴다."""
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
+        route=RoutingResult(edge_types=["SUES"], direction=None),
+        resolve_candidates=[], extract=None,
+    )
+    request = SearchRequest(query="최근 소송 관련 기업", edge_types=["SUES"])
+
+    orch.search(request)
+
+    er.resolve_candidates.assert_called_once_with("최근 소송 관련 기업")
+
+
+def test_anchor_extractor_not_called_when_edge_types_empty():
+    """edge_types 없는 분기(NAME/SEMANTIC)는 이번 Task 범위 밖 — AnchorExtractor를
+    호출하지 않는다."""
+    orch, er, qr, gs, vs, rr, ae = _make_orchestrator(
+        route=RoutingResult(edge_types=[], direction=None), resolve=_SAMSUNG,
+    )
+    request = SearchRequest(query="삼성전자")
+
+    orch.search(request)
+
+    ae.extract.assert_not_called()

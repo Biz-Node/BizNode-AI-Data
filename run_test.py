@@ -9,6 +9,7 @@ load_dotenv()
 from search.dto.search_request import SearchRequest
 from search.repository.chroma_repository import ChromaRepository
 from search.repository.postgres_repository import PostgresRepository
+from search.service.anchor_extractor import AnchorExtractor
 from search.service.entity_resolver import EntityResolver
 from search.service.graph_searcher import GraphSearcher
 from search.service.orchestrator import SearchOrchestrator
@@ -25,6 +26,7 @@ def main():
         graph_searcher=GraphSearcher(),
         vector_searcher=VectorSearcher(ChromaRepository()),
         result_ranker=ResultRanker(),
+        anchor_extractor=AnchorExtractor(PostgresRepository()),
     )
 
     # 3. 검색 실행 — SearchOrchestrator.search()는 동기 함수라 await 없이 호출한다

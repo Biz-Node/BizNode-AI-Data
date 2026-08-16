@@ -56,8 +56,17 @@ def result_ranker():
 
 
 @pytest.fixture(scope="session")
-def orchestrator(entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker):
+def anchor_extractor(postgres_repo):
+    from search.service.anchor_extractor import AnchorExtractor
+
+    return AnchorExtractor(postgres_repo)
+
+
+@pytest.fixture(scope="session")
+def orchestrator(entity_resolver, query_router, graph_searcher, vector_searcher,
+                  result_ranker, anchor_extractor):
     from search.service.orchestrator import SearchOrchestrator
 
     return SearchOrchestrator(
-        entity_resolver, query_router, graph_searcher, vector_searcher, result_ranker)
+        entity_resolver, query_router, graph_searcher, vector_searcher,
+        result_ranker, anchor_extractor)
