@@ -325,6 +325,17 @@ def test_query2_investment_relationship_mode(orchestrator):
     assert result.used_semantic_fallback is False
 
 
+def test_query2_anchor_extraction_resolves_samsung(orchestrator):
+    """"삼성전자 최근 투자 기업"(조사 없는 케이스)도 anchor가 삼성전자로
+    정확히 잡히는지 확인한다."""
+    request = SearchRequest(query="삼성전자 최근 투자 기업")
+
+    query, result = orchestrator.search(request)
+
+    assert query.resolved_entities
+    assert query.resolved_entities[0].corp_code == "00126380"
+
+
 def test_query3_hbm_semantic_mode(orchestrator, entity_resolver):
     assert entity_resolver.resolve("HBM을 만드는 기업") is None
     request = SearchRequest(query="HBM을 만드는 기업")
@@ -347,6 +358,23 @@ def test_query4_supplies_to_relationship_mode(orchestrator):
     assert query.mode == SearchMode.RELATIONSHIP
     assert result.used_semantic_fallback is False
     assert len(result.hits) > 0
+
+
+def test_query4_anchor_extraction_excludes_unrelated_suppliers(orchestrator):
+    """§3-1/§6 완료 기준 정면 검증 — anchor 추출 전에는 "삼성전자에 납품하는
+    기업"이 anchor 없는 전역 top-N 경로로 빠져 엔비디아·마이크론·포스코 같은
+    무관 기업이 섞여 나왔다(현황서 §3-1 실측). 수정 후에는 anchor(삼성전자)로
+    좁혀진 결과만 나와야 한다."""
+    request = SearchRequest(query="삼성전자에 납품하는 기업")
+
+    query, result = orchestrator.search(request)
+
+    assert query.resolved_entities
+    assert query.resolved_entities[0].corp_code == "00126380"
+    hit_names = {hit.name for hit in result.hits}
+    assert "엔비디아" not in hit_names
+    assert "마이크론" not in hit_names
+    assert "포스코" not in hit_names
 
 
 def test_query4_never_calls_vector_searcher_regardless_of_graph_result_count(
