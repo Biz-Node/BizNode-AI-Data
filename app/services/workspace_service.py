@@ -39,6 +39,9 @@ from pipeline.normalizer.ksic import label_of
 # 쌍이 이어져 **의미가 0인 그래프**가 된다.
 _HUB = 150
 
+# 축마다 뽑을 참조 기업 수. 두 축 합쳐 최대 10곳이 붙는다.
+_PER_AXIS = 5
+
 # 관계로 볼 엣지 — 사건·제품은 워크스페이스 캔버스에 안 그린다
 _TRADE = ["SUPPLIES_TO", "PARTNERS_WITH", "COMPETES_WITH", "ACQUIRES",
           "SUES", "DEPENDS_ON", "OWNS_STAKE_IN"]
@@ -63,7 +66,7 @@ WHERE coalesce(a.corp_code,a.norm_name) IN $k
   AND type(r) IN $types
 RETURN coalesce(a.corp_code,a.norm_name) AS ak, a.name AS an,
        coalesce(b.corp_code,b.norm_name) AS bk, b.name AS bn,
-       type(r) AS t, properties(r) AS p
+       type(r) AS t, properties(r) AS p, elementId(r) AS eid
 """
 
 # ★다리로 못 쓰는 것 둘 — 차수와 **종류**.
@@ -88,6 +91,14 @@ WHERE coalesce(island.corp_code,island.norm_name) = $island
   AND NOT coalesce(mid.corp_code,mid.norm_name) IN $all
   AND type(r1) IN $types AND type(r2) IN $types
   AND NOT coalesce(mid.entity_kind,'') IN $bad_kinds
+  // ★고를 때도 **그릴 때와 같은 기준**으로 걸러야 한다. 근거 없는 관계·종료된
+  //   관계는 응답의 엣지에서 빠지므로, 그런 엣지로 다리를 고르면 화면에
+  //   **한쪽에만 붙은 다리**가 생긴다 — 다리인데 잇지를 못한다
+  //   (2026-08-17 실측: ASE코리아·삼성전기·지멘스·큐렉소).
+  AND coalesce(r1.grounding_suspect,false) = false
+  AND coalesce(r2.grounding_suspect,false) = false
+  AND coalesce(r1.is_current, true) = true
+  AND coalesce(r2.is_current, true) = true
 WITH mid, count(DISTINCT other) AS reach
 MATCH (mid)-[e]-()
 WITH mid, reach, count(e) AS degree
@@ -99,12 +110,28 @@ ORDER BY reach DESC, degree ASC LIMIT 3
 """
 
 # 참조 기업 — 구조 축
+#
+# ★위험도 **함께 잰다.** 구조 축으로 뽑혔다고 위험을 안 재면 화면에서
+#   `risk_weight: null` 이 「위험 없음」으로 오독된다. **안 잰 것과 없는 것은 다르다.**
+#
+# ★**거래 관계로만 센다**(`_BRIDGE_TYPES`). 지분으로 이어진 것을 세면 실측처럼
+#   **삼성자산운용(members=5)·국민연금공단(members=3)** 이 참조 기업 상위에 올라온다
+#   (2026-08-16). 담긴 5곳 전부의 5%이상주주라 「가장 많이 이어진 곳」이 되지만,
+#   **주주는 밖에서 영향을 주는 상대가 아니다.** 다리에서 막은 것과 같은 이유다.
+#
+#   삼성전자처럼 지분도 있고 거래도 있는 곳은 거래로 잡히므로 안 빠진다.
 _REF_STRUCT = """
 MATCH (m:Company)-[r]-(x:Company)
 WHERE coalesce(m.corp_code,m.norm_name) IN $k
   AND NOT coalesce(x.corp_code,x.norm_name) IN $k
   AND type(r) IN $types
   AND coalesce(r.grounding_suspect,false) = false
+  // ★엣지 목록과 **같은 기준**으로 걸러야 한다. 종료된 관계(is_current=false,
+  //   valid_until 경과)는 응답의 엣지에서 빠지는데 여기서 세면 `members` 가
+  //   실제 그려지는 선보다 커진다 — 실측(2026-08-16): SFA반도체가 members=3 인데
+  //   선은 2개였다(한미반도체와의 관계가 종료 상태).
+  AND coalesce(r.is_current, true) = true
+  AND (r.valid_until IS NULL OR r.valid_until >= date())
 WITH x, count(DISTINCT m) AS members
 OPTIONAL MATCH (x)-[e]-()
 WITH x, members, count(e) AS degree
@@ -114,21 +141,97 @@ RETURN coalesce(x.corp_code,x.norm_name) AS key, x.name AS name,
 ORDER BY members DESC, degree DESC LIMIT $n
 """
 
-# 참조 기업 — 위험 축. **그 노드를 통해 워크스페이스로 들어오는** 위험만 센다
+# 참조 **후보가 몇 곳인지.** 상위 5곳씩만 보내므로 「몇 곳 중 몇 곳」을 알려야 한다.
+_REF_COUNT = """
+MATCH (m:Company)-[r]-(x:Company)
+WHERE coalesce(m.corp_code,m.norm_name) IN $k
+  AND NOT coalesce(x.corp_code,x.norm_name) IN $k
+  AND type(r) IN $types
+  AND coalesce(r.grounding_suspect,false) = false
+  AND coalesce(r.is_current, true) = true
+  AND (r.valid_until IS NULL OR r.valid_until >= date())
+RETURN count(DISTINCT x) AS n
+"""
+
+# 참조·다리 노드가 **담은 기업 몇 곳과 이어지나** — 다시 센다.
+#
+# ★뽑을 때 쓴 유형(거래만)과 **그릴 때 쓴 유형(거래+지분+소송)이 달라서**
+#   `members` 가 화면의 선 개수와 어긋났다(2026-08-17 실측: 파두 members=1 인데
+#   선은 2개, 삼성전자 members=4 인데 5개). 뽑는 기준은 그대로 두고
+#   **세는 기준만 그리는 것과 맞춘다.**
+_MEMBER_FILL = """
+MATCH (x:Company)-[r]-(m:Company)
+WHERE coalesce(x.corp_code,x.norm_name) IN $refs
+  AND coalesce(m.corp_code,m.norm_name) IN $pinned
+  AND type(r) IN $types
+  AND coalesce(r.grounding_suspect,false) = false
+  AND coalesce(r.is_current, true) = true
+  AND (r.valid_until IS NULL OR r.valid_until >= date())
+RETURN coalesce(x.corp_code,x.norm_name) AS key, count(DISTINCT m) AS members
+"""
+
+# 뽑힌 참조 기업들의 **위험을 한 번에 잰다.** 어느 축으로 뽑혔든 채운다.
+_REF_RISK_FILL = """
+MATCH (x:Company)-[:HAS_EVENT]->(e:Event {is_risk:true})
+WHERE coalesce(x.corp_code,x.norm_name) IN $refs
+RETURN coalesce(x.corp_code,x.norm_name) AS key,
+       count(e) AS risks, sum(coalesce(e.article_count,1)) AS raw
+"""
+
+# 참조 기업 — 위험 축.
+#
+# ★「그 회사가 겪은 사건 수」로 세면 안 된다. 처음엔 그렇게 짰다가 반도체
+#   워크스페이스에 **현대모비스(사건 19건)·현대자동차·LG전자**가 상위로 올라왔다.
+#   담긴 기업과 한 가닥으로만 이어져 있어 **들어올 게 없는데도** 사건이 많다는
+#   이유로 뽑힌 것이다.
+#
+#   그런데 **`members` 를 곱하면 안 된다.** 한 번 그렇게 고쳤다가 두 축이
+#   같은 답을 냈다(2026-08-17 실측: 소재 워크스페이스에서 **5/5 완전 중복**,
+#   로봇 4/5). 연결이 많은 곳이 위험도 커 보이니 구조 축과 순서가 같아진다 —
+#   **축을 둘로 나눈 의미가 없어진다.**
+#
+#   연결은 **이미 조건으로 걸려 있다**(담긴 기업과 거래 관계가 있어야 후보다).
+#   그 위에서는 **위험 자체로만** 줄 세운다.
+#
+# ★거래 관계로만 센다. 지분(OWNS_STAKE_IN)으로 이어진 것은 위험이 흐르는 길이
+#   아니다 — 주주가 사고를 내도 그 회사의 공급이 끊기지 않는다.
+_RISK_TYPES = ["SUPPLIES_TO", "PARTNERS_WITH", "COMPETES_WITH", "DEPENDS_ON", "ACQUIRES"]
+
 _REF_RISK = """
 MATCH (m:Company)-[r]-(x:Company)
 WHERE coalesce(m.corp_code,m.norm_name) IN $k
   AND NOT coalesce(x.corp_code,x.norm_name) IN $k
   AND type(r) IN $types
   AND coalesce(r.grounding_suspect,false) = false
+  // ★엣지 목록과 **같은 기준**으로 걸러야 한다. 종료된 관계(is_current=false,
+  //   valid_until 경과)는 응답의 엣지에서 빠지는데 여기서 세면 `members` 가
+  //   실제 그려지는 선보다 커진다 — 실측(2026-08-16): SFA반도체가 members=3 인데
+  //   선은 2개였다(한미반도체와의 관계가 종료 상태).
+  AND coalesce(r.is_current, true) = true
+  AND (r.valid_until IS NULL OR r.valid_until >= date())
 WITH DISTINCT x, count(DISTINCT m) AS members
 MATCH (x)-[:HAS_EVENT]->(e:Event {is_risk:true})
-WITH x, members, count(e) AS risks, sum(coalesce(e.article_count,1)) AS weight
+WITH x, members, count(e) AS risks, sum(coalesce(e.article_count,1)) AS raw
 OPTIONAL MATCH (x)-[o]-()
 RETURN coalesce(x.corp_code,x.norm_name) AS key, x.name AS name,
        x.entity_kind AS kind, x.ksic AS ksic, x.corp_code AS cc,
-       members, risks, weight, count(o) AS degree
-ORDER BY weight DESC, risks DESC LIMIT $n
+       members, risks, raw AS weight, count(o) AS degree
+ORDER BY weight DESC, members DESC LIMIT $n
+"""
+
+
+# 참조 기업이 **담긴 기업과 어떻게 이어지는지**. 참조끼리의 엣지는 안 가져온다 —
+# 화면이 복잡해지기만 하고 「밖에서 오는 영향」을 보는 데 도움이 안 된다.
+_REF_EDGES = """
+MATCH (a:Company)-[r]->(b:Company)
+WHERE type(r) IN $types
+  AND ((coalesce(a.corp_code,a.norm_name) IN $refs AND
+        coalesce(b.corp_code,b.norm_name) IN $pinned)
+    OR (coalesce(a.corp_code,a.norm_name) IN $pinned AND
+        coalesce(b.corp_code,b.norm_name) IN $refs))
+RETURN coalesce(a.corp_code,a.norm_name) AS ak, a.name AS an,
+       coalesce(b.corp_code,b.norm_name) AS bk, b.name AS bn,
+       type(r) AS t, properties(r) AS p, elementId(r) AS eid
 """
 
 
@@ -156,7 +259,8 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
     """
     keys = list(dict.fromkeys(keys))
     if not keys:
-        return {"nodes": [], "edges": [], "islands": [], "truncated": False, "omitted": {}}
+        return {"nodes": [], "edges": [], "islands": [], "truncated": False,
+                "omitted": {}, "ref_candidates": 0}
 
     with neo4j_session() as s:
         base = _nodes(s, keys)
@@ -166,11 +270,13 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
         # ① 담긴 기업끼리 직접 이어진 엣지
         for r in s.run(_DIRECT, k=keys, types=_TRADE):
             rel = _relation({"key": r["ak"], "name": r["an"]},
-                            {"key": r["bk"], "name": r["bn"]}, r["t"], dict(r["p"] or {}))
+                            {"key": r["bk"], "name": r["bn"]}, r["t"],
+                            dict(r["p"] or {}), eid=r["eid"])
             if rel is None:
                 continue
             edges.append({
-                "edge_id": rel["edge_id"], "type": rel["type"], "subtype": rel["subtype"],
+                "edge_id": rel["edge_id"], "evidence_id": rel["evidence_id"],
+                "type": rel["type"], "subtype": rel["subtype"],
                 "source": r["ak"], "target": r["bk"], "symmetric": rel["symmetric"],
                 "freshness": rel["freshness"], "score": rel["score"],
             })
@@ -198,15 +304,17 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
                                    startNode(r).name AS an,
                                    coalesce(endNode(r).corp_code,endNode(r).norm_name) AS bk,
                                    endNode(r).name AS bn,
-                                   type(r) AS t, properties(r) AS p""",
+                                   type(r) AS t, properties(r) AS p,
+                                   elementId(r) AS eid""",
                             mid=r["key"], ks=keys + [r["key"]], types=_BRIDGE_TYPES):
                         rel = _relation({"key": e["ak"], "name": e["an"]},
                                         {"key": e["bk"], "name": e["bn"]},
-                                        e["t"], dict(e["p"] or {}))
+                                        e["t"], dict(e["p"] or {}), eid=e["eid"])
                         if rel is None:
                             continue
                         edges.append({
-                            "edge_id": rel["edge_id"], "type": rel["type"],
+                            "edge_id": rel["edge_id"], "evidence_id": rel["evidence_id"],
+                            "type": rel["type"],
                             "subtype": rel["subtype"], "source": e["ak"], "target": e["bk"],
                             "symmetric": rel["symmetric"], "freshness": rel["freshness"],
                             "score": rel["score"]})
@@ -214,37 +322,140 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
             islands = [k for k in keys if k not in connected]
 
         # 참조 기업 — 두 축에서 각각 상위 5곳
+        ref_keys: list[str] = []
+        ref_candidates = 0
         if refs:
-            for q in (_REF_STRUCT, _REF_RISK):
-                for r in s.run(q, k=keys, types=_TRADE, n=5):
-                    if r["key"] not in nodes:
-                        nodes[r["key"]] = _to_node(dict(r), "neighbor")
-                    else:
+            ref_candidates = s.run(_REF_COUNT, k=keys,
+                                   types=_BRIDGE_TYPES).single()["n"]
+            # ★두 축이 겹치면 **다음 순위로 채운다.**
+            #   명세는 「각 축 상위 5곳 → 7~11곳이 붙는다」인데, 겹치는 걸 그냥
+            #   두면 소재 워크스페이스처럼 **5곳만** 나온다(5/5 중복).
+            #   그래서 축마다 넉넉히 가져와 **아직 안 뽑힌 것으로 5곳을 채운다.**
+            for q, tp in ((_REF_STRUCT, _BRIDGE_TYPES), (_REF_RISK, _RISK_TYPES)):
+                taken = 0
+                for r in s.run(q, k=keys, types=tp, n=_PER_AXIS * 4):
+                    if taken >= _PER_AXIS:
+                        break
+                    if r["key"] in nodes:
+                        # 이미 있는 노드면 다른 축의 지표만 채우고 **자리는 안 쓴다**
                         n = nodes[r["key"]]
-                        n["members"] = n.get("members") or r.get("members")
-                        n["risk_weight"] = n.get("risk_weight") or r.get("weight")
+                        if n["role"] != "pinned":
+                            n["members"] = n.get("members") or r.get("members")
+                        continue
+                    nodes[r["key"]] = _to_node(dict(r), "neighbor")
+                    ref_keys.append(r["key"])
+                    taken += 1
 
-    # ③ 못 이은 것은 섬으로 두되 **표시한다**
-    for k in islands:
-        if k in nodes:
-            nodes[k]["is_island"] = True
+            # ★참조 기업의 **엣지도 가져와야 한다.**
+            #
+            #   처음엔 노드만 붙이고 끝냈다가, 화면에 **떠 있는 점 10개**가 됐다
+            #   (2026-08-16). 마이크론이 `members=4` 라고 말하면서 정작 그 4곳과
+            #   잇는 선이 하나도 없었다 — 「몇 곳과 이어졌나」를 세어 놓고
+            #   **어디로 이어졌는지는 안 준** 셈이다.
+            if ref_keys:
+                for e in s.run(_REF_EDGES, refs=ref_keys, pinned=keys, types=_TRADE):
+                    rel = _relation({"key": e["ak"], "name": e["an"]},
+                                    {"key": e["bk"], "name": e["bn"]}, e["t"],
+                                    dict(e["p"] or {}), eid=e["eid"])
+                    if rel is None:
+                        continue
+                    edges.append({
+                        "edge_id": rel["edge_id"], "evidence_id": rel["evidence_id"],
+                        "type": rel["type"], "subtype": rel["subtype"],
+                        "source": e["ak"], "target": e["bk"],
+                        "symmetric": rel["symmetric"], "freshness": rel["freshness"],
+                        "score": rel["score"]})
+
+        # ★담은 기업이 아닌 노드(참조·다리)는 **전부 위험을 채운다.**
+        #   `refs` 여부와 무관하다 — 다리 노드도 화면에 그려지므로 위험을 알아야 하고,
+        #   `null`(안 쟀다)과 `0`(없다)이 모드에 따라 달라지면 안 된다.
+        others = [k for k, n in nodes.items() if n["role"] != "pinned"]
+        if others:
+            for r in s.run(_REF_RISK_FILL, refs=others):
+                n = nodes.get(r["key"])
+                if not n:
+                    continue
+                n["risk_count"] = r["risks"]
+                # 위험 = 리스크 사건의 기사 수 합. **연결 수를 곱하지 않는다**(위 주석)
+                n["risk_weight"] = int(r["raw"])
+            for k in others:
+                if nodes[k].get("risk_weight") is None:
+                    nodes[k]["risk_weight"] = 0
+                    nodes[k]["risk_count"] = 0
+
+    # 같은 엣지가 두 번 담기는 경우를 지운다 — 다리 노드를 채울 때 겹칠 수 있다
+    seen_ids: set[str] = set()
+    uniq = []
+    for e in edges:
+        if e["edge_id"] in seen_ids:
+            continue
+        seen_ids.add(e["edge_id"])
+        uniq.append(e)
+    edges = uniq
 
     out = list(nodes.values())
+    omitted: dict[str, int] = {}
+
     truncated = len(out) > max_nodes
     if truncated:
+        # 담은 기업이 먼저, 그다음 연결이 많은 순으로 남긴다
         out.sort(key=lambda n: (n["role"] != "pinned", -(n["degree"] or 0)))
         keep = {n["key"] for n in out[:max_nodes]}
+        dropped = [n for n in out[max_nodes:]]
         out = out[:max_nodes]
-        edges = [e for e in edges if e["source"] in keep and e["target"] in keep]
 
-    # 유형별로 몇 개를 뺐는지 — 조용히 자르면 화면은 그게 전부인 줄 안다
-    omitted: dict[str, int] = {}
-    seen = {(e["source"], e["target"], e["type"], e["edge_id"]) for e in edges}
-    if len(seen) != len(edges):
-        edges = [dict(t) for t in {tuple(sorted(e.items())) for e in edges}]
+        # ★무엇이 잘렸는지 **말한다.** 조용히 자르면 화면은 그게 전부인 줄 안다.
+        #   노드는 역할별로, 엣지는 유형별로 센다.
+        for n in dropped:
+            k = f"node:{n['role']}"
+            omitted[k] = omitted.get(k, 0) + 1
+        kept_edges = []
+        for e in edges:
+            if e["source"] in keep and e["target"] in keep:
+                kept_edges.append(e)
+            else:
+                omitted[e["type"]] = omitted.get(e["type"], 0) + 1
+        edges = kept_edges
+
+    # ③ 못 이은 것은 섬으로 두되 **표시한다**
+    #
+    # ★섬은 **맨 마지막에** 센다. 응답에 실제로 나가는 노드·엣지로만 판정해야 한다.
+    #
+    #   두 번 틀렸다(2026-08-16):
+    #     ㄱ. 참조 기업을 붙이기 **전**에 세어, 참조가 이어 준 노드가 여전히
+    #         섬으로 남았다(소재·부품 5곳이 엣지 20개로 이어졌는데도 섬 5).
+    #     ㄴ. `max_nodes` 로 자르기 **전**에 세어, **잘려 나간 노드**를 섬이라고
+    #         가리켰다(노드 3개인데 islands 가 없는 키를 담고 있었다).
+    #
+    #   뜻은 하나로 못 박는다 — **「응답에 있으면서 선이 하나도 없는 노드」**.
+    #   담은 기업끼리 직접 연결이 없는지는 화면이 엣지 양 끝이 모두 `pinned` 인
+    #   것을 세어 알 수 있다.
+    # ★`members` 는 **응답에 실제로 실린 엣지에서 센다.** 별도 질의로 세면
+    #   기준이 갈려 계속 어긋난다 — 두 번 겪었다(2026-08-17):
+    #     ㄱ. 뽑을 땐 거래 유형만, 그릴 땐 지분·소송까지 → 세는 게 더 적었다
+    #     ㄴ. `grounding_suspect` 인데 `wrong_type` 인 관계는 **그리되 안 셌다**
+    #   질의를 아무리 맞춰도 필터가 하나 늘 때마다 또 어긋난다.
+    #   **셀 것과 그릴 것이 같은 목록이면 어긋날 수가 없다.**
+    pinned_keys = {n["key"] for n in out if n["role"] == "pinned"}
+    for n in out:
+        if n["role"] == "pinned":
+            continue
+        n["members"] = len({
+            (e["target"] if e["source"] == n["key"] else e["source"])
+            for e in edges if n["key"] in (e["source"], e["target"])
+        } & pinned_keys)
+
+    linked: set[str] = set()
+    for e in edges:
+        linked.update((e["source"], e["target"]))
+    islands = [n["key"] for n in out if n["key"] not in linked]
+    island_set = set(islands)
+    for n in out:
+        n["is_island"] = n["key"] in island_set
 
     return {"nodes": out, "edges": edges, "islands": islands,
-            "truncated": truncated, "omitted": omitted}
+            "truncated": truncated, "omitted": omitted,
+            "ref_candidates": ref_candidates}
 
 
 # ══════════════════════════════════════════════════════════════════

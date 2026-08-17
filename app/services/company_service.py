@@ -71,8 +71,14 @@ def _verdict(p: dict) -> str:
 
 
 def _relation(src: dict, tgt: dict, etype: str, p: dict,
-              today: Optional[date] = None) -> Optional[dict]:
+              today: Optional[date] = None, *, eid: str = "") -> Optional[dict]:
     """엣지 속성 → API 관계. **감출 것은 여기서 감춘다.** 빼야 하면 None."""
+    # ★자기 자신을 잇는 엣지는 **그릴 수 없다.** 힘기반 레이아웃이 깨지고
+    #   「A가 A에게 공급」은 화면에서 뜻이 없다.
+    #   실측(2026-08-17): 로보티즈가 자기 자신의 자회사·피인수로 들어가 있다
+    #   (전체 2건). **데이터 오류지만 API 가 방어한다** — 노드 병합이 또 만들 수 있다.
+    if src.get("key") and src["key"] == tgt.get("key"):
+        return None
     if _verdict(p) in _HIDE:
         return None
     fr = assess(p, today=today)
@@ -91,7 +97,11 @@ def _relation(src: dict, tgt: dict, etype: str, p: dict,
         left = int(cycle) - int(fr.days_since)
 
     return {
-        "edge_id": p.get("evidence_id") or "",
+        # ★`edge_id` 는 **엣지 자체의 유일한 id**(Neo4j elementId)다.
+        #   `evidence_id` 를 쓰면 안 된다 — 한 근거가 여러 관계를 뒷받침해서
+        #   유일하지 않다(11,060 엣지에 근거 9,228개).
+        "edge_id": eid or p.get("evidence_id") or "",
+        "evidence_id": p.get("evidence_id"),
         "type": etype,
         "subtype": p.get("subtype") or None,
         "source": {"key": src["key"], "name": src["name"], "label": src.get("label", "Company")},
@@ -215,7 +225,7 @@ MATCH (c:Company)-[r]-(o)
 WHERE (c.corp_code = $k OR c.norm_name = $k)
   AND type(r) IN ['SUPPLIES_TO','PARTNERS_WITH','COMPETES_WITH','ACQUIRES',
                   'SUES','DEPENDS_ON','OWNS_STAKE_IN','REGULATES']
-RETURN type(r) AS t, properties(r) AS p,
+RETURN type(r) AS t, properties(r) AS p, elementId(r) AS eid,
        startNode(r) = c AS outgoing,
        coalesce(o.name,'?') AS oname,
        coalesce(o.corp_code, o.norm_name, o.name) AS okey,
@@ -233,7 +243,7 @@ def relations_of(key: str, *, limit: Optional[int] = None) -> list[dict]:
         me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
         other = {"key": r["okey"], "name": r["oname"], "label": r["olabel"]}
         src, tgt = (me, other) if r["outgoing"] else (other, me)
-        rel = _relation(src, tgt, r["t"], r["p"] or {})
+        rel = _relation(src, tgt, r["t"], r["p"] or {}, eid=r["eid"])
         if rel:
             out.append(rel)
     out.sort(key=lambda x: -x["score"])
@@ -323,14 +333,27 @@ def filings_of(key: str, limit: int = 20) -> list[dict]:
 #  기업 상세
 # ══════════════════════════════════════════════════════════════════
 
+# ★`OPTIONAL MATCH` 를 연달아 쓰면 **카테시안 곱**이 된다.
+#
+#   처음엔 이렇게 썼다가 삼성전자 조회가 **영영 안 끝났다**(2026-08-16):
+#
+#       OPTIONAL MATCH (c)-[r]-()            1,169행
+#       OPTIONAL MATCH (c)-[]-(x:Company)    × 443
+#       OPTIONAL MATCH (c)-[:HAS_EVENT]->(e) × 148
+#       OPTIONAL MATCH (c)-[:HAS_EVENT]->(rk)× 69
+#                                            = 52억 행을 만들고 나서 센다
+#
+#   심텍(44 × 13 × 4 × 2 = 4,576행)으로 테스트해서 못 잡았다.
+#   **작은 노드로만 테스트하면 이 종류의 버그는 안 보인다.**
+#
+#   `COUNT {}` 서브쿼리는 각각 따로 세므로 곱이 안 생긴다 — 1,169관계짜리도 0.01초.
 _DETAIL_Q = """
 MATCH (c:Company) WHERE c.corp_code = $k OR c.norm_name = $k
-OPTIONAL MATCH (c)-[r]-()
-OPTIONAL MATCH (c)-[]-(x:Company)
-OPTIONAL MATCH (c)-[:HAS_EVENT]->(e:Event)
-OPTIONAL MATCH (c)-[:HAS_EVENT]->(rk:Event {is_risk:true})
-RETURN properties(c) AS p, count(DISTINCT r) AS rel, count(DISTINCT x) AS comp,
-       count(DISTINCT e) AS ev, count(DISTINCT rk) AS risk
+RETURN properties(c) AS p,
+       COUNT { (c)-[]-() }                                  AS rel,
+       COUNT { MATCH (c)-[]-(x:Company) RETURN DISTINCT x }  AS comp,
+       COUNT { (c)-[:HAS_EVENT]->(:Event) }                  AS ev,
+       COUNT { (c)-[:HAS_EVENT]->(:Event {is_risk:true}) }   AS risk
 """
 
 _OWN_Q = """
@@ -478,6 +501,26 @@ ORDER BY n DESC LIMIT 5
 """
 
 
+# ★워크스페이스 관계는 **따로 질의한다.** 상세의 `related` 를 걸러 쓰면 안 된다.
+#
+#   실측(2026-08-16): 삼성전자 상세의 `related` 상위 30개가 전부 점수 1.0 짜리
+#   DART 관계(삼성복지재단·삼성생명 …)라, 정작 워크스페이스에 담긴 심텍(0.945)·
+#   SK하이닉스(0.648)·한미반도체(0.48)가 **잘려 나가 빈 배열이 됐다.**
+#
+#   **자른 뒤에 거르면 안 되고, 걸러서 가져와야 한다.**
+_WS_REL_Q = """
+MATCH (c:Company)-[r]-(o:Company)
+WHERE (c.corp_code = $k OR c.norm_name = $k)
+  AND coalesce(o.corp_code, o.norm_name) IN $ws
+  AND type(r) IN ['SUPPLIES_TO','PARTNERS_WITH','COMPETES_WITH','ACQUIRES',
+                  'SUES','DEPENDS_ON','OWNS_STAKE_IN','REGULATES']
+RETURN type(r) AS t, properties(r) AS p, elementId(r) AS eid,
+       startNode(r) = c AS outgoing,
+       coalesce(o.name,'?') AS oname, coalesce(o.corp_code,o.norm_name) AS okey,
+       c.name AS cname, coalesce(c.corp_code,c.norm_name) AS ckey
+"""
+
+
 def company_summary(key: str, workspace_keys: list[str]) -> Optional[dict]:
     """워크스페이스 좌 패널 — **「지금 보는 그래프 안에서의 이 회사」.**
 
@@ -488,10 +531,18 @@ def company_summary(key: str, workspace_keys: list[str]) -> Optional[dict]:
     if detail is None:
         return None
     ws = [k for k in workspace_keys if k != key]
-    in_ws = [r for r in detail["related"]
-             if r["source"]["key"] in ws or r["target"]["key"] in ws]
 
     with neo4j_session() as s:
+        in_ws = []
+        for r in s.run(_WS_REL_Q, k=key, ws=ws):
+            me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
+            other = {"key": r["okey"], "name": r["oname"], "label": "Company"}
+            src, tgt = (me, other) if r["outgoing"] else (other, me)
+            rel = _relation(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
+            if rel:
+                in_ws.append(rel)
+        in_ws.sort(key=lambda x: -x["score"])
+
         shared = [{"key": r["key"], "name": r["name"], "shared_count": r["n"],
                    "customers": list(r["customers"])}
                   for r in s.run(_SHARED_Q, k=key, ws=ws)]

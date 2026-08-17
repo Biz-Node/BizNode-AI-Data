@@ -207,7 +207,17 @@ class Relation(BaseModel):
       **없는 파급을 만들어 내기** 때문이다.
     """
 
-    edge_id: str = Field(description="관계 상세 조회에 쓰는 id", examples=["ev_1fb80cd92f197c6a"])
+    edge_id: str = Field(
+        description="**이 관계 하나를 가리키는 유일한 id.** 화면의 키로 쓰고 "
+                    "`/relations/{edge_id}` 로 상세를 연다",
+        examples=["5:ba4682b0-985e-45c9-96c5-f013f9141dcb:0"])
+    # ★`evidence_id` 를 `edge_id` 로 쓰면 안 된다 — **유일하지 않다.**
+    #   실측(2026-08-16): 11,060 엣지가 근거 9,228개를 쓴다. 한 문장이 여러 관계를
+    #   뒷받침하기 때문이다 — 「삼성전자, SK하이닉스 등을 고객사로 확보」 한 문장이
+    #   공급 관계 둘의 근거가 된다. 한 근거가 15개 엣지에 붙은 경우도 있다.
+    evidence_id: Optional[str] = Field(
+        None, description="근거 문장의 id. **여러 관계가 같은 근거를 쓸 수 있다**",
+        examples=["ev_17acfbf5a4041e59"])
     type: EdgeType = Field(examples=["SUPPLIES_TO"])
     subtype: Optional[str] = Field(None, description="근거에서 읽어낸 「무엇을」",
                                    examples=["반도체 PCB"])
@@ -628,7 +638,14 @@ class GraphNode(BaseModel):
     is_island: bool = Field(False, description="아무와도 안 이어진 노드. **억지로 잇지 않는다**")
     # ★아티팩트 명세 — 참조 기업을 두 축으로 뽑을 때 쓰는 값
     members: Optional[int] = Field(None, description="담은 기업 **몇 곳과** 이어지나", examples=[4])
-    risk_weight: Optional[int] = Field(None, description="이 노드를 통해 들어오는 위험의 크기")
+    # ★두 축 중 어느 쪽으로 뽑혔든 **둘 다 채운다.**
+    #   구조 축으로 뽑혔다고 위험을 비워 두면 화면이 「위험 없음」으로 오독한다 —
+    #   **안 잰 것(`null`)과 없는 것(`0`)은 다르다.**
+    risk_weight: Optional[int] = Field(
+        None, description="이 노드를 통해 들어오는 위험 = 사건 기사 수 × `members`. "
+                          "**`0` 은 위험 없음, `null` 은 안 잼**(참조 노드가 아닌 경우)",
+        examples=[48])
+    risk_count: Optional[int] = Field(None, description="리스크 사건 수", examples=[6])
     can_collect: Optional[bool] = Field(
         None,
         description="**더 받을 데가 있나.** `corp_code` 가 있으면 DART 로 받을 수 있고, "
@@ -637,7 +654,8 @@ class GraphNode(BaseModel):
 
 
 class GraphEdge(BaseModel):
-    edge_id: str
+    edge_id: str = Field(description="유일한 id — 화면의 키로 쓴다")
+    evidence_id: Optional[str] = Field(None, description="근거 id. **공유될 수 있다**")
     type: EdgeType
     subtype: Optional[str] = None
     source: str = Field(description="노드 key")
@@ -660,9 +678,18 @@ class GraphResponse(BaseModel):
 
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
-    islands: list[str] = Field(default_factory=list,
-                               description="아무와도 안 이어진 노드 key. **화면이 따로 알려야 한다**")
+    islands: list[str] = Field(
+        default_factory=list,
+        description="**화면에 그려질 선이 하나도 없는 노드.** `refs` 를 켜면 참조 기업이 "
+                    "이어 주므로 줄어든다. 담은 기업끼리 직접 연결이 없는지는 엣지의 "
+                    "양 끝이 모두 담은 기업인 것을 세어 알 수 있다")
     truncated: bool = Field(False, description="`max_nodes` 에 걸려 잘렸나")
+    # ★참조 기업은 **두 축에서 각각 상위 5곳만** 보낸다. 후보가 몇 곳이었는지를
+    #   알려 주지 않으면 화면은 그게 전부인 줄 안다 — 실측: 반도체 워크스페이스의
+    #   참조 후보가 **337곳**인데 10곳만 나간다.
+    ref_candidates: int = Field(
+        0, description="참조 기업 **후보 수**. `refs=false` 면 0. "
+                       "「후보 337곳 중 10곳」을 화면이 말할 수 있다", examples=[337])
     # ★무엇이 잘렸는지 **말한다.** 조용히 자르면 화면은 그게 전부인 줄 안다.
     #   실측(심텍 1홉): OWNS_STAKE_IN 9 · IS_EXECUTIVE_OF 8 · DEVELOPS 6 …
     omitted: dict[str, int] = Field(
@@ -757,12 +784,16 @@ class WorkspaceSummaryRequest(BaseModel):
     key: str = Field(examples=["00126380"])
     workspace_keys: list[str] = Field(
         description="**담아 둔 기업 전부.** 「이 워크스페이스와의 관계」를 내려면 필요하다",
-        examples=[["00126380", "00164779", "00121932"]])
+        examples=[["01095722", "00126380", "00164779", "00161383"]])
 
 
 class WorkspaceGraphRequest(BaseModel):
-    keys: list[str] = Field(examples=[["00126380", "00164779", "00121932"]])
+    keys: list[str] = Field(examples=[["01095722", "00126380", "00164779", "00161383"]])
     expand: bool = Field(True, description="섬이 된 기업을 한 칸 건너 이어 볼까")
+    # ★기본이 꺼짐인 이유 — **담은 기업만 보는 게 시작점**이다.
+    #   「밖에서 오는 영향」이 궁금할 때 켠다. 켜면 두 축(구조·위험)에서
+    #   각각 상위 5곳을 뽑아 7~11곳이 붙는다.
+    refs: bool = Field(False, description="참조 기업을 두 축으로 뽑아 붙일까")
     max_nodes: int = Field(150, ge=1, le=500)
 
 
@@ -779,7 +810,7 @@ class Suggestion(BaseModel):
       마이크론·엔비디아」까지 줘야 판단이 된다.
     """
 
-    key: str = Field(examples=["00121932"])
+    key: str = Field(examples=["00161383"])
     name: str = Field(examples=["한미반도체"])
     reason: Literal["shared_customer", "shared_supplier", "shared_owner",
                     "same_event", "competitor"] = Field(

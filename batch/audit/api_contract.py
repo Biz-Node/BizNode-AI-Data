@@ -100,6 +100,30 @@ def check_keys(problems: list[str]) -> None:
 # ══════════════════════════════════════════════════════════════════
 
 
+def check_schema_examples(problems: list[str]) -> None:
+    """`schemas.py` 의 `Field(examples=...)` 에 박힌 키도 실재하나.
+
+    ★이걸 안 봐서 놓쳤다(2026-08-16). `/docs` 의 **Try it out 기본값**이
+      `00121932`(없는 노드)라, 사용자가 눌러 보면 빈 그래프가 나왔다.
+      예시가 스텁 파일에만 있는 게 아니라 **계약 안에도 있다.**
+    """
+    import re
+    from pathlib import Path
+    from app.core.database import neo4j_session
+
+    src = Path("app/api/schemas.py").read_text(encoding="utf-8")
+    keys = sorted(set(re.findall(r'"(\d{8})"', src)))
+    print(f"\n■ schemas.py 예시 키 {len(keys)}개 — /docs 의 Try it out 기본값")
+    with neo4j_session() as s:
+        for k in keys:
+            row = s.run("MATCH (c:Company {corp_code:$k}) RETURN c.name AS n",
+                        k=k).single()
+            if row is None:
+                _fail(problems, f"schemas.py 예시 {k} — 그런 노드가 없다. "
+                                f"/docs 에서 눌러 보면 빈 응답이 나온다")
+    print(f"{_OK} {len(keys)}개 확인")
+
+
 def check_counts(problems: list[str]) -> None:
     """`counts` 와 `degree` 를 다시 센다. **가장 틀리기 쉬운 값**이다."""
     from app.api import examples as ex
@@ -294,6 +318,7 @@ def main() -> int:
     check_routes(problems)
     if not args.routes_only:
         check_keys(problems)
+        check_schema_examples(problems)
         check_counts(problems)
         check_facts(problems)
         check_refs(problems)

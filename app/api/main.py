@@ -325,7 +325,7 @@ def workspace_graph(body: WorkspaceGraphRequest) -> GraphResponse:
     ★`nodes[].role` 로 **담은 기업(`pinned`)과 이어주려고 딸려온 노드(`bridge`)**
     를 가릅니다. 다리를 흐리게 그리면 한눈에 구별됩니다."""
     return GraphResponse(**workspace_service.workspace_graph(
-        body.keys, expand=body.expand, max_nodes=body.max_nodes))
+        body.keys, expand=body.expand, max_nodes=body.max_nodes, refs=body.refs))
 
 
 @app.post("/workspace/suggest", response_model=WorkspaceSuggestResponse,
