@@ -15,3 +15,4 @@ run_chroma.py
 #  저장소가 영구히 무거워진다. 스크립트 `infra/share_all.sh`는 저장소에 두고
 #  덤프 결과물만 뺀다 — 팀원은 clone으로 스크립트를 받고 덤프는 따로 받는다.)
 infra/share/
+.superpowers/
