@@ -758,18 +758,32 @@ class RiskEvent(BaseModel):
 class NewsFeedItem(NewsItem):
     """뉴스/이슈 화면의 한 줄 — 기사에 **어느 기업·어떤 사건이 걸렸는지**까지."""
 
-    companies: list[RelationEndpoint] = Field(default_factory=list)
+    companies: list[RelationEndpoint] = Field(
+        default_factory=list,
+        description="이 기사에 언급된 **우리가 아는 기업.** 이름을 못 찾는 키는 뺀다")
     event: Optional[RelationEndpoint] = None
-    category: Optional[str] = Field(None, description="공급망 · 지분 · 규제 · 사건",
-                                    examples=["규제"])
-    is_risk: bool = False
+    # 한 기사가 여러 갈래에 걸리는 게 정상이다 — 「공정위, 납품단가 담합 제재」는
+    # 공급망이면서 규제다. 하나로 고르면 화면이 절반을 놓친다.
+    categories: list[str] = Field(
+        default_factory=list, description="공급망 · 지분 · 규제 · 사건 (**여러 개 가능**)",
+        examples=[["공급망", "규제"]])
+    is_risk: bool = Field(False, description="사건 갈래에 걸렸나")
 
 
-# 서로 배타적인지 겹쳐 쓸 수 있는지 알 수 없다.
 class NewsFeedResponse(BaseModel):
-    """필터가 **세 축**이다. 한 줄에 몰면 「위험만」과 「내 워크스페이스」가"""
+    """뉴스/이슈 화면. 필터가 **세 축**이고 겹쳐 쓸 수 있다.
 
-    total: int = 0
+        축 1  category        전체 · 공급망 · 지분 · 규제 · 사건
+        축 2  workspace_keys  전체 · 내 워크스페이스
+        축 3  정렬             최신순
+
+    한 줄에 몰면 「위험만」과 「내 워크스페이스」가 배타적인지 겹칠 수 있는지
+    알 수 없어서 갈라 두었다.
+
+    본문은 없다 — 제목·언론사·발행일·링크까지다. 원문은 언론사 링크로 간다.
+    """
+
+    total: int = Field(0, description="필터를 통과한 **전체 수**. 화면은 「2,387건 중 20건」")
     items: list[NewsFeedItem] = Field(default_factory=list)
 
 

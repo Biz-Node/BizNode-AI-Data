@@ -9,7 +9,7 @@
       2단계  스텁 서버        이 파일
       3단계  하나씩 진짜로     app/services/       ← 라우트는 그대로, 속만 간다
 
-  지금 **21개 중 19개가 실제 DB 를 읽는다.** 남은 것은 `/news`·`/retrieve` 둘이고
+  지금 **21개 중 20개가 실제 DB 를 읽는다.** 남은 것은 `/retrieve` 하나이고
   `X-Stub: true` 헤더가 붙어 나간다 — **헤더가 없으면 진짜다.**
 
 ★경계 — 이 API 는 사용자를 모른다
@@ -41,6 +41,7 @@ from app.core.config import CHROMA_HOST, CHROMA_PORT
 from app.services import (
     company_service,
     insight_service,
+    news_service,
     relation_service,
     search_service,
     workspace_service,
@@ -59,8 +60,8 @@ app = FastAPI(
     title="BizNode 데이터 API",
     version="0.2.0",
     description=(
-        "기업 관계 그래프 조회 API. **21개 중 19개가 실제 DB 를 읽습니다.**\n\n"
-        "고정값을 돌려주는 것은 `/news`·`/retrieve` 둘이고, 응답에 "
+        "기업 관계 그래프 조회 API. **21개 중 20개가 실제 DB 를 읽습니다.**\n\n"
+        "고정값을 돌려주는 것은 `/retrieve` 하나이고, 응답에 "
         "`X-Stub: true` 헤더가 붙습니다 — **헤더가 없으면 진짜입니다.**\n\n"
         "화면이 어떻게 보이는지는 **`/preview`** 에서 실제 응답으로 볼 수 있습니다.\n\n"
         "### 화면을 만들 때 반드시 다뤄야 하는 것\n"
@@ -82,7 +83,7 @@ app = FastAPI(
         {"name": "기업", "description": "상세 한 방 + 블록별 「더보기」 라우트"},
         {"name": "관계", "description": "관계 상세 · 근거 원문 · 리스크 파급"},
         {"name": "워크스페이스", "description": "그래프 · 노드 클릭 · 추천 · 알림"},
-        {"name": "뉴스", "description": "뉴스 피드 — **후순위, 외부 API 로 대체 예정**"},
+        {"name": "뉴스", "description": "뉴스/이슈 화면 — 주제·워크스페이스·최신순"},
         {"name": "홈", "description": "인사이트 카드"},
         {"name": "운영", "description": "배포 점검용"},
         {"name": "챗봇", "description": "추론 계층이 쓰는 재료"},
@@ -104,7 +105,7 @@ app.add_middleware(
 #   스텁인데 진짜로 나갔다. 갈아끼울 때 여기서 지우면 헤더가 사라진다.
 #   ★`/retrieve` 를 한 번 빠뜨렸다 — 여러 줄에 걸쳐 `ex.*` 를 넣고 있어서
 #     `return ex.` 로 훑을 때 안 걸렸다. 헤더가 아니라 **본문을 봐야 한다.**
-_STUB = ("/news", "/retrieve")
+_STUB = ("/retrieve",)
 
 
 @app.middleware("http")
@@ -425,22 +426,29 @@ def workspace_changes(body: WorkspaceChangesRequest) -> WorkspaceChangesResponse
 # ══════════════════════════════════════════════════════════════════
 
 
-# ★`/companies/{key}/news` 와 다르다. 그쪽은 「관계의 근거가 된 기사」라
-#   우리만 갖고 있고, 이쪽은 일반 기사 피드라 외부 API 로 바꿀 수 있다.
-@app.get("/news", response_model=NewsFeedResponse, tags=["뉴스"], summary="뉴스 피드  (스텁)")
+# ★`/companies/{key}/news` 와 다르다. 그쪽은 「관계의 근거가 된 기사」이고
+#   이쪽은 화면용 피드다. 둘 다 우리가 모은 기사에서 나온다.
+# ★외부 뉴스 API 를 안 쓰는 이유 — 화면의 축 1(주제)을 외부가 못 만든다.
+#   국내는 뉴스 저작권 때문에 무료 API 도 사실상 없다.
+@app.get("/news", response_model=NewsFeedResponse, tags=["뉴스"], summary="뉴스 피드")
 def news_feed(
     category: str | None = Query(None, description="공급망 · 지분 · 규제 · 사건"),
     workspace_keys: list[str] | None = Query(None, description="내 워크스페이스로 좁히기"),
-    sort: str = Query("recent", description="recent · impact"),
-    risk_only: bool = Query(False),
+    risk_only: bool = Query(False, description="사건 갈래만"),
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ) -> NewsFeedResponse:
-    """뉴스 피드. **후순위 — 외부 뉴스 API 로 대체 예정이다.**
+    """뉴스/이슈 화면. **세 축을 겹쳐 쓸 수 있다** — 주제 / 범위 / 최신순.
 
-    필터가 **세 축**이다 — 주제 / 범위 / 정렬. 한 줄에 몰면 「위험만」과
-    「내 워크스페이스」가 배타적인지 겹칠 수 있는지 알 수 없다.
+    - `total` 은 필터를 통과한 **전체 수**다. 화면은 「2,387건 중 20건」.
+    - `categories` 는 **여러 개가 정상**이다 — 「공정위, 납품단가 담합 제재」는
+      공급망이면서 규제다.
+    - 본문은 없다. 원문은 언론사 링크로 보낸다.
+    - 매일 아침 `batch.build.news_feed` 가 언론사 RSS 로 채운다.
     """
-    return ex.NEWS_FEED
+    return NewsFeedResponse(**news_service.news_feed(
+        category=category, workspace_keys=workspace_keys,
+        risk_only=risk_only, limit=limit, offset=offset))
 
 
 @app.post("/insights", response_model=list[InsightCard], tags=["홈"],
