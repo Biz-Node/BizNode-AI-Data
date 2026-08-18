@@ -1,0 +1,122 @@
+"""뉴스 → 관계 엣지 파이프라인.
+
+RSS 수집 → dedup → 2단 게이트 → 관계 추출 → ER → staged_edges → evidence → Neo4j.
+쓰기 순서는 P1과 동일(§5-2). 뉴스 엣지는 source_type="news", confidence=LLM 점수라
+DART 관측(1.0)과 구분된다.
+
+실행:
+  python -m batch.build.news                 # 전체
+  python -m batch.build.news --limit 30      # 추출 상한(비용 통제)
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from app.core.database import postgres_connection
+from pipeline.importer.evidence import upsert_evidence
+from pipeline.importer.graph_loader import load_staged_to_neo4j
+from pipeline.importer.news_loader import build_news_document
+from pipeline.importer.event_er import resolve_events
+from pipeline.importer.person_er import resolve_persons
+from pipeline.importer.staging import stage_document
+from pipeline.news.collector import collect_and_screen
+from pipeline.news.extractor import extract_relations
+from pipeline.normalizer import resolver
+from pipeline.normalizer.relations import record_unmapped
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--limit", type=int, default=30, help="관계 추출 기사 상한(비용)")
+    parser.add_argument("--router-limit", type=int, default=80, help="LLM 라우터 호출 상한")
+    parser.add_argument("--naver", action="store_true",
+                        help="네이버 검색 API로 관계 기사 추가 수집(키 필요)")
+    parser.add_argument("--naver-seeds", type=int, default=0,
+                        help="네이버 검색 대상 시드 수(0=전체). 호출량 통제용")
+    parser.add_argument("--no-crawl", action="store_true", help="본문 크롤링 보강 생략")
+    parser.add_argument("--track", choices=["relation", "risk", "both"], default="relation",
+                        help="relation=기업 간 관계 / risk=사건·리스크 / both=둘 다. "
+                             "검색 키워드·규칙 필터·라우터 프롬프트가 트랙별로 달라진다")
+    args = parser.parse_args()
+
+    seed_names = None
+    if args.naver:
+        import json as _json
+        from app.core.config import ETF_LIST_PATH
+        with open(ETF_LIST_PATH, encoding="utf-8") as f:
+            seed_names = [c["companyName"] for c in _json.load(f)["companies"]]
+        if args.naver_seeds:
+            seed_names = seed_names[: args.naver_seeds]
+
+    all_evidence = []
+    total_edges = total_invalid = total_unmapped = 0
+
+    with postgres_connection() as conn:
+        screened = collect_and_screen(
+            conn, limit_router=args.router_limit,
+            use_naver=args.naver, seed_names=seed_names,
+            crawl_bodies=not args.no_crawl, track=args.track,
+        )
+        targets = screened[: args.limit]
+
+        print(f"\n[4/5] 관계 추출 ({len(targets)}건 기사, 상위 모델)")
+        for i, s in enumerate(targets, 1):
+            relations = extract_relations(s.article.title, s.article.body, s.matched_names)
+            if not relations:
+                continue
+            doc, evs, unmapped = build_news_document(
+                relations, s.article.url, s.article.title,
+                s.article.published_at.date() if s.article.published_at else None,
+            )
+            n, invalid = stage_document(conn, f"news:{s.article.url}", doc)
+            all_evidence.extend(evs)
+            total_edges += n
+            total_invalid += invalid
+
+            # 12종에 못 넣은 표현을 누적 — 렉시콘 개정의 근거
+            for u in unmapped:
+                record_unmapped(conn, **u)
+            total_unmapped += len(unmapped)
+
+            drop_note = f", 미매핑 {len(unmapped)}" if unmapped else ""
+            print(f"  [{i}/{len(targets)}] {s.article.title[:44]} "
+                  f"→ 엣지 {n} (위반 {invalid}{drop_note})")
+
+            with conn.cursor() as cur:
+                cur.execute("UPDATE news_articles SET extracted_at = now() WHERE url = %s",
+                            (s.article.url,))
+
+        print(f"  → 총 {total_edges}건 스테이징 "
+              f"(매트릭스 위반 {total_invalid}건 차단, 미매핑 {total_unmapped}건 기록)")
+
+        print(f"\n[5/5] evidence 임베딩 → ChromaDB ({len(all_evidence)}건)")
+        upsert_evidence(conn, all_evidence)
+
+    print("\nstaged_edges → Neo4j 적재")
+    load_staged_to_neo4j()
+
+    # 뉴스는 생년월 없는 Person을 새로 만든다(`이재용@news`). 적재 직후 ER을 돌려
+    # DART 노드와 합치지 않으면 같은 사람이 경로 수만큼 쪼개진 채 남는다.
+    print("\nPerson ER (뉴스 인물 ↔ DART 인물 병합)")
+    er = resolve_persons()
+    print(f"  → 병합 {er['merged']}건, 보류 {er['skipped']}건")
+
+    # 같은 사건을 기사마다 다르게 이름 붙이면 노드가 갈린다
+    # (「청주 공장 화재」/「청주4캠퍼스 화재」). 사건이 갈리면 그 사건이 어느 기업까지
+    # 번졌는지가 한곳에 모이지 않아 리스크 추론이 조각난다.
+    print("\nEvent ER (이름만 다른 동일 사건 병합)")
+    ev_er = resolve_events()
+    print(f"  → {ev_er['groups']}개 사건군에서 {ev_er['merged']}건 병합")
+
+    resolver.close()
+    print("\n✅ P2 뉴스 파이프라인 완료")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

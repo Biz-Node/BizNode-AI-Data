@@ -1,6 +1,24 @@
-anthropic>=0.40,<1.0
 fastapi>=0.115,<1.0
-neo4j>=5.28,<7.0
 pydantic>=2.10,<3.0
 python-dotenv>=1.0,<2.0
 uvicorn[standard]>=0.34,<1.0
+
+# HTTP — DART API 호출 · 뉴스 본문 수집
+requests>=2.32,<3.0
+
+# XML — 사업보고서 원문 파싱(malformed 복구, recover 파서)
+lxml>=5.0,<7.0
+
+# LLM — 경로 C 서술 추출 · evidence 임베딩(text-embedding-3-small)
+openai>=1.50,<2.0
+
+# ── 저장소 계층 ────────────────────────────────────────────────
+# Graph DB (APOC 프로시저 사용)
+neo4j>=5.28,<7.0
+# RDBMS — 기업마스터·재무·프로파일·원문메타 + pg_trgm ER 블로킹
+psycopg[binary]>=3.2,<4.0
+# Vector DB — evidence·프로파일 선별 임베딩 (확장 시 Qdrant로 교체)
+# 컨테이너 서버(0.5.23)와 클라이언트 API 버전 정렬 (v2/v1 불일치 방지)
+chromadb>=0.5.20,<0.6
+# 캐시/큐 (선택) — Tier3 수집 큐, DART rate limit 카운터
+redis>=5.0,<7.0

@@ -9,9 +9,8 @@ from schemas.dart_schemas import (
     EntityDTO,
     ExecutiveRelationshipDTO,
     NormalizedDocument,
-    PersonDTO,
     RelationshipDTO,
-    make_entity_ref,
+    standard_edge_meta,
 )
 from pipeline.normalizer.base import (
     clean_bullet_text,
@@ -23,6 +22,22 @@ from pipeline.normalizer.base import (
     convert_korean_year_month,
     parse_tenure_months,
 )
+from pipeline.normalizer.entities import build_person, master_company_ref
+
+# 사외이사 subtype
+_OUTSIDE_DIRECTOR_SUBTYPE = "사외이사"
+
+# Person 노드 폭발 방지(방법서 §10[2]) — 미등기 실무임원(상무·전무 등)은 제외하고
+# 이사회 구성원(등기)만 노드화. 단 대표/회장/사장은 미등기라도 유지.
+_TOP_POSITION_MARKERS = ("대표", "회장", "사장")
+
+
+def _is_governance_relevant(rgist_at: str | None, ofcps_raw: str | None) -> bool:
+    """등기임원이거나 최고경영진(대표/회장/사장)이면 True."""
+    if rgist_at and rgist_at.strip() != "미등기":
+        return True
+    position = ofcps_raw or ""
+    return any(m in position for m in _TOP_POSITION_MARKERS)
 
 # 신규 선임 여부를 판단하는 재직기간 기준(12개월).
 _NEW_EXECUTIVE_THRESHOLD_MONTHS = 12
@@ -116,26 +131,33 @@ def _parse_duty(raw: Optional[str], corp_code: str, nm: Optional[str]) -> Option
 
 
 def normalize_executives(rows: list[dict[str, Any]], corp_code: str) -> NormalizedDocument:
-    """20번 임원 현황 raw rows -> `NormalizedDocument`로 정규화."""
-    
+    """20번 임원 현황 → Person + IS_EXECUTIVE_OF{subtype}. 사외이사는 subtype으로 구분.
+    방향: 임원(Person) → 회사(Company) [outbound].
+    """
     entities: dict[str, EntityDTO] = {}
     relationships: list[RelationshipDTO] = []
+    to_ref = master_company_ref(corp_code)
 
     for row in rows:
         name = clean_name(row.get("nm"))
         if name is None:
             continue
 
-        if name not in entities:
-            person = PersonDTO(
-                name=name,
-                gender=clean_missing(row.get("sexdstn")),
-                birth_year_month=convert_korean_year_month(row.get("birth_ym")),
-            )
-            entities[name] = EntityDTO(type="Person", key=name, properties=person.to_properties())
+        # 미등기 실무임원 제외 (Person 폭발 방지) — 등기임원·최고경영진만
+        if not _is_governance_relevant(clean_missing(row.get("rgist_exctv_at")), row.get("ofcps")):
+            continue
 
-        relationship_type: Literal["IS_EXECUTIVE_OF", "IS_OUTSIDE_DIRECTOR_OF"] = (
-            "IS_OUTSIDE_DIRECTOR_OF" if row.get("rgist_exctv_at") == "사외이사" else "IS_EXECUTIVE_OF"
+        birth_ym = convert_korean_year_month(row.get("birth_ym"))
+        gender = clean_missing(row.get("sexdstn"))
+        entity, from_ref = build_person(name, birth_ym, gender, corp_code)
+        entities.setdefault(entity.key, entity)
+
+        # 직위 또는 사외이사로 subtype 결정
+        position = clean_position(row.get("ofcps"))
+        subtype = (
+            _OUTSIDE_DIRECTOR_SUBTYPE
+            if row.get("rgist_exctv_at") == "사외이사"
+            else position
         )
 
         tenure_months = parse_tenure_months(row.get("hffc_pd"))
@@ -144,8 +166,14 @@ def normalize_executives(rows: list[dict[str, Any]], corp_code: str) -> Normaliz
         )
 
         relationship_dto = ExecutiveRelationshipDTO(
-            type=relationship_type,
-            position=clean_position(row.get("ofcps")),
+            # 근거: 공시 접수번호 / 관측일: 결산기준일(사업보고서 연 1회)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")),
+                valid_from=clean_missing(row.get("stlm_dt")),
+                observed_at=clean_missing(row.get("stlm_dt")),
+            ),
+            subtype=subtype,
+            position=position,
             employment_type=clean_missing(row.get("fte_at")),
             duty=_parse_duty(row.get("chrg_job"), corp_code, name),
             main_career=_parse_main_career(row.get("main_career"), corp_code, name),
@@ -158,9 +186,9 @@ def normalize_executives(rows: list[dict[str, Any]], corp_code: str) -> Normaliz
 
         relationships.append(
             RelationshipDTO(
-                type=relationship_type,
-                from_key=make_entity_ref("Person", name),
-                to_key=make_entity_ref("Company", corp_code),
+                type=ExecutiveRelationshipDTO.type,
+                from_key=from_ref,
+                to_key=to_ref,
                 properties=relationship_dto.to_properties(),
             )
         )

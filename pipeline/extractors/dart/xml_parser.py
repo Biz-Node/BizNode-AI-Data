@@ -7,9 +7,14 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Union
 
+from lxml import etree as LET
+
 _ENCODING_DECL_RE = re.compile(rb'encoding=["\']([\w-]+)["\']')
+_XML_DECL_RE = re.compile(r"<\?xml[^>]*\?>")
 _BARE_AMPERSAND_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)")
 _BARE_LESS_THAN_RE = re.compile(r"<(?![a-zA-Z_/!?])")
+# XML 1.0에서 허용 안 되는 제어문자(탭·개행 제외) — DART 원문에 종종 섞임
+_INVALID_XML_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _TITLE_PREFIX_RE = re.compile(r"^(?:[IVXLCDM]+\.|\d+(?:-\d+)?\.)\s*")
 _TITLE_BRACKET_RE = re.compile(r"^【\s*(.+?)\s*】$")
 
@@ -26,10 +31,12 @@ def _read_xml_text(xml_path: Union[str, Path]) -> str:
 
 
 def _sanitize_for_parsing(xml_text: str) -> str:
-    """XML 파서가 처리할 수 없는 bare &나 <를 이스케이프한다."""
-    escaped = _BARE_AMPERSAND_RE.sub("&amp;", xml_text)
-    escaped = _BARE_LESS_THAN_RE.sub("&lt;", escaped)
-    return escaped
+    """파서가 처리할 수 없는 bare &·<, 제어문자, XML 선언을 정리한다."""
+    text = _XML_DECL_RE.sub("", xml_text)  # 선언 제거(lxml str 파싱 위해)
+    text = _INVALID_XML_CHARS_RE.sub("", text)
+    text = _BARE_AMPERSAND_RE.sub("&amp;", text)
+    text = _BARE_LESS_THAN_RE.sub("&lt;", text)
+    return text
 
 
 def _normalize_section_title(raw_title: str) -> str:
@@ -50,16 +57,22 @@ def parse_sections(xml_path: Union[str, Path]) -> dict[str, str]:
 
     sanitized = _sanitize_for_parsing(xml_text)
 
+    # DART 원문은 지저분해 recover 파서로 malformed를 복구한다. huge_tree=대형 보고서.
+    parser = LET.XMLParser(recover=True, huge_tree=True, resolve_entities=False)
     try:
-        root = ET.fromstring(sanitized)
-    except ET.ParseError as exc:
+        root = LET.fromstring(sanitized, parser)
+    except Exception as exc:
         raise DartXmlParseError(f"{xml_path} XML 파싱 실패: {exc!r}") from exc
+    if root is None:
+        raise DartXmlParseError(f"{xml_path} XML 파싱 실패: 루트 없음")
 
     sections: dict[str, str] = {}
 
     for elem in root.iter():
+        if not isinstance(elem.tag, str):  # 주석·PI 등 제외
+            continue
         children = list(elem)
-        if not children or children[0].tag != "TITLE": # TITLE 태그가 없는 섹션은 건너뜀.
+        if not children or children[0].tag != "TITLE":  # TITLE 없는 섹션 건너뜀
             continue
         raw_title = "".join(children[0].itertext()).strip()
         if not raw_title:
@@ -67,6 +80,6 @@ def parse_sections(xml_path: Union[str, Path]) -> dict[str, str]:
         title = _normalize_section_title(raw_title)
         if not title or title in sections:
             continue
-        sections[title] = ET.tostring(elem, encoding="unicode")
+        sections[title] = LET.tostring(elem, encoding="unicode")
 
     return sections

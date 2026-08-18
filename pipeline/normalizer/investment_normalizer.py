@@ -1,16 +1,17 @@
-# 타법인 출자현황 (30번) 정규화를 담당하는 모듈.
+# 타법인 출자현황 (30번) 정규화 → OWNS_STAKE_IN{subtype:"자회사"/"출자"}
 
 from __future__ import annotations
+
 from typing import Any
+
 from schemas.dart_schemas import (
-    CompanyDTO,
     EntityDTO,
-    EntityType,
-    InvestmentVehicleDTO,
-    InvestsInRelationshipDTO,
     NormalizedDocument,
+    OwnsStakeInRelationshipDTO,
     RelationshipDTO,
-    make_entity_ref,
+    STAKE_SUBTYPE_INVEST,
+    STAKE_SUBTYPE_SUBSIDIARY,
+    standard_edge_meta,
 )
 from pipeline.normalizer.base import (
     clean_missing,
@@ -19,87 +20,85 @@ from pipeline.normalizer.base import (
     is_total_row,
     parse_float,
     parse_int,
-    resolve_investee_corp_code,
 )
-from pipeline.normalizer.common import is_investment_vehicle
+from pipeline.normalizer.entities import build_company, master_company_ref
+
+# 지분율이 이 값을 **넘으면** "자회사", 아니면 "출자"로 subtype 판정.
+#
+# ★`>=`가 아니라 `>`다. 상법상 자회사는 지분 **50% 초과**이고, 정확히 50%면
+#   지배력이 없는 **합작(JV)**이다. 실측(2026-08-01): `>=`로 판정해 50.0%인
+#   합작사 14건이 자회사로 들어와 있었다:
+#       현대모비스 → Beijing Hyundai Mobis Parts (50.0%)   ← 베이징현대와의 합작
+#       LG전자 → Arcelik-LG Klima (50.0%)                 ← 아르첼릭과의 합작
+#   지분 구조를 보여 주는 화면에서 「자회사」와 「합작」은 뜻이 전혀 다르다.
+_SUBSIDIARY_RATIO_THRESHOLD = 50.0
+
 
 def normalize_investments(rows: list[dict[str, Any]], corp_code: str) -> NormalizedDocument:
-    """타법인 출자현황을 Company/InvestmentVehicle 엔티티와 INVESTS_IN 관계로 변환한다."""
-
-    entities: dict[tuple[EntityType, str], EntityDTO] = {}
+    """타법인 출자현황을 회사 → 피투자사 OWNS_STAKE_IN 관계로 변환한다.
+    방향: 출자회사(소유주체) → 피투자사(소유대상) [outbound].
+    """
+    entities: dict[str, EntityDTO] = {}
     relationships: list[RelationshipDTO] = []
+    from_ref = master_company_ref(corp_code)
 
     for row in rows:
         name = clean_name(row.get("inv_prm"))
         if name is None or is_total_row(name):
             continue
 
+        entity, to_ref = build_company(name)
+        # 피투자사 재무 스냅샷 보강 (표시용)
         total_assets = parse_float(row.get("recent_bsns_year_fnnr_sttus_tot_assets"))
         net_profit = parse_float(row.get("recent_bsns_year_fnnr_sttus_thstrm_ntpf"))
-        
-        # 피투자 회사를 Company 또는 InvestmentVehicle로 구분한다.
-        vehicle_type = is_investment_vehicle(name)
-        entity_type: EntityType = "InvestmentVehicle" if vehicle_type else "Company"
-        entity_key = (entity_type, name)
-        
-        if entity_key not in entities:
-            if vehicle_type:
-                vehicle = InvestmentVehicleDTO(name=name, vehicle_type=vehicle_type)
-                properties = vehicle.to_properties()
-            else:
-                matched_corp_code, matched_stock_code, matched_market = resolve_investee_corp_code(name)
-                company = CompanyDTO(
-                    name=name,
-                    corp_code=matched_corp_code,
-                    stock_code=matched_stock_code,
-                    market=matched_market,
-                    total_assets=total_assets,
-                    net_profit=net_profit,
-                )
-                properties = company.to_properties()
+        if total_assets is not None:
+            entity.properties["total_assets"] = total_assets
+        if net_profit is not None:
+            entity.properties["net_profit"] = net_profit
+        entities.setdefault(entity.key, entity)
 
-            entities[entity_key] = EntityDTO(type=entity_type, key=name, properties=properties)
+        ratio = parse_float(row.get("trmend_blce_qota_rt"))
+        previous_ratio = parse_float(row.get("bsis_blce_qota_rt"))
+        ratio_change = (
+            round(ratio - previous_ratio, 2)
+            if ratio is not None and previous_ratio is not None else None
+        )
+        subtype = (
+            STAKE_SUBTYPE_SUBSIDIARY
+            if ratio is not None and ratio > _SUBSIDIARY_RATIO_THRESHOLD
+            else STAKE_SUBTYPE_INVEST
+        )
+        first_acquired = convert_dotted_date(row.get("frst_acqs_de"))
 
-        # 기초·기말 지분율을 비교해 증감 정보를 계산한다.
-        share_ratio = parse_float(row.get("trmend_blce_qota_rt"))
-        previous_share_ratio = parse_float(row.get("bsis_blce_qota_rt"))
-        share_ratio_change = (
-            round(share_ratio - previous_share_ratio, 2)
-            if share_ratio is not None and previous_share_ratio is not None
-            else None
-        )
-        investment_increased = (
-            share_ratio > previous_share_ratio
-            if share_ratio is not None and previous_share_ratio is not None
-            else False
-        )
-        investment_decreased = (
-            share_ratio < previous_share_ratio
-            if share_ratio is not None and previous_share_ratio is not None
-            else False
-        )
-
-        # INVESTS_IN 관계를 생성한다.
-        relationship_dto = InvestsInRelationshipDTO(
-            purpose=clean_missing(row.get("invstmnt_purps")),
-            first_acquired=convert_dotted_date(row.get("frst_acqs_de")),
-            first_acquired_amount=parse_int(row.get("frst_acqs_amount")),
-            share_ratio=share_ratio,
-            previous_share_ratio=previous_share_ratio,
-            share_ratio_change=share_ratio_change,
-            investment_increased=investment_increased,
-            investment_decreased=investment_decreased,
-            book_value=parse_int(row.get("trmend_blce_acntbk_amount")),
+        rel = OwnsStakeInRelationshipDTO(
+            subtype=subtype,
+            # 근거: 공시 접수번호 / 관측일: 결산기준일(valid_from은 최초취득일이라 별개)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")),
+                valid_from=first_acquired,
+                observed_at=clean_missing(row.get("stlm_dt")),
+            ),
+            ratio=ratio,
+            previous_ratio=previous_ratio,
+            ratio_change=ratio_change,
             settlement_date=clean_missing(row.get("stlm_dt")),
+            purpose=clean_missing(row.get("invstmnt_purps")),
+            first_acquired=first_acquired,
+            first_acquired_amount=parse_int(row.get("frst_acqs_amount")),
+            book_value=parse_int(row.get("trmend_blce_acntbk_amount")),
+            investment_increased=(
+                ratio > previous_ratio if ratio is not None and previous_ratio is not None else None
+            ),
+            investment_decreased=(
+                ratio < previous_ratio if ratio is not None and previous_ratio is not None else None
+            ),
         )
-
-        # INVESTS_IN 관계를 추가한다.
         relationships.append(
             RelationshipDTO(
-                type=InvestsInRelationshipDTO.type,
-                from_key=make_entity_ref("Company", corp_code),
-                to_key=make_entity_ref(entity_type, name),
-                properties=relationship_dto.to_properties(),
+                type=OwnsStakeInRelationshipDTO.type,
+                from_key=from_ref,
+                to_key=to_ref,
+                properties=rel.to_properties(),
             )
         )
 

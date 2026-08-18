@@ -194,7 +194,36 @@ InvesteeMatch = tuple[str, Optional[str], Optional[str]]
 # (name, stock_code, market) — corp_code 기준 역인덱스 조회 결과.
 CorpCodeInfo = tuple[str, Optional[str], Optional[str]]
 
+# 영문 법인격 접미어 — 한글 `㈜`·`주식회사`에 해당한다.
+# 이걸 안 떼면 "Applied Materials, Inc"와 "Applied Materials Inc."가 **다른 노드**가 된다
+# (stub Company는 norm_name이 곧 식별자다). 실제로 해외 자회사·거래처에서 다발했다.
+_EN_LEGAL_SUFFIXES = frozenset({
+    "inc", "incorporated", "corp", "corporation", "co", "company",
+    "ltd", "limited", "llc", "llp", "lp", "plc",
+    "gmbh", "ag", "sa", "nv", "bv", "as", "ab", "oy", "spa", "srl", "sas",
+    "pty", "pte", "kk", "kabushiki", "kaisha", "holdings", "holding",
+})
+# 토큰 분리용 — 쉼표·마침표·괄호는 경계로 본다
+_TOKEN_SPLIT_RE = re.compile(r"[\s,.()\[\]]+")
+
+
+def _strip_en_legal_suffix(name: str) -> str:
+    """뒤쪽 법인격 토큰을 반복 제거. 'ROBOTIS Beijing Co., Ltd.' → 'ROBOTIS Beijing'.
+
+    **뒤에서부터만** 떼므로 이름 가운데의 'Co'는 건드리지 않는다
+    (예: 'Coway'는 토큰이 통째로 'coway'라 대상 아님).
+    """
+    tokens = [t for t in _TOKEN_SPLIT_RE.split(name) if t]
+    while tokens and tokens[-1].lower() in _EN_LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens) if tokens else name
+
+
 def normalize_company_name(name: str) -> str:
+    """MERGE 키로 쓰는 정규화명. 표기 변형이 같은 값으로 모여야 한다.
+
+    한글 법인격 + 영문 법인격 + 구두점 + 대소문자 + 공백을 모두 흡수한다.
+    """
     cleaned = name
 
     cleaned = cleaned.replace("㈜", "")
@@ -206,7 +235,16 @@ def normalize_company_name(name: str) -> str:
     cleaned = _NOTE_RE.sub("", cleaned)
     cleaned = _STATUS_RE.sub("", cleaned)
 
-    return re.sub(r"\s+", "", cleaned).strip()
+    cleaned = _strip_en_legal_suffix(cleaned)
+
+    # 남은 구두점 제거 + 소문자화(영문 표기 흔들림 흡수) + 공백 제거
+    cleaned = re.sub(r"[,.·'\"`]+", "", cleaned)
+    key = re.sub(r"\s+", "", cleaned).strip().lower()
+
+    # 해외 기업 한글·영문 표기 통일 (「Netlist」/「넷리스트」가 별개 노드가 되는 것 방지)
+    from pipeline.normalizer.foreign_aliases import apply_alias
+
+    return apply_alias(key)
 
 
 @lru_cache(maxsize=1)

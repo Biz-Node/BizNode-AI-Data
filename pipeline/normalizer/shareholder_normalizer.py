@@ -1,103 +1,191 @@
-# 최대주주 현황 (17번) 정규화를 담당하는 모듈.
+# 최대주주 현황 (17번) 정규화 → OWNS_STAKE_IN{subtype:"최대주주" 또는 "특수관계인"}
+#
+# API가 **최대주주 그룹 전원**을 주므로 relate 필드로 갈라야 한다.
+# 「본인」인 행만 최대주주, 나머지(계열회사·친족·재단·임원)는 특수관계인이다.
+# 같은 주주가 보통주·우선주 행으로 나뉘어 오는 것도 여기서 하나로 고른다.
 
 from __future__ import annotations
+
 from typing import Any
+
 from schemas.dart_schemas import (
-    CompanyDTO,
     EntityDTO,
-    EntityType,
-    InvestmentVehicleDTO,
     NormalizedDocument,
-    OwnsShareRelationshipDTO,
-    PersonDTO,
+    OwnsStakeInRelationshipDTO,
     RelationshipDTO,
-    make_entity_ref,
+    STAKE_SUBTYPE_MAJOR,
+    STAKE_SUBTYPE_RELATED,
+    standard_edge_meta,
 )
 from pipeline.normalizer.base import (
     clean_missing,
     clean_name,
-    is_company_name,
     is_total_row,
     match_change_reason,
     parse_float,
     parse_int,
 )
-from pipeline.normalizer.common import is_investment_vehicle
+from pipeline.normalizer.entities import build_company, build_person, looks_like_company, master_company_ref
+from pipeline.normalizer.person_index import lookup_birth
+
+# 개인 주주 폭발 방지(방법서 §10[2]): 개인은 5% 이상만 노드화.
+# <5% 특수관계인(친인척 0.x%)은 N차 리스크 추론에 무용 → 제외. 법인·펀드는 무관.
+_PERSON_MIN_RATIO = 5.0
+
+# ★예외: 지분이 낮아도 '지배구조 핵심'인 개인은 유지한다.
+# 한국 재벌은 총수가 낮은 지분(이재용 1.65%)으로 순환출자를 통해 지배하므로
+# 지분율만으로 거르면 총수를 놓친다. DART relate(관계) 필드가 신분을 알려준다.
+#   유지: "최대주주 본인"/"본인"/"최대주주"/"최대주주의 특수관계인"/"최대주주의 자"
+#   제외: 일반 "특수관계인"·"미등기임원"·"계열회사 임원" (5% 미만이면)
+_CONTROLLING_RELATE_MARKER = "최대주주"
+_SELF_RELATE_VALUES = {"본인"}
+
+
+def _is_controlling_person(relate: str | None) -> bool:
+    """relate가 최대주주 본인·총수 일가를 가리키면 True (지분 무관 유지)."""
+    if not relate:
+        return False
+    normalized = relate.replace(" ", "").replace("\n", "")
+    return _CONTROLLING_RELATE_MARKER in normalized or normalized in _SELF_RELATE_VALUES
+
+
+# ── subtype 판정 ────────────────────────────────────────────
+# ★DART 「최대주주 및 특수관계인 현황」은 **그룹 전원**을 돌려준다. 그중
+#   relate가 「본인」인 행 하나만 실제 최대주주이고 나머지는 특수관계인이다.
+#   전원을 `최대주주`로 붙였더니 화면에 이런 게 떴다(실측 2026-08-01, 44건):
+#       현대글로비스 -최대주주-> 현대모비스   지분 0.72%  relate=계열회사
+#       삼성생명   -최대주주-> 삼성에스디에스  지분 0.06%  relate=계열회사
+#   「최대주주」는 지배구조 화면의 핵심 라벨이라 틀리면 바로 눈에 띈다.
+_SELF_MARKERS = ("본인",)
+
+
+def _stake_subtype(relate: str | None) -> str:
+    """relate → subtype. 「본인」만 최대주주, 나머지는 특수관계인."""
+    normalized = (relate or "").replace(" ", "").replace("\n", "")
+    if not normalized:
+        # relate가 비면 판정 근거가 없다. 최대주주 API의 행이므로 특수관계인보다는
+        # 최대주주 쪽이 맞을 확률이 높지만, 단정하지 않고 기존 값을 유지한다.
+        return STAKE_SUBTYPE_MAJOR
+    if any(m in normalized for m in _SELF_MARKERS) or normalized == "최대주주":
+        return STAKE_SUBTYPE_MAJOR
+    return STAKE_SUBTYPE_RELATED
+
+
+# ── 주식 종류별 분리 행 ──────────────────────────────────────
+# ★DART는 **같은 주주를 주식 종류마다 따로** 준다(보통주 행 + 우선주 행).
+#   적재는 (주주, 회사, subtype)로 MERGE하므로 뒤 행이 앞 행을 **덮어쓴다**.
+#   실측(2026-08-01): 삼성생명의 삼성전자 지분이 **우선주 0.01%(43,950주)**로
+#   남고 보통주 8.51%가 사라져 있었다. 「최대주주 지분 0.01%」로 화면에 뜬다.
+#
+#   합산하지 않는 이유 — 보통주와 우선주는 **분모가 다른 비율**이라 더할 수 없고,
+#   지배구조에서 말하는 지분은 **의결권 있는 보통주**다. 보통주 행을 남기고
+#   우선주는 별도 속성으로 붙인다.
+_COMMON_STOCK = ("보통", "의결권")
+
+
+def _is_common_stock(share_type: str | None) -> bool:
+    return any(m in (share_type or "") for m in _COMMON_STOCK)
+
+
+def _pick_primary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """주주별로 **보통주 행 하나**만 남긴다. 없으면 지분이 가장 큰 행."""
+    by_holder: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_holder.setdefault((clean_name(row.get("nm")) or ""), []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for name, group in by_holder.items():
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        common = [g for g in group if _is_common_stock(g.get("stock_knd"))]
+        pick = max(common or group,
+                   key=lambda g: parse_float(g.get("trmend_posesn_stock_qota_rt")) or 0.0)
+        # 버린 행도 흔적을 남긴다 — 우선주 지분이 궁금할 때 되짚을 수 있게
+        others = [f"{g.get('stock_knd')} "
+                  f"{parse_float(g.get('trmend_posesn_stock_qota_rt')) or 0}%"
+                  for g in group if g is not pick]
+        pick = dict(pick)
+        pick["_other_share_types"] = " · ".join(others)
+        out.append(pick)
+    return out
 
 
 def normalize_shareholders(rows: list[dict[str, Any]], corp_code: str) -> NormalizedDocument:
-    """최대주주 현황을 Person/Company/InvestmentVehicle 엔티티와 OWNS_SHARE 관계로 변환한다."""
-
-    entities: dict[tuple[EntityType, str], EntityDTO] = {}
+    """최대주주 현황을 주주(Person/Company) → 대상회사 OWNS_STAKE_IN 관계로 변환한다.
+    방향: 주주(소유주체) → 회사(소유대상) [outbound].
+    """
+    entities: dict[str, EntityDTO] = {}
     relationships: list[RelationshipDTO] = []
+    to_ref = master_company_ref(corp_code)
 
-    for row in rows:
+    for row in _pick_primary_rows(rows):
         name = clean_name(row.get("nm"))
         if name is None or is_total_row(name):
             continue
-        
-        # 주주를 Person, Company 또는 InvestmentVehicle로 구분한다.
-        vehicle_type = is_investment_vehicle(name)
-        entity_type: EntityType = (
-            "InvestmentVehicle"
-            if vehicle_type
-            else "Company"
-            if is_company_name(name)
-            else "Person"
-        )
 
-        # 동일 주주는 한 번만 엔티티로 생성한다.
-        entity_key = (entity_type, name)
-        if entity_key not in entities:
-            if vehicle_type:
-                properties = InvestmentVehicleDTO(name=name, vehicle_type=vehicle_type).to_properties()
-            elif entity_type == "Company":
-                properties = CompanyDTO(name=name).to_properties()
-            else:
-                properties = PersonDTO(name=name).to_properties()
-            entities[entity_key] = EntityDTO(type=entity_type, key=name, properties=properties)
+        ratio = parse_float(row.get("trmend_posesn_stock_qota_rt"))
+        shareholder_relation = clean_missing(row.get("relate"))
+        is_company = looks_like_company(name)
+
+        # 개인은 5% 이상 또는 지배구조 핵심(최대주주 본인·총수 일가)만 (§10[2]).
+        # 법인·펀드는 지분 무관 유지.
+        if not is_company:
+            has_stake = ratio is not None and ratio >= _PERSON_MIN_RATIO
+            if not has_stake and not _is_controlling_person(shareholder_relation):
+                continue
+
+        # 주주를 Company(펀드 포함) 또는 Person으로 분류
+        # 개인은 전역 임원 인덱스에서 생년월을 찾아 person_key를 안정화한다
+        # (없으면 name@corp 폴백 → 회사 간 분열은 P2 ER이 처리)
+        if is_company:
+            entity, from_ref = build_company(name)
+        else:
+            entity, from_ref = build_person(name, lookup_birth(name), None, corp_code)
+        entities.setdefault(entity.key, entity)
 
         share_count = parse_int(row.get("trmend_posesn_stock_co"))
         previous_share_count = parse_int(row.get("bsis_posesn_stock_co"))
-        share_ratio = parse_float(row.get("trmend_posesn_stock_qota_rt"))
-        previous_share_ratio = parse_float(row.get("bsis_posesn_stock_qota_rt"))
+        previous_ratio = parse_float(row.get("bsis_posesn_stock_qota_rt"))
         remark = clean_missing(row.get("rm"))
+        settlement_date = clean_missing(row.get("stlm_dt"))
 
-        # 기초·기말 보유량과 지분율을 비교해 증감 정보를 계산한다.
         share_count_change = (
             share_count - previous_share_count
-            if share_count is not None and previous_share_count is not None
-            else None
+            if share_count is not None and previous_share_count is not None else None
         )
-        share_ratio_change = (
-            round(share_ratio - previous_share_ratio, 2)
-            if share_ratio is not None and previous_share_ratio is not None
-            else None
+        ratio_change = (
+            round(ratio - previous_ratio, 2)
+            if ratio is not None and previous_ratio is not None else None
         )
 
-        # OWNS_SHARE 관계를 생성한다.
-        relationship_dto = OwnsShareRelationshipDTO(
-            share_type=clean_missing(row.get("stock_knd")),
-            shareholder_relation=clean_missing(row.get("relate")),
+        rel = OwnsStakeInRelationshipDTO(
+            subtype=_stake_subtype(shareholder_relation),
+            # 근거: 공시 접수번호 / 관측일: 결산기준일(사업보고서 연 1회)
+            meta=standard_edge_meta(
+                source_doc=clean_missing(row.get("rcept_no")),
+                valid_from=settlement_date,
+                observed_at=settlement_date,
+            ),
+            ratio=ratio,
+            previous_ratio=previous_ratio,
+            ratio_change=ratio_change,
+            settlement_date=settlement_date,
+            shareholder_relation=shareholder_relation,
             share_count=share_count,
             previous_share_count=previous_share_count,
-            share_ratio=share_ratio,
-            previous_share_ratio=previous_share_ratio,
-            remark=remark,
-            change_reason=match_change_reason(remark),
             share_count_change=share_count_change,
-            share_ratio_change=share_ratio_change,
             ownership_changed=bool(share_count_change),
-            settlement_date=clean_missing(row.get("stlm_dt")),
+            change_reason=match_change_reason(remark),
+            share_type=clean_missing(row.get("stock_knd")),
+            remark=remark,
         )
-
-        # OWNS_SHARE 관계를 추가한다.
         relationships.append(
             RelationshipDTO(
-                type=OwnsShareRelationshipDTO.type,
-                from_key=make_entity_ref(entity_type, name),
-                to_key=make_entity_ref("Company", corp_code),
-                properties=relationship_dto.to_properties(),
+                type=OwnsStakeInRelationshipDTO.type,
+                from_key=from_ref,
+                to_key=to_ref,
+                properties=rel.to_properties(),
             )
         )
 
