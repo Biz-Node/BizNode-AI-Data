@@ -48,7 +48,7 @@ from pydantic import BaseModel, Field
 
 class DetailLevel(str, Enum):
     """이 기업에 대해 **얼마나 아는가.** `relations_only` 가 정상이다 —
-    3,432곳 중 재무 477 · 시세 427 · 공시 64.
+    3,432곳 중 재무 477 · 시세 417 · 공시 64.
     """
 
     full = "full"                      # 재무·공시·사업부문까지 (시드 64곳)
@@ -389,7 +389,7 @@ class MarketUnavailable(str, Enum):
 
 
 class MarketResponse(BaseModel):
-    """상장사 427곳에만 있다. 없을 때 **왜 없는지**를 함께 보낸다."""
+    """시세가 있는 회사는 417곳뿐이다. 없을 때 **왜 없는지**를 함께 보낸다."""
 
     key: str = Field(examples=["00126380"])
     listed: bool = Field(True, description="`false` 면 아래가 전부 `null` — **오류가 아니다**")

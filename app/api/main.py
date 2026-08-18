@@ -67,8 +67,8 @@ app = FastAPI(
         "- `in_graph = false` — **실재하지만 우리가 안 모은 회사**입니다. "
         "「없는 회사」가 아니라 「자료가 없는 회사」로 표시합니다\n"
         "- `detail_level = relations_only` — 재무가 **없는 게 정상**입니다 "
-        "(3,432곳 중 재무 477 · 시세 427 · 공시 64)\n"
-        "- `listed = false` — 비상장 3,005곳은 시장 블록이 통째로 `null` 입니다\n"
+        "(3,432곳 중 재무 477 · 시세 417 · 공시 64)\n"
+        "- `listed = false` — 상장 표시가 없는 2,980곳은 시장 블록이 통째로 `null` 입니다\n"
         "- `counts` vs 목록 길이 — 상세는 블록마다 **10건**까지입니다. "
         "「148건 중 10건」이라 쓰고 전체는 서브 라우트로 가져옵니다\n"
         "- `islands` — 아무와도 안 이어진 기업을 **억지로 잇지 않습니다**\n"
@@ -175,7 +175,7 @@ def market_of(key: str, days: int = Query(30, ge=1, le=365)) -> MarketResponse:
 
     - **시총·PER·PBR·PSR 은 저장하지 않고 조회 때 계산한다.** 그래서
       `fin_year`·`fs_div` 가 함께 나간다 — 화면이 「2025년 연결 기준」이라 밝힌다.
-    - 상장사 **427곳**에만 있다. 아니면 `listed=false` 에 나머지가 `null`.
+    - 시세가 있는 회사는 **417곳**뿐이다. 없으면 `listed=false` 에 나머지가 `null`.
     - 적자면 `per` 이 `null`. 음수 PER 을 만들지 않는다.
     """
     return MarketResponse(**company_service.market_of(key, days=days))
@@ -270,7 +270,7 @@ def company_detail(key: str) -> CompanyDetail:
       전체 목록은 서브 라우트(`/events`·`/products`·`/relations` …).
     - `blocks` 로 블록마다 채움 정도를 본다. `detail_level` 하나로는
       「재무는 있는데 공시가 없다」를 표현할 수 없다.
-    - **재무가 없는 게 정상이다** — 3,432곳 중 재무 477 · 시세 427 · 공시 64.
+    - **재무가 없는 게 정상이다** — 3,432곳 중 재무 477 · 시세 417 · 공시 64.
     - `graph` 와 `related` 는 **같은 관계 집합**이다. 목록에서 한 줄을 누르면
       그래프의 그 선을 강조할 수 있다.
     """

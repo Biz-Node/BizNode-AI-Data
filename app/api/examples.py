@@ -27,7 +27,7 @@
       심텍 PER     적자라 null
       고영        워크스페이스에서 **섬**이 되는 기업
 
-  실제 분포가 이걸 요구한다: Company 3,432곳 중 재무 477(14%) · 시세 427(12%) ·
+  실제 분포가 이걸 요구한다: Company 3,432곳 중 재무 477(14%) · 시세 417(12%) ·
   공시 64(1.9%). **대부분은 이름·업종·관계만 있는 게 정상이다.**
 """
 
@@ -167,7 +167,7 @@ MARKET_RESPONSE = MarketResponse(
     ],
 )
 
-# ★비상장 — 3,005곳이 이 모양이다. **오류가 아니다**
+# ★상장 표시가 없는 2,980곳이 이 모양이다. **오류가 아니다**
 MARKET_UNLISTED = MarketResponse(key="엔비디아", listed=False, stock_code=None,
                                  unavailable_reason="unlisted", latest=None, series=[])
 
