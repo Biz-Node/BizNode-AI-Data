@@ -24,6 +24,7 @@
 
 실행:
     uvicorn app.api.main:app --reload --port 8100
+    python -m uvicorn app.api.main:app --reload --port 8100 
     → http://localhost:8100/docs      대화형 문서 (백엔드가 볼 것)
     → http://localhost:8100/openapi.json   클라이언트 자동 생성용
 """
