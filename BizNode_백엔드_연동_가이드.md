@@ -16,12 +16,10 @@
 # 1) DB 셋을 띄운다 (Neo4j 7687 · PostgreSQL 5432 · ChromaDB 8001)
 docker compose up -d
 
-# 2) API 를 띄운다
-.\.venv\Scripts\python.exe -m uvicorn app.api.main:app --port 8100
+# 2) 가상환경 세팅 후 API 를 띄운다
+python -m uvicorn app.api.main:app --port 8100
 ```
 
-> `python -m uvicorn` 으로 실행하면 시스템 파이썬을 잡아 `psycopg` 를 못 찾습니다.
-> **반드시 `.venv` 의 파이썬**을 쓰세요.
 
 ```
 http://localhost:8100/docs        라우트 21개 · Try it out 으로 바로 호출
