@@ -221,7 +221,13 @@ def normalize_company_name(name: str) -> str:
     cleaned = _strip_en_legal_suffix(cleaned)
 
     # 남은 구두점 제거 + 소문자화(영문 표기 흔들림 흡수) + 공백 제거
-    cleaned = re.sub(r"[,.·'\"`]+", "", cleaned)
+    #
+    # ★슬래시(`/`)도 지운다. `norm_name` 은 corp_code 가 없는 회사의 **키**이고,
+    #   그 키가 URL 경로에 들어간다 — `/companies/한국s/w공제조합` 은 경로가
+    #   갈라져 조회가 안 된다(2026-08-17 실측: 12곳이 404).
+    #   `%2F` 로 인코딩해도 서버가 정규화해서 소용없다. **키에 슬래시를 안 넣는 게**
+    #   유일한 해법이다.
+    cleaned = re.sub(r"[,.·'\"`/]+", "", cleaned)
     key = re.sub(r"\s+", "", cleaned).strip().lower()
 
     # 해외 기업 한글·영문 표기 통일 (「Netlist」/「넷리스트」가 별개 노드가 되는 것 방지)
