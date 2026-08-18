@@ -138,14 +138,16 @@ CHECKS: list[tuple[str, str, str]] = [
        RETURN elementId(r) AS eid,
               labels(a)[0] + ' ' + a.name + ' → ' + b.name AS detail"""),
 
+    # 필드명이 `contract_amount` → `amount`로 통일됐다(2026-08-12).
+    # 뉴스도 같은 칸에 금액을 넣는다 — `ontology.AMOUNT_RULES`.
     ("계약금액 이상",
      "공급계약 금액이 0 이하이거나 100조를 넘는다",
      f"""MATCH (a)-[r:SUPPLIES_TO]->(b) WHERE {_DART}
-         AND r.contract_amount IS NOT NULL
-         AND (toFloat(r.contract_amount) <= 0
-              OR toFloat(r.contract_amount) > 100000000000000)
+         AND r.amount IS NOT NULL
+         AND (toFloat(r.amount) <= 0
+              OR toFloat(r.amount) > 100000000000000)
        RETURN elementId(r) AS eid,
-              a.name + ' → ' + b.name + '  금액=' + toString(r.contract_amount) AS detail"""),
+              a.name + ' → ' + b.name + '  금액=' + toString(r.amount) AS detail"""),
 
     ("매출비중 범위",
      "revenue_ratio가 0~100 밖",

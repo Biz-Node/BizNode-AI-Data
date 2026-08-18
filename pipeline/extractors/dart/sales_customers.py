@@ -1,7 +1,5 @@
 """사업보고서 「매출 및 수주상황」(II-4)에서 **거래처**를 뽑는다.
 
-★왜 필요한가 (2026-08-01 실측)
-
 거래처 정보의 주 출처가 **공급계약 공시**(단일판매·공급계약 체결)인데, 그건
 계약 규모가 매출의 5%를 넘을 때만 공시 의무가 생긴다. 그래서 소액 다수 거래를
 하는 기업은 한 건도 없다:
@@ -21,11 +19,6 @@
 
 이 모듈은 그 23개사 분량을 회수한다. 원문이 이미 받아져 있어 **DART 재호출이
 필요 없다**(비용은 LLM 추출분뿐).
-
-★문자열 매칭으로 넣지 않는 이유
-섹션에 「삼성전자」가 나온다고 전부 고객사가 아니다 — 「삼성전자 대비 점유율」
-같은 맥락일 수 있고, 조사에서 LG전자가 자기 이름을 매칭한 사례도 있었다.
-그래서 뉴스와 **같은 검증 체계**(LLM 추출 → 매트릭스 → 근거 검증)를 태운다.
 """
 
 from __future__ import annotations
@@ -64,7 +57,11 @@ _SYSTEM = """사업보고서의 「매출 및 수주상황」 절에서 **거래
 【출력】
 · counterparty : 상대 기업명을 **본문에 나온 그대로**
 · direction    : we_supply | they_supply
-· subtype      : 무엇을 거래하는지 짧게 (예: "IC 테스트 소켓", "반도체 장비")
+· subtype      : 무엇을 거래하는지 **원문에 나온 말 그대로** 짧게
+                 (예: "IC 테스트 소켓", "반도체 장비", "OLED material")
+                 ★「공급」·「매출처」처럼 관계 종류를 되풀이하지 마세요 —
+                   SUPPLIES_TO라는 것은 이미 정해져 있습니다.
+                 ★품목을 알 수 없으면 **빈 문자열**로 두세요.
 · evidence     : 근거가 된 **원문 문장을 그대로** 인용 (요약 금지)
 아무것도 없으면 빈 배열을 돌려주세요."""
 
@@ -137,7 +134,9 @@ def extract_customers(corp_name: str, section_text: str) -> list[dict]:
             "edge_type": "SUPPLIES_TO",
             "counterparty": name,
             "direction": c.get("direction") or "we_supply",
-            "subtype": (c.get("subtype") or "").strip() or "매출처",
+            # ★"매출처" 기본값을 뺐다(2026-08-11). 품목을 못 뽑았을 때 관계
+            #   종류를 되풀이해 넣으면 「모름」과 구분이 안 된다. 비워 둔다.
+            "subtype": (c.get("subtype") or "").strip(),
             "evidence": (c.get("evidence") or "").strip(),
         })
     return out

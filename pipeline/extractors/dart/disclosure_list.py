@@ -1,7 +1,7 @@
-"""공시검색(list.json)으로 특정 유형 공시 목록 수집 (경로 B 진입점).
+"""공시검색(list.json)으로 특정 유형 공시 목록 수집.
 
 list.json은 응답에 pblntf_ty(유형코드)를 싣지 않으므로 report_nm(보고서명)
-부분일치로 필터한다(Sprint 0 실측). 시계열 반복·정정 공시 포함.
+부분일치로 필터한다. 시계열 반복·정정 공시 포함.
 """
 
 from __future__ import annotations

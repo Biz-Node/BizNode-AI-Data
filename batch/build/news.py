@@ -23,6 +23,7 @@ from pipeline.importer.person_er import resolve_persons
 from pipeline.importer.staging import stage_document
 from pipeline.news.collector import collect_and_screen
 from pipeline.news.extractor import extract_relations
+from pipeline.normalizer.product_registry import prompt_block as product_prompt_block
 from pipeline.normalizer import resolver
 from pipeline.normalizer.relations import record_unmapped
 
@@ -65,13 +66,32 @@ def main() -> int:
         targets = screened[: args.limit]
 
         print(f"\n[4/5] 관계 추출 ({len(targets)}건 기사, 상위 모델)")
+        # 이미 쓰는 제품명을 프롬프트에 붙인다 — 표기가 갈려 노드가 쪼개지는 걸 막는다
+        prod_block = product_prompt_block(conn)
         for i, s in enumerate(targets, 1):
-            relations = extract_relations(s.article.title, s.article.body, s.matched_names)
+            relations = extract_relations(s.article.title, s.article.body,
+                                          s.matched_names, prod_block)
+
+            # ★추출 완료 표시는 **시도한 즉시** 남긴다(2026-08-13 수정).
+            #
+            #   전에는 아래 `if not relations: continue` 뒤, 엣지를 만든 기사에만
+            #   표시했다. 그래서 **엣지가 0건인 기사는 영원히 미완료로 남았다.**
+            #   돈은 이미 냈는데 기록이 없으니, 나중에 보면 「안 뽑은 기사」와
+            #   구분되지 않는다. 실측(2026-08-13): 네이버 경로 295건이 이 상태로
+            #   쌓여 있었고, 다시 뽑으면 또 0건이 나올 것들이라 헛돈이 된다.
+            #
+            #   `pilot_company`는 처음부터 「시도한 전부에 표시」였다. 같은 규칙을
+            #   여기에도 맞춘다 — 엣지가 안 나온 기사를 다시 뽑아도 또 안 나온다.
+            with conn.cursor() as cur:
+                cur.execute("UPDATE news_articles SET extracted_at = now() WHERE url = %s",
+                            (s.article.url,))
+
             if not relations:
                 continue
             doc, evs, unmapped = build_news_document(
                 relations, s.article.url, s.article.title,
                 s.article.published_at.date() if s.article.published_at else None,
+                conn=conn,
             )
             n, invalid = stage_document(conn, f"news:{s.article.url}", doc)
             all_evidence.extend(evs)
@@ -86,10 +106,6 @@ def main() -> int:
             drop_note = f", 미매핑 {len(unmapped)}" if unmapped else ""
             print(f"  [{i}/{len(targets)}] {s.article.title[:44]} "
                   f"→ 엣지 {n} (위반 {invalid}{drop_note})")
-
-            with conn.cursor() as cur:
-                cur.execute("UPDATE news_articles SET extracted_at = now() WHERE url = %s",
-                            (s.article.url,))
 
         print(f"  → 총 {total_edges}건 스테이징 "
               f"(매트릭스 위반 {total_invalid}건 차단, 미매핑 {total_unmapped}건 기록)")

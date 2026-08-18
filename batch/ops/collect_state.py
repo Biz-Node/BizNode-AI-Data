@@ -65,8 +65,9 @@ def main() -> int:
         return 0
 
     ng = len(ONTOLOGY_GROUPS)
-    print(f"■ 중단된 수집 {len(files)}건  (질의어 묶음 {ng}개 기준)\n")
+    print(f"■ 남아 있는 중간본 {len(files)}건  (질의어 묶음 {ng}개 기준)\n")
     print(f"   {'기업':16}{'설정':8}{'진행':>12}{'기사':>7}{'남은 질의':>10}  마지막 저장")
+    n_full = 0
     for p in files:
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
@@ -76,6 +77,11 @@ def main() -> int:
         name, cfg = p.stem.split("__", 1)
         done, total = d.get("done_periods", 0), d.get("total_periods", 0)
         left = max(total - done, 0) * ng
+        # ★「수집은 다 했는데 추출에서 죽은 것」과 「수집 도중 끊긴 것」은 다르다.
+        #   앞의 것은 구글을 한 번도 더 안 쳐도 되고, 뒤의 것은 남은 질의가 있다.
+        if d.get("collected_all"):
+            n_full += 1
+            cfg += " ✔수집완료"
         saved, ago = d.get("saved_at", ""), ""
         if saved:
             try:
@@ -85,11 +91,14 @@ def main() -> int:
                 ago = f" ({h:.1f}시간 전)"
             except Exception:
                 pass
-        print(f"   {name.replace('_', ' ')[:14]:16}{cfg:8}"
+        print(f"   {name.replace('_', ' ')[:14]:16}{cfg:18}"
               f"{done:>5}/{total:<6}{len(d.get('articles', [])):>7}"
               f"{left:>10}  {saved}{ago}")
 
     print("\n   같은 명령을 다시 돌리면 위 지점부터 이어갑니다 — 앞선 질의는 다시 쓰지 않습니다.")
+    if n_full:
+        print(f"   그중 {n_full}건은 ✔수집완료 — **구글을 한 번도 더 안 칩니다.** "
+              f"추출 단계에서 죽어 남은 것이라 바로 이어집니다.")
     return 0
 
 

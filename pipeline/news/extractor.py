@@ -1,4 +1,4 @@
-"""뉴스 개체·관계 추출 (방법서 §12-2) — 스키마 유도형.
+"""뉴스 개체·관계 추출 — 스키마 유도형.
 
 프롬프트에 **12종 엣지 + 노드-엣지 매트릭스**를 주입해 LLM이 스키마를 벗어나지
 못하게 한다. 추출 후에도 `validators/matrix.py`가 적재 전 재검증한다(2단 방어).
@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -16,26 +17,45 @@ from typing import Any, Optional
 import openai
 
 from app.core.config import OPENAI_API_KEY
+from pipeline.ontology import (
+    AMOUNT_RULES,
+    EDGE_DEFINITIONS,
+    HAS_EVENT_ROLES,
+    SUBTYPE_RULES,
+)
 
 _EXTRACT_MODEL = "gpt-4o"     # 품질 우선 (필터 통과분만 처리)
 
-# 방법서 2-2 허용 매트릭스를 프롬프트로 (validators/matrix.py와 동일 규칙)
-_MATRIX_TEXT = """
-| 엣지 | 허용 방향 (source → target) | 성격 |
-|---|---|---|
-| OWNS_STAKE_IN   | Company/Person/Organization → Company | 상태 |
-| IS_EXECUTIVE_OF | Person → Company/Organization | 상태 |
-| SUPPLIES_TO     | Company → Company | 상태 |
-| PARTNERS_WITH   | Company/Organization ⇄ Company/Organization | 상태(대칭) |
-| ACQUIRES        | Company → Company | 사건 |
-| SUES            | Company/Person/Organization → 동일 | 사건 |
-| COMPETES_WITH   | Company/Product ⇄ Company/Product | 상태(대칭) |
-| REGULATES       | Organization → Company/Product | 상태 |
-| DEVELOPS        | Company → Product | 상태 |
-| DEPENDS_ON      | Company/Product → Product | 상태 |
-| HAS_EVENT       | Company/Product → Event | 사건 |
-| IMPACTS         | Event → Company/Product | 사건 |
-""".strip()
+# ★허용 매트릭스는 **코드에서 만들어 낸다**(2026-08-12).
+#
+#   전에는 이 표를 손으로 적어 뒀는데, 적재를 강제하는 건 `validators/matrix.py`의
+#   `EDGE_MATRIX`다. 즉 **LLM에게 말하는 규칙과 실제로 강제하는 규칙이 두 벌**이었고,
+#   실측해 보니 이미 한 곳이 어긋나 있었다:
+#
+#       OWNS_STAKE_IN   표 「→ Company」        코드 「→ Company/Organization」
+#
+#   코드가 맞다 — 재단·연구원 **출연**을 담으려고 넓힌 것이고 실제 엣지도 9건 있다.
+#   표만 좁아서 LLM은 그 관계를 아예 안 만들고 있었다. 있는 사실을 못 담은 셈이다.
+#
+#   손으로 맞추는 대신 한쪽을 지웠다. 이제 매트릭스를 고치면 프롬프트가 따라온다.
+def _matrix_text() -> str:
+    from pipeline.validators.matrix import EDGE_MATRIX, EDGE_TO_L1_CATEGORY
+
+    # 사건성 엣지 — 「언제 일어났나」를 물을 수 있는 것. 나머지는 이어지는 상태.
+    events = {"ACQUIRES", "SUES", "HAS_EVENT", "IMPACTS"}
+    rows = ["| 엣지 | 허용 방향 (source → target) | 성격 | 분류 |",
+            "|---|---|---|---|"]
+    for name, rule in EDGE_MATRIX.items():
+        src = "/".join(sorted(rule.sources))
+        tgt = "/".join(sorted(rule.targets))
+        arrow = "⇄" if rule.symmetric else "→"
+        kind = ("사건" if name in events else "상태") + ("(대칭)" if rule.symmetric else "")
+        rows.append(f"| {name:<15} | {src} {arrow} {tgt} | {kind} | "
+                    f"{EDGE_TO_L1_CATEGORY.get(name, '기타')} |")
+    return "\n".join(rows)
+
+
+_MATRIX_TEXT = _matrix_text()
 
 _SYSTEM = f"""당신은 한국 경제 뉴스에서 기업 지식그래프를 추출하는 도구입니다.
 
@@ -45,74 +65,34 @@ _SYSTEM = f"""당신은 한국 경제 뉴스에서 기업 지식그래프를 추
 【엣지 12종과 허용 매트릭스】 — 이 표를 **반드시** 지키세요.
 {_MATRIX_TEXT}
 
+【엣지 12종이 각각 무엇인가】 — 이 정의로 뽑고, **이 정의로 검증됩니다.**
+{EDGE_DEFINITIONS}
+
 【규칙】
 1. source=주어, target=목적어로 방향을 정확히. "A가 B를 인수" → A -ACQUIRES-> B.
-
-★단, `SUPPLIES_TO`는 **문장 주어가 아니라 실제 공급자**를 source로 하세요.
-   한국어 「A는 B와 공급계약을 체결했다」는 **누가 공급하는지 말해주지 않습니다.**
-   실제로 이렇게 틀린 사례가 있었습니다:
-     원문: "SK하이닉스는 테스와 반도체 제조 장비 공급 계약을 체결했다"
-     ✗ SK하이닉스 → 테스   (문장 주어를 공급자로 오인)
-     ✓ 테스 → SK하이닉스   (테스가 **장비업체**다)
-
-   판단 기준 — **누가 만들어 주는가**:
-     · 장비·부품·소재·후공정(OSAT) 업체  →  칩메이커·완성품업체에 **공급**
-     · 칩메이커(메모리·파운드리)          →  세트업체·빅테크에 **공급**
-     · 「발주」「수주」가 나오면: 발주한 쪽이 **수요자**, 수주한 쪽이 **공급자**
-     · 「납품」이 나오면: 납품하는 쪽이 공급자
-   기사에서 역할을 알 수 없으면 SUPPLIES_TO를 만들지 마세요.
+   (엣지마다 방향 규칙이 다릅니다 — 위 정의를 보세요. 특히 SUPPLIES_TO.)
 2. 매트릭스에 없는 조합은 **추출하지 마세요**(예: Product -SUPPLIES_TO-> Person 금지).
 3. 기사에 **명시된 관계만**. 추론·배경지식으로 만들어내지 마세요.
 4. 12종에 안 맞으면 edge_type="OTHER"로 두고 raw_expression에 원문 표현을 남기세요.
 5. IMPACTS는 sign(positive/negative/neutral)을 반드시 판단하세요.
-6. COMPETES_WITH·PARTNERS_WITH는 대칭이므로 한 방향만 출력.
-   ★COMPETES_WITH는 **같은 제품·시장에서 실제로 다투는 경우만** 씁니다.
-     한 기사에 같이 등장했다는 이유로 묶지 마세요. 업종이 다르면(예: 반도체사 ↔ 은행)
-     경쟁이 아닙니다. 무엇을 두고 경쟁하는지 evidence에 드러나야 합니다.
-7. **소송과 규제를 구분하세요.**
-   · SUES  = 한쪽이 다른 쪽을 **제소**한 것 (원고 → 피고)
-   · REGULATES = 규제·판정 기관이 조사·제재·판정하는 것
-     법원·위원회(ITC 등)·공정위·금감원은 **소송 당사자가 아니라 판정 주체**입니다.
-8. **DEVELOPS를 함부로 만들지 마세요 — 오추출 1위입니다.**
-   실측(2026-08-01): 뉴스 DEVELOPS 885건 중 **419건(47%)**이 근거 검증에서 걸렸습니다.
-   다른 엣지는 SUPPLIES_TO 9%·IMPACTS 4%인데 DEVELOPS만 47%입니다.
+6. COMPETES_WITH·PARTNERS_WITH는 대칭이므로 **한 방향만** 출력하세요.
+7. 위 정의에서 ✗로 표시된 것은 **만들지 마세요.** 그대로 검증에서 걸립니다.
+   실제로 그렇게 만들어졌다가 지워진 엣지가 있습니다:
+     "SK하이닉스 영업이익률 71.5%로 엔비디아(67.7%)를 앞질렀다"
+       ✗ SK하이닉스 -COMPETES_WITH-> 엔비디아  ← 실적 비교이지 경쟁이 아닙니다
 
-   `DEVELOPS` = 그 기업이 그 제품·기술을 **직접 만들거나 개발한다**.
-     ✓ "SK하이닉스가 HBM4를 개발했다" · "한미반도체가 TC 본더를 생산한다"
-     ✓ "심텍은 HBM용 패키지 기판을 양산한다"
+8. **여럿을 한 덩이로 부른 것은 노드가 아닙니다.** 실명 하나가 아니면 만들지 마세요.
+      ✗ 「인도 기업들」 · 「로보틱스 기업들」 · 「지주 등 관계 기업들」
+      ✗ 「미국 소비자 14명과 중소 PC조립·유통업체 3곳」 · 「원고들」
+      ✗ 「벨벳제1호 유한회사 등 2개사」
+    이유: 서로 **다른 회사들**이 한 노드로 뭉칩니다. 다른 기사의 「인도 기업들」과
+    같은 노드가 되는데 실제로는 아무 관계가 없습니다.
+    → 기사에 **이름이 나온 회사만** 각각 만드세요. 이름이 없으면 관계를 만들지 마세요.
 
-   ★★**같은 문장으로 SUPPLIES_TO를 만들었다면, 그 문장으로 DEVELOPS를 만들지 마세요.**
-     공급 계약 기사가 오추출의 대부분입니다. 실제로 걸린 것들:
-
-       "한화세미텍이 SK하이닉스에 TC 본더를 공급하기로 계약했다"
-         ✓ 한화세미텍 -SUPPLIES_TO-> SK하이닉스
-         ✗ 한화세미텍 -DEVELOPS-> TC 본더      ← 파는 것과 만드는 것은 다릅니다
-         ✗ SK하이닉스 -DEVELOPS-> TC 본더      ← **사는 쪽**입니다. 더 나쁩니다
-       "한미반도체가 그리핀 공급 계약을 수주했다"
-         ✗ 한미반도체 -DEVELOPS-> 그리핀       ← 수주 얘기지 개발 얘기가 아닙니다
-       "삼성전자의 AI 메모리 공급계약"
-         ✗ 삼성전자 -DEVELOPS-> AI 메모리
-
-     제조사가 자기 제품을 판다는 건 **사실일 수 있지만 그 문장에 없습니다.**
-     배경지식으로 메우지 마세요. 다른 문장이 "만든다"고 말하면 그때 만드세요.
-
-   ✗ 그 밖의 흔한 오추출:
-       "마이크론이 한국 경쟁사를 추격하겠다"     → 마이크론 -DEVELOPS-> 고사양 DRAM  ✗ 추측
-       "Z 폴드5·Z 플립5는 러시아에서 안 팔았다"  → 삼성전자 -DEVELOPS-> Z 플립5      ✗ 판매 얘기
-       "SK하이닉스가 TC 본더를 발주했다"        → 사는 쪽입니다
-       "HBM4 시장에서 삼성전자가 경쟁한다"       → 경쟁입니다
-
-   판단 기준: **「만든다·개발한다·양산한다·생산한다」가 그 문장에 있는가.**
-   없으면 만들지 마세요.
-
-9. **PARTNERS_WITH도 함부로 만들지 마세요** (실측 오추출 26건).
-   두 기업이 **서로** 합작·공동개발·기술제휴하는 것입니다.
-     ✗ 「A와 B의 계약」이 각자 제3자와 맺은 것이면 협력이 아닙니다
-     ✗ 같은 기사에 나란히 언급된 것만으로는 협력이 아닙니다
-     ✗ 거래 관계(납품·수주)는 SUPPLIES_TO입니다
-     ✗ 기업이 **정부·규제기관과 협의체에 참여**하는 것은 협력이 아닙니다
-         "정부가 삼성전자·SK하이닉스 등이 참여하는 실무협의체를 꾸린다"
-           → 삼성전자 -PARTNERS_WITH-> 기후에너지환경부  ✗ (실측 오추출)
+9. **문장·특허 명칭을 이름으로 쓰지 마세요.** 이름은 명사구입니다.
+      ✗ 「Cloud 스토리지간 Data를 실시간으로 이전할 수 있는 기술 연구」
+      ✗ 「락(위상) 고정 루프(PLL) 회로 및 이를 포함하는 디스플레이 구동기」  ← 특허 제목
+      ✓ 「PLL 회로」 · 「디스플레이 구동기」
 
 10. evidence는 그 관계가 드러난 **기사 원문 문장**을 그대로 인용하세요(요약 금지).
 11. confidence는 문장이 관계를 얼마나 명확히 말하는지(0.5~1.0).
@@ -158,6 +138,12 @@ _SYSTEM = f"""당신은 한국 경제 뉴스에서 기업 지식그래프를 추
    b. **시황은 사건이 아닙니다** — 상한가·급등·주가 상승·목표주가 상향은 추출 금지.
    c. 「출시」·「계약 체결」처럼 목적어 없는 맨동사도 금지(무엇인지 특정 불가).
    d. 사건을 이름 붙일 수 없으면 Event 관계를 만들지 마세요.
+
+{SUBTYPE_RULES}
+
+{HAS_EVENT_ROLES}
+
+{AMOUNT_RULES}
 """
 
 _SCHEMA = {
@@ -179,7 +165,21 @@ _SCHEMA = {
                                            "PARTNERS_WITH", "ACQUIRES", "SUES", "COMPETES_WITH",
                                            "REGULATES", "DEVELOPS", "DEPENDS_ON", "HAS_EVENT",
                                            "IMPACTS", "OTHER"]},
+                    # ★빈 문자열이 정상 값이다(2026-08-11). 타입 이름으로 때우는
+                    #   것보다 비우는 편이 낫다 — 「모름」과 「평범함」이 갈린다.
                     "subtype": {"type": "string"},
+                    # ★HAS_EVENT 전용. 다른 엣지에서는 null.
+                    "role": {"type": ["string", "null"],
+                             "enum": ["subject", "counterparty", "mentioned", None]},
+                    # ★지분율 — OWNS_STAKE_IN·ACQUIRES 전용. 0~100 숫자.
+                    #   전에는 「지분 61.6%」처럼 subtype 문자열로 들어와 조회도
+                    #   비교도 안 됐다(2026-08-12). 숫자로 받는다.
+                    "ratio": {"type": ["number", "null"]},
+                    # ★거래·처분 규모 — **원 단위 숫자**.
+                    #   근거에 금액이 나오는 비율(실측 2026-08-12):
+                    #     ACQUIRES 24% · OWNS_STAKE_IN 21% · SUPPLIES_TO 11% · REGULATES 11%
+                    #   전에는 담을 칸이 없어 「420억원 규모 공급계약」이 통째로 버려졌다.
+                    "amount": {"type": ["number", "null"]},
                     "sign": {"type": ["string", "null"],
                              "enum": ["positive", "negative", "neutral", None]},
                     "evidence": {"type": "string"},
@@ -187,7 +187,8 @@ _SCHEMA = {
                     "raw_expression": {"type": ["string", "null"]},
                 },
                 "required": ["source", "source_type", "target", "target_type", "edge_type",
-                             "subtype", "sign", "evidence", "confidence", "raw_expression"],
+                             "subtype", "role", "ratio", "amount", "sign", "evidence",
+                             "confidence", "raw_expression"],
                 "additionalProperties": False,
             },
         }
@@ -209,9 +210,68 @@ class ExtractedRelation:
     evidence: str
     confidence: float
     raw_expression: Optional[str]
+    # HAS_EVENT에서 「당사자냐 이름만 나왔냐」. 다른 엣지에서는 None.
+    role: Optional[str] = None
+    # 지분율 — OWNS_STAKE_IN·ACQUIRES 에서만. 0~100.
+    ratio: Optional[float] = None
+    # 거래·처분 규모 (원). 계약금액·인수금액·과징금·손해배상액.
+    amount: Optional[float] = None
 
 
 _client: Optional[openai.OpenAI] = None
+
+
+# 숫자 필드가 의미를 갖는 타입 (`ontology.AMOUNT_RULES`)
+_RATIO_TYPES = frozenset({"OWNS_STAKE_IN", "ACQUIRES"})
+_AMOUNT_TYPES = frozenset({"ACQUIRES", "SUPPLIES_TO", "REGULATES", "SUES",
+                           "OWNS_STAKE_IN"})
+
+
+def _num(value, allowed: frozenset, edge_type: str,
+         lo: float, hi: float) -> Optional[float]:
+    """숫자 필드를 받되 **타입과 범위를 벗어나면 버린다**.
+
+    모델은 스키마에 칸이 있으면 아무 데나 채우려 든다 — 실제로 지분율 자리에
+    금액(억원)이 들어온 적이 있다. 남의 칸에 든 값은 고칠 방법이 없으니 버린다.
+    문자열("약 61%")로 오는 것도 같은 이유로 버린다.
+    """
+    if edge_type not in allowed or value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if lo < num <= hi else None
+
+
+def _ratio(value, edge_type: str, evidence, subtype) -> Optional[float]:
+    """지분율. **근거에 적힌 퍼센트와 대조해 단위를 바로잡는다.**
+
+    ★왜 범위 검사만으로는 안 되나(2026-08-15 실측). 전에는 `0 < x <= 100`만
+      봤는데, 모델이 **비율꼴로 주면 그대로 통과**했다:
+
+          근거「지분 67.96%를 취득」  →  ratio = 0.6796   ← 0.68%로 읽힌다
+          근거「지분 100%」          →  ratio = 1.0      ← 1%로 읽힌다
+
+      0.68%짜리 진짜 소액 지분과 구분이 안 되므로 **범위로는 못 잡는다.**
+      DART 경로는 원본이 퍼센트꼴이라 멀쩡했고, 뉴스 경로만 섞여 있었다.
+
+    ★근거에 「N%」가 있으면 그것이 정답이다 — 이 저장소가 쓰는 「원문을 믿는다」
+      원칙 그대로다. 100배 차이면 조용히 고치고, 그 밖의 불일치는 버린다
+      (남의 칸에 든 값은 고칠 방법이 없다).
+    """
+    num = _num(value, _RATIO_TYPES, edge_type, 0, 100)
+    if num is None:
+        return None
+    text = f"{evidence or ''} {subtype or ''}"
+    pcts = [float(m) for m in re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)]
+    if not pcts:
+        return num
+    if any(abs(p - num) < 0.01 for p in pcts):        # 이미 맞다
+        return num
+    if any(abs(p - num * 100) < 0.01 for p in pcts):  # 비율꼴로 왔다
+        return round(num * 100, 4)
+    return num                                        # 근거의 %가 다른 숫자다
 
 
 def _get_client() -> openai.OpenAI:
@@ -221,7 +281,8 @@ def _get_client() -> openai.OpenAI:
     return _client
 
 
-def extract_relations(title: str, body: str, hint_companies: list[str]) -> list[ExtractedRelation]:
+def extract_relations(title: str, body: str, hint_companies: list[str],
+                      known_products: str = "") -> list[ExtractedRelation]:
     """기사 → 관계 목록. 실패 시 빈 리스트.
 
     ★기사를 **청크로 나누지 않는다.** RAG의 청킹은 검색을 위한 것이고 여기는
@@ -262,7 +323,11 @@ def extract_relations(title: str, body: str, hint_companies: list[str]) -> list[
             model=_EXTRACT_MODEL,
             temperature=0,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                # ★이미 쓰는 제품명을 붙인다(2026-08-13). 제품은 이름이 곧
+                #   식별자라 표기가 갈리면 노드가 갈린다. 사후 병합은 문자로
+                #   「양팔형 휴머노이드」와 「AI 기반 휴머노이드」를 못 가르므로
+                #   (`product_registry` 주석), **애초에 안 갈리게** 보여준다.
+                {"role": "system", "content": _SYSTEM + known_products},
                 {"role": "user", "content": f"제목: {title}\n\n본문:\n{body[:6000]}{hint}"},
             ],
             response_format={
@@ -282,6 +347,17 @@ def extract_relations(title: str, body: str, hint_companies: list[str]) -> list[
             continue
         # LLM이 빈 subtype 대신 "." 등 무의미 값을 넣는 경우 정리
         subtype = (r.get("subtype") or "").strip().strip(".·-")
+        # ★role은 HAS_EVENT에만 의미가 있다. 다른 엣지에 붙어 오면 버린다 —
+        #   모델이 스키마의 칸을 보고 아무 데나 채우는 일이 있다.
+        role = r.get("role") if r["edge_type"] == "HAS_EVENT" else None
+        # ★지분율도 해당 타입에서만 받는다. 범위를 벗어나면 버린다 —
+        #   모델이 금액(억원)을 여기 넣는 일이 있다.
+        ratio = _ratio(r.get("ratio"), r["edge_type"], r.get("evidence"),
+                       r.get("subtype"))
+        # ★금액 — 자릿수 실수가 흔하다. 「420억원」을 420으로 주거나 반대로
+        #   부풀린다. **100만원 미만·1000조 초과는 버린다.** 뉴스에 나오는 계약·
+        #   과징금은 이 사이에 있고, 밖의 값은 단위를 잘못 읽은 것이다.
+        amount = _num(r.get("amount"), _AMOUNT_TYPES, r["edge_type"], 1e6, 1e15)
         out.append(ExtractedRelation(
             source=src, source_type=r["source_type"],
             target=tgt, target_type=r["target_type"],
@@ -289,5 +365,6 @@ def extract_relations(title: str, body: str, hint_companies: list[str]) -> list[
             sign=r.get("sign"), evidence=(r.get("evidence") or "").strip(),
             confidence=float(r.get("confidence") or 0.7),
             raw_expression=r.get("raw_expression"),
+            role=role, ratio=ratio, amount=amount,
         ))
     return out

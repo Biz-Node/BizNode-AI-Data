@@ -20,7 +20,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config import ETF_LIST_PATH
@@ -55,6 +55,20 @@ VALUE_CHAIN_PRIORITY = [
 
 DOC_PATH = Path("BizNode_추출_진행현황.md")
 
+# ★대장의 `run_at`은 UTC다. 그냥 잘라 쓰면 **밤에 돌린 배치가 전날로 적힌다** —
+#   00:56 KST에 돌린 필옵틱스가 문서에 「2026-08-08」로 남아 있었다(2026-08-09).
+#   사람이 보는 문서라 시각은 KST로 적는다.
+KST = timezone(timedelta(hours=9))
+
+
+def kst_date(ts) -> str:
+    """대장의 UTC 타임스탬프를 KST 날짜 문자열로. 값이 이상하면 그대로 자른다."""
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:                      # 순진한 값은 UTC로 본다
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(KST).strftime("%Y-%m-%d")
+    return str(ts)[:10]
+
 
 def write_doc(seeds: list[dict], done: list[dict], todo: list[dict],
               graph: dict, path: Path) -> None:
@@ -74,7 +88,7 @@ def write_doc(seeds: list[dict], done: list[dict], todo: list[dict],
     L.append("> `python -m batch.ops.status --write-doc` 으로 갱신하세요.")
     L.append("> 사실의 출처는 PostgreSQL `extraction_runs` 대장입니다.")
     L.append("")
-    L.append(f"생성 시각: {graph['now']}")
+    L.append(f"생성 시각: {graph['now']} KST")
     L.append("")
     L.append("## 요약")
     L.append("")
@@ -101,7 +115,7 @@ def write_doc(seeds: list[dict], done: list[dict], todo: list[dict],
         L.append(f"| {c['companyName']} | {c.get('market','-')} | "
                  f"{' · '.join(c.get('sector') or ['-'])} | "
                  f"{r['total_extracted'] or 0} | {r['total_edges'] or 0} | "
-                 f"{r['total_cost'] or 0:,}원 | {str(r['last_run'])[:10]} |")
+                 f"{r['total_cost'] or 0:,}원 | {kst_date(r['last_run'])} |")
     L.append("")
 
     L.append("## 미진행 기업 (섹터별)")
@@ -228,7 +242,7 @@ def main() -> int:
             total_edges += r["total_edges"] or 0
             print(f"{c['companyName']:22} {r['runs']:>4} {r['total_extracted'] or 0:>6} "
                   f"{r['total_edges'] or 0:>7} {r['total_cost'] or 0:>9,} "
-                  f"{str(r['last_run'])[:10]}")
+                  f"{kst_date(r['last_run'])}")
         print("-" * 72)
         print(f"{'합계':22} {'':>4} {'':>6} {total_edges:>7} {total_cost:>9,}")
 

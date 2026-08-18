@@ -8,6 +8,7 @@ A 노드무결성 · B 엣지무결성 · C 값정합성 · D 크로스-DB · E 
 
 from __future__ import annotations
 
+import re
 import sys
 from datetime import date
 
@@ -26,8 +27,22 @@ CHECKS: list[tuple] = [
     # ── A. 노드 무결성 ──────────────────────────────────────
     ("E", "A-노드", "이름 null/빈값",
      "MATCH (n) WHERE NOT n:Event AND (n.name IS NULL OR trim(n.name)='') RETURN labels(n)[0]+':'+coalesce(n.corp_code,n.person_key,'?') AS v LIMIT 10", 0),
-    ("E", "A-노드", "Event title/event_id 누락",
-     "MATCH (e:Event) WHERE e.event_id IS NULL OR e.title IS NULL RETURN e.event_id AS v LIMIT 10", 0),
+    # ★사업보고서가 거래처를 가린 표기가 **노드로 남은 것**(2026-08-10).
+    #   「L사 外」·「G사 등」은 회사 이름이 아니라 **가림 표기**다. 노드로 만들면
+    #   아무 데도 안 이어지고(전부 연결 1), 검색에도 뜨고, 「거래처 5곳」 같은
+    #   집계를 부풀린다.
+    #
+    #   ※이건 규칙으로 **되는** 좁은 경우다 — 의미가 아니라 **글자 모양**이라서다.
+    #     Company 2,868개를 전수로 돌려 5건 나왔고 5건 다 진짜였다(오탐 0).
+    #     반대로 「2자 이하」 같은 규칙은 125건에 LG·SK·고영이 섞여 못 쓴다.
+    #     규칙으로 되는 것과 안 되는 것을 가르는 기준은 **표기 규약인가**다.
+    ("E", "A-노드", "익명 표기가 노드로 남음(사업보고서가 거래처를 가린 것)",
+     "MATCH (c:Company) WHERE c.name =~ '^[A-Za-z가-힣]사(\\\\s*(外|외|등))?$' "
+     "RETURN c.name AS v LIMIT 10", 0),
+    # ★`title`은 `name`으로 통일했다(2026-08-15). 다른 라벨이 전부 `name`을 쓰는데
+    #   Event 만 둘을 같은 값으로 들고 있었다.
+    ("E", "A-노드", "Event name/event_id 누락",
+     "MATCH (e:Event) WHERE e.event_id IS NULL OR e.name IS NULL RETURN e.event_id AS v LIMIT 10", 0),
     ("E", "A-노드", "Company norm_name 누락",
      "MATCH (c:Company) WHERE c.norm_name IS NULL RETURN c.name AS v LIMIT 10", 0),
     ("E", "A-노드", "resolution 불일치(resolved인데 corp_code 없음)",
@@ -56,8 +71,24 @@ CHECKS: list[tuple] = [
     # ── C. 값 정합성 ────────────────────────────────────────
     ("E", "C-값", "지분율 범위 밖(>100/<0)",
      "MATCH ()-[r:OWNS_STAKE_IN]->() WHERE r.ratio>100 OR r.ratio<0 RETURN r.subtype+':'+toString(r.ratio) AS v LIMIT 10", 0),
-    ("W", "C-값", "매출대비 100% 초과(검토 필요)",
-     "MATCH (a)-[r:SUPPLIES_TO]->(b) WHERE r.revenue_ratio>1 RETURN a.name+'→'+b.name+' '+toString(round(r.revenue_ratio*100))+'%' AS v LIMIT 10", 0),
+    # ★문턱을 3배로 올렸다(2026-08-12). 「연매출을 넘으면 이상」이 아니다 —
+    #   **장기 계약은 원래 넘는다.** 실측으로 걸린 유일한 건이 정상이었다:
+    #       현대로템 → 폴란드 군비청  8.98조 · 매출대비 205% · 2025-08~2033-12
+    #       → K2 전차 8년짜리 실행계약. 공시 원문을 정규식으로 읽은 값이라 정확하다.
+    #   숫자가 진짜 이상한 것(단위 오류·파싱 실패)은 보통 배수가 훨씬 크다.
+    ("W", "C-값", "매출대비 300% 초과(단위 오류 의심)",
+     "MATCH (a)-[r:SUPPLIES_TO]->(b) WHERE r.revenue_ratio>3 RETURN a.name+'→'+b.name+' '+toString(round(r.revenue_ratio*100))+'%' AS v LIMIT 10", 0),
+    # ★금액 단위 오류(2026-08-12 신설). 뉴스에서 `amount`를 받기 시작했는데
+    #   LLM이 「420억원」을 420으로 주는 실수를 한다. 추출기가 1차로 막지만
+    #   (`extractor._num`) 통과분도 여기서 다시 본다 — 자릿수가 틀린 금액은
+    #   「대형 계약」 집계를 통째로 뒤집는다.
+    #   DART 실측 하한이 80억이라 **1억 미만이면 단위를 잘못 읽은 것**이다.
+    ("W", "C-값", "금액이 1억 미만(단위 오류 의심 — 「420억」을 420으로 읽은 것)",
+     "MATCH (a)-[r]->(b) WHERE r.amount IS NOT NULL AND r.amount < 100000000 "
+     "RETURN type(r)+' '+a.name+'→'+b.name+'  '+toString(r.amount) AS v LIMIT 10", 0),
+    ("W", "C-값", "금액이 100조 초과(자릿수 부풀림)",
+     "MATCH (a)-[r]->(b) WHERE r.amount > 100000000000000 "
+     "RETURN type(r)+' '+a.name+'→'+b.name+'  '+toString(r.amount) AS v LIMIT 10", 0),
     ("W", "C-값", "self-loop",
      "MATCH (a)-[r]->(a) RETURN type(r)+':'+a.name AS v LIMIT 10", 0),
     ("W", "C-값", "중복 엣지(같은 src,tgt,type,subtype)",
@@ -82,16 +113,57 @@ CHECKS: list[tuple] = [
 
     # ── D. 관계 의미 정합성 ─────────────────────────────────
     # 아래 3종은 2026-07-28 실측에서 실제로 터진 결함이다. 재발하면 여기서 잡힌다.
-    ("E", "D-의미", "SUPPLIES_TO인데 공급 표지 없음(공사·매각·전환사채 오분류)",
-     "MATCH (a)-[r:SUPPLIES_TO]->(b) WHERE r.source_type<>'news' AND NOT any(w IN "
-     "['공급','납품','수주','물품','거래기본','양산','OEM','ODM','위탁생산'] "
-     "WHERE r.subtype CONTAINS w) RETURN a.name+'→'+b.name+' ['+r.subtype+']' AS v LIMIT 10", 0),
+    # ★2026-08-10 전면 수정. 원래는 「subtype에 공급어가 **있어야** 한다」는
+    #   허용목록이었는데 두 가지가 틀렸다.
+    #
+    #   ① 전제가 틀렸다. 엣지 타입이 이미 SUPPLIES_TO인데 subtype에도 「공급」이
+    #      들어 있으라는 건 중복 요구다. DART 사업보고서의 주요 매출처는 **파는
+    #      물건**으로 적힌다 — 「반도체 장비」·「레이저마커 등」·「석유류제품」.
+    #      그래서 97건이 걸렸는데 **90건이 멀쩡한 관계**였다. 맞는 것 90건에
+    #      틀린 것 7건이 묻히면 아무도 안 본다.
+    #
+    #   ② 보는 곳이 틀렸다. `source_type<>'news'`로 뉴스를 뺐는데, 오분류는
+    #      **LLM이 하는 뉴스 쪽**에서 난다. 파서가 만드는 DART는 표에서 칸을
+    #      읽는 것이라 종류를 헷갈릴 일이 없다. 실측: 금지어로 바꿔 전 출처를
+    #      보니 3건이 나왔고 **셋 다 news**였다(EPC 공사 2 · 매각 1).
+    #
+    #   그래서 금지목록으로 뒤집는다 — 「공급이 **아닌** 말이 들어 있으면 의심」.
+    # ★「공사」를 금지어에서 뺐다(2026-08-11 2차).
+    #   7건을 근거로 열어 보니 **4건이 멀쩡했다** — 전부 「수주」였다:
+    #       "초순수 복합동 설비공사를 **수주**했다고 공시했다"
+    #       "'평택2단지 건축 및 통신공사'를 **수주**했다고 공시했다"
+    #   온톨로지가 `SUPPLIES_TO`를 「납품·수주·발주·공급계약이 나오면 이것」이라
+    #   정의하고, 설비·용역도 「대주는 것」에 포함한다. 건설 수주는 맞는 관계다.
+    #   (전파 관점에서도 의미가 있다 — 발주처가 흔들리면 수주사 매출이 준다)
+    #
+    #   남긴 것은 **소유권이 넘어가는 거래**다. 매각·출자·전환사채는 물건을
+    #   대주는 게 아니라 자산·지분이 이동하는 것이라 `SUPPLIES_TO`가 아니다.
+    #
+    # ★「임대」도 뺐다(2026-08-12). 시설·장비를 **계속 쓰게 해 주는 것**이라
+    #   서비스 제공이고, 온톨로지가 서비스를 `SUPPLIES_TO`에 넣는다. 소유권이
+    #   안 넘어가므로 매각과 다르다. 다만 **빌려주는 쪽이 source**여야 한다 —
+    #   실측으로 걸린 1건이 방향이 반대여서 뒤집었다(HD현대중공업 ↔ 아길라 수빅).
+    #   방향 오류는 `audit/relations --scope direction`이 따로 본다.
+    ("E", "D-의미", "SUPPLIES_TO인데 소유권 이전 거래(매각·전환사채·출자)",
+     "MATCH (a)-[r:SUPPLIES_TO]->(b) WHERE any(w IN "
+     "['매각','전환사채','유상증자','신주','대여','차입','합병','청산','출자'] "
+     "WHERE coalesce(r.subtype,'') CONTAINS w) "
+     "RETURN a.name+'→'+b.name+' ['+r.subtype+'] '+coalesce(r.source_type,'?') "
+     "AS v LIMIT 10", 0),
     ("E", "D-의미", "PARTNERS_WITH인데 공급계약(방향 소실 오분류)",
      "MATCH (a)-[r:PARTNERS_WITH]->(b) WHERE any(w IN ['공급계약','납품','OEM','ODM'] "
      "WHERE r.subtype CONTAINS w) RETURN a.name+'↔'+b.name+' ['+r.subtype+']' AS v LIMIT 10", 0),
+    # ★`DEVELOPS`·`IMPACTS`·`HAS_EVENT`는 **비는 것이 정답**이라 뺀다(2026-08-11).
+    #   「무엇을」을 Product·Event 노드와 `sign`·`event_type`이 이미 말하므로
+    #   subtype이 할 말이 없다(설계는 `ontology.SUBTYPE_RULES`).
+    #
+    #   빼지 않았을 때: 3,691건이 걸렸는데 **3,312건이 설계상 정상**이었다.
+    #   매번 뜨는 경고는 진짜를 묻는다 — 이 저장소가 반복해서 데인 실수다.
     ("W", "D-의미", "subtype 미정규화(빈값·구두점만)",
-     "MATCH ()-[r]->() WHERE r.subtype IS NULL OR trim(r.subtype) IN ['','.','·','-'] "
-     "RETURN type(r) AS v LIMIT 10", 0),
+     "MATCH ()-[r]->() WHERE NOT type(r) IN ['DEVELOPS','IMPACTS','HAS_EVENT'] "
+     "AND (r.subtype IS NULL OR trim(r.subtype) IN ['','.','·','-']) "
+     "RETURN type(r)+' '+coalesce(startNode(r).name,'?')+'→'"
+     "+coalesce(endNode(r).name,'?') AS v LIMIT 10", 0),
     # ★표본 심층검사(2026-08-02)에서 나온 것. 처음엔 「모순」이라 보고 ERROR로 달았는데
     #   **12건을 실제로 읽어 보니 4건은 둘 다 맞았다**:
     #       LX세미콘 -DEVELOPS-> DDI      "DDI를 설계하는 회사다"
@@ -104,9 +176,22 @@ CHECKS: list[tuple] = [
     ("W", "D-의미", "같은 제품에 DEVELOPS·DEPENDS_ON 동시(매출의존이면 정상 — 확인 필요)",
      "MATCH (c)-[:DEVELOPS]->(p) WHERE EXISTS { MATCH (c)-[:DEPENDS_ON]->(p) } "
      "RETURN c.name+' → '+p.name AS v LIMIT 15", 0),
-    # 같은 두 노드가 서로 제소 — 맞소송일 수 있으나 대개 「A와 B가 함께 원고」의 오독이다
-    ("W", "D-의미", "양방향 SUES(맞소송이거나 공동원고 오독)",
-     "MATCH (a)-[:SUES]->(b) WHERE EXISTS { MATCH (b)-[:SUES]->(a) } AND a.name < b.name "
+    # ★조건을 좁혔다(2026-08-12). 원래는 「양방향이면 의심」이었는데 21건을 근거로
+    #   읽어 보니 **17건이 진짜 맞소송**이었다. 특허 분쟁은 침해소송 ↔ 무효심판이
+    #   표준 전술이라 **양방향이 정상**이다:
+    #       유진테크 ↔ 코쿠사이   침해소송 ↔ 무효심판
+    #       삼성전자 ↔ ZTE      "이에 맞서 ZTE는 …맞대응했다"
+    #       HMM ↔ 삼성전자      "피소 후 약 한달 만에 …맞대응"
+    #
+    #   오독(「A와 B가 함께 C를 제소」를 「A가 B를 제소」로 읽음)은 **한쪽에 뒷받침할
+    #   문장이 없어** 근거 검증에서 걸린다. 그래서 「양방향 + 한쪽이 검증 실패」만 본다.
+    #   (완벽하진 않다 — 실측 오류 4건 중 2건만 이 신호가 있었다. 다만 정상 17건에
+    #    오류 2건이 묻히는 것보다는 낫다.)
+    ("W", "D-의미", "양방향 SUES인데 한쪽이 근거 검증 실패(공동원고 오독 의심)",
+     "MATCH (a)-[r1:SUES]->(b) WHERE EXISTS { MATCH (b)-[:SUES]->(a) } AND a.name < b.name "
+     "  AND EXISTS { MATCH (x)-[r2:SUES]->(y) WHERE ((x=a AND y=b) OR (x=b AND y=a)) "
+     "              AND (coalesce(r2.grounding_suspect,false) "
+     "                   OR r2.grounding_verdict='unfounded') } "
      "RETURN a.name+' ↔ '+b.name AS v LIMIT 10", 0),
 
     # ── F. 커버리지(조용한 실패 탐지) ──────────────────────
@@ -153,8 +238,11 @@ CHECKS: list[tuple] = [
     #   ② 다시 걸었는데 옛 `grounding_verdict`가 남음 → **참인 관계가 숨겨짐** (44건)
     #   리스크 점수는 `grounding_suspect`에 직접 걸려 있어(파급 대상의 9.5%를 빼고
     #   64.5%의 점수를 바꾼다) 이 모순은 곧 **리스크 숫자의 재현성 문제**다.
+    # ★`wrong_type`은 예외다(2026-08-15). 「관계는 있는데 타입이 틀렸다」로 끝난
+    #   것이라 2차 전문 재검증을 돌릴 이유가 없다 — 고칠 대상은 타입이지 근거가 아니다.
     ("E", "H-표시", "통과인데 1차 판정만 남음(stage1 있고 suspect·verdict 없음)",
      "MATCH (a)-[r]->(b) WHERE r.grounding_stage1 IS NOT NULL "
+     "AND r.grounding_stage1 <> 'wrong_type' "
      "AND r.grounding_suspect IS NULL AND r.grounding_verdict IS NULL "
      "RETURN a.name + ' -' + type(r) + '-> ' + b.name AS v LIMIT 10", 0),
     ("E", "H-표시", "숨겼는데 전문 재검증은 통과(suspect인데 verdict=confirmed)",
@@ -168,10 +256,14 @@ CHECKS: list[tuple] = [
     #   세 번 샜다 — 엣지에서, `n.name`에서, `r.occurred_at`에서. 그때마다
     #   `TypeError: unhashable type: 'list'`로 **다른 배치가 죽었다**.
     #   `node_identity.unlist_scalars`가 되돌리지만, 되돌렸는지 보는 눈이 없었다.
+    # ★예외 목록은 `repair/node_identity._LIST_BY_DESIGN`과 **같아야 한다.**
+    #   한쪽만 늘리면 다른 쪽이 오탐을 내거나(여기) 값을 부순다(거기).
     ("E", "I-타입", "배열이 되면 안 되는 속성이 배열(노드)",
      "MATCH (x) UNWIND [k IN keys(x) WHERE valueType(x[k]) STARTS WITH 'LIST' "
      "  AND NOT k IN ['evidence_ids','source_docs','subtypes','sector','etf_list',"
-     "'aliases','tags','products','sector_variants'] AND NOT k ENDS WITH '_variants'] AS k "
+     "'aliases','tags','products','sector_variants',"
+     "'timeline','candidate_corp_codes','also_names','merged_keys'] "
+     "AND NOT k ENDS WITH '_variants'] AS k "
      "RETURN labels(x)[0] + '.' + k AS v LIMIT 10", 0),
     ("E", "I-타입", "배열이 되면 안 되는 속성이 배열(엣지)",
      "MATCH ()-[x]->() UNWIND [k IN keys(x) WHERE valueType(x[k]) STARTS WITH 'LIST' "
@@ -202,17 +294,41 @@ CHECKS: list[tuple] = [
 ]
 
 
+def _true_count(session, cypher: str, shown: int) -> int:
+    """검사 쿼리의 **진짜** 건수. `LIMIT`을 떼고 다시 센다.
+
+    ★왜 필요한가 (2026-08-10)
+
+    검사 쿼리에는 화면이 넘치지 않게 `LIMIT 10`이 붙어 있는데, 건수를
+    `len(rows)`로 세고 있었다. 그래서 **10건 이상은 전부 「10건」으로 보고**됐다.
+    「SUPPLIES_TO인데 공급 표지 없음 (10)」을 열어 보니 실제로는 **97건**이었다.
+
+    10건이면 「저녁에 한번 훑어보지」인데 97건이면 「검사 규칙이 틀렸나」다.
+    숫자가 틀리면 **판단이 틀린다.**
+    """
+    base = re.sub(r"\s+LIMIT\s+\d+\s*$", "", cypher.strip(), flags=re.I)
+    if base == cypher.strip():
+        return shown                       # LIMIT이 없으면 이미 전수다
+    try:
+        # `CALL () { }` — 5.26부터 변수 스코프절이 없으면 경고가 뜬다
+        return session.run(
+            f"CALL () {{ {base} }} RETURN count(*) AS n").single()["n"]
+    except Exception:
+        return shown                       # 세지 못하면 보이는 만큼만
+
+
 def _run_graph_checks(session) -> list[str]:
     flags = []
     print("\n[이상 스캔]")
     for sev, cat, title, cypher, threshold in CHECKS:
         rows = [r["v"] for r in session.run(cypher)]
-        over = len(rows) > threshold
+        total = _true_count(session, cypher, len(rows))
+        over = total > threshold
         icon = ("🔴" if sev == "E" else "🟡") if over else "✓"
-        line = f"  {icon} [{cat}] {title}: {len(rows)}건"
-        print(line)
+        more = f" (표본 {len(rows)}건 표시)" if total > len(rows) else ""
+        print(f"  {icon} [{cat}] {title}: {total}건{more}")
         if over:
-            flags.append(f"{icon} {cat} {title} ({len(rows)})")
+            flags.append(f"{icon} {cat} {title} ({total})")
             for v in rows[:5]:
                 print(f"        - {v}")
     return flags
@@ -247,13 +363,21 @@ def _special_checks(session) -> list[str]:
          "RETURN nm, size(ps) AS k, [x IN ps | coalesce(x.person_key,'?')] AS keys "
          "ORDER BY k DESC LIMIT 8")
     rows = list(session.run(q))
+    # ★사람이 이미 「합치지 않는다」고 판단한 이름은 뺀다(2026-08-11).
+    #   그 판단이 `person_merge.py` 주석에만 있어서 감사가 매번 다시 띄웠다.
+    #   판단을 코드 목록으로 옮기고 여기서 읽는다 — 판단이 바뀌면 목록에서 빼면 된다.
+    from batch.repair.person_merge import REVIEWED_NOT_MERGED
+    skipped = [r for r in rows if r["nm"] in REVIEWED_NOT_MERGED]
+    rows = [r for r in rows if r["nm"] not in REVIEWED_NOT_MERGED]
     icon = "🟡" if rows else "✓"
-    print(f"  {icon} [F-통계] 합칠 수 있는 동명 Person(한쪽에 생년월 없음): {len(rows)}건")
+    print(f"  {icon} [F-통계] 합칠 수 있는 동명 Person(한쪽에 생년월 없음): {len(rows)}건"
+          + (f"  (판단 완료 {len(skipped)}건 제외)" if skipped else ""))
     for r in rows:
         print(f"        - {r['nm']}: {r['keys']}")
     if rows:
         print("          → 근거를 읽고 같은 사람이면 "
-              "`batch/repair/person_merge.py`의 CONFIRMED에 추가하세요")
+              "`batch/repair/person_merge.py`의 CONFIRMED에, "
+              "다른 사람이면 REVIEWED_NOT_MERGED에 추가하세요")
         flags.append(f"🟡 동명 Person 합병 후보 ({len(rows)})")
 
     flags += _matrix_check(session)
@@ -285,7 +409,7 @@ def _report_body_check(session) -> list[str]:
     with postgres_connection() as conn:
         docs = conn.execute(
             "SELECT d.rcept_no, d.corp_code, c.name FROM documents d "
-            "JOIN companies c USING (corp_code) WHERE d.doc_type='사업보고서'").fetchall()
+            "JOIN company_attributes c USING (corp_code) WHERE d.doc_type='사업보고서'").fetchall()
 
     thin = []
     for rcept, _code, name in docs:
@@ -590,6 +714,109 @@ def _cross_db_checks(session) -> list[str]:
     return flags
 
 
+def _subtype_quality(session) -> list[str]:
+    """subtype이 **엣지 타입 이름을 되풀이하기만 하는** 비율.
+
+    ★왜 이 지표인가 (2026-08-11)
+
+    subtype은 「엣지 타입이 못 하는 말」을 담으라고 둔 칸인데, 재보니 전체 60%
+    (뉴스만 보면 87%)가 타입 이름이었다 — `IMPACTS/영향`·`HAS_EVENT/사건`.
+    타입이 이미 한 말을 한 번 더 하면 칸이 없는 것과 정보량이 같다.
+
+    원인은 프롬프트가 **무엇을 담으라는지 안 알려준 것**이었다. 고친 뒤 이 숫자가
+    떨어지는지로 효과를 잰다. 새로 적재하는 기업분만 봐도 드러난다.
+
+    ★뉴스와 DART를 나눠 본다. DART의 지분·임원은 규칙으로 계산돼 되풀이가 거의
+      없어서, 섞으면 뉴스 쪽 악화가 묻힌다. 기업 구성비만 바뀌어도 전체값이 움직인다.
+    """
+    # B군 넷은 **비우는 것이 정상**이다 — 노드·다른 필드가 이미 말한다.
+    empty_ok = {"HAS_EVENT", "IMPACTS", "DEVELOPS"}
+    echo = {"OWNS_STAKE_IN": "지분보유", "IS_EXECUTIVE_OF": "임원",
+            "SUPPLIES_TO": "공급", "PARTNERS_WITH": "협력", "ACQUIRES": "인수",
+            "SUES": "소송", "COMPETES_WITH": "경쟁", "REGULATES": "규제",
+            "DEVELOPS": "개발", "DEPENDS_ON": "의존", "HAS_EVENT": "사건",
+            "IMPACTS": "영향"}
+
+    print("\n[subtype 품질 — 타입 이름 되풀이 비율]")
+    flags: list[str] = []
+    for src in ("news", "dart"):
+        tot = same = 0
+        worst: list[tuple[str, int, int]] = []
+        for et, dflt in echo.items():
+            r = session.run(
+                "MATCH ()-[r]->() WHERE type(r)=$t AND coalesce(r.source_type,'') "
+                "STARTS WITH $s RETURN count(*) AS n, "
+                "sum(CASE WHEN r.subtype=$d THEN 1 ELSE 0 END) AS same",
+                t=et, s=src, d=dflt).single()
+            n, s = r["n"], r["same"] or 0
+            if not n:
+                continue
+            tot += n
+            same += s
+            if et not in empty_ok and s / n >= 0.5:
+                worst.append((et, s, n))
+        if not tot:
+            continue
+        pct = same / tot * 100
+        icon = "🟡" if pct >= 50 else "✓"
+        print(f"  {icon} [F-품질] {src}: {same:,}/{tot:,} ({pct:.0f}%)")
+        for et, s, n in sorted(worst, key=lambda x: -x[1] / x[2]):
+            print(f"        - {et} {s}/{n} ({s/n*100:.0f}%)")
+        if pct >= 50:
+            flags.append(f"🟡 F-품질 subtype이 타입 이름 되풀이 ({src} {pct:.0f}%)")
+    print("        ※ HAS_EVENT·IMPACTS·DEVELOPS는 비우는 것이 정상입니다(설계).")
+    return flags
+
+
+def _doc_freshness_check(session) -> list[str]:
+    """진행현황 문서가 지금 DB와 맞는지 본다.
+
+    ★왜 검사까지 하나 (2026-08-09)
+
+    문서는 `finalize` 꼬리에서 자동 갱신되지만, `repair.person_merge`처럼
+    **따로 돌리는 스크립트**는 문서를 건드리지 않는다. 실제로 문서가 01:29
+    숫자에 멈춘 채 그 뒤 정리가 돌아 뉴스 엣지 102개가 지워졌고, 1시간 45분
+    동안 문서와 DB가 어긋나 있었다. 사람이 「갱신했나?」를 기억할 수는 없다.
+
+    문서에 이미 노드·엣지 수가 박혀 있으니 **그걸 실측과 대보면** 된다.
+    새 상태 파일이 필요 없다.
+    """
+    from pathlib import Path
+
+    doc = Path("BizNode_추출_진행현황.md")
+    if not doc.exists():
+        print("  🟡 [E-구조] 진행현황 문서 없음 → python -m batch.ops.status --write-doc")
+        return ["🟡 진행현황 문서 없음"]
+
+    text = doc.read_text(encoding="utf-8")
+    want = {
+        "노드": ("그래프 전체 노드", "MATCH (n) RETURN count(*) AS n"),
+        "엣지": ("그래프 전체 엣지", "MATCH ()-[r]->() RETURN count(*) AS n"),
+        "뉴스 엣지": ("그래프 뉴스 엣지",
+                   "MATCH ()-[r]->() WHERE r.source_type='news' RETURN count(*) AS n"),
+    }
+    drift = []
+    for label, (row_name, cypher) in want.items():
+        m = re.search(rf"\|\s*{re.escape(row_name)}\s*\|\s*([\d,]+)\s*\|", text)
+        if not m:
+            continue
+        doc_n = int(m.group(1).replace(",", ""))
+        live_n = session.run(cypher).single()["n"]
+        if doc_n != live_n:
+            drift.append(f"{label} 문서 {doc_n:,} ≠ 실제 {live_n:,} ({live_n-doc_n:+,})")
+
+    stamp = re.search(r"생성 시각:\s*(\S+ \S+)", text)
+    icon = "🟡" if drift else "✓"
+    print(f"  {icon} [E-구조] 진행현황 문서 정합 "
+          f"(생성 {stamp.group(1) if stamp else '?'})")
+    for d in drift:
+        print(f"        - {d}")
+    if drift:
+        print("        → python -m batch.ops.status --write-doc")
+        return [f"🟡 진행현황 문서가 DB와 어긋남 ({len(drift)}항목)"]
+    return []
+
+
 def _profile(session) -> None:
     print("[노드/엣지 분포]")
     for row in session.run("MATCH (n) RETURN labels(n)[0] AS l, count(*) AS c ORDER BY c DESC"):
@@ -604,6 +831,17 @@ def _profile(session) -> None:
 
 
 def main() -> int:
+    # ★`finalize` 안에서는 문서 정합 검사를 건너뛴다(2026-08-10).
+    #
+    #   이 감사는 finalize의 **끝에서 두 번째** 단계이고, 문서 갱신은 바로 그
+    #   다음이다. 그래서 finalize가 엣지를 하나라도 고치면 여기서 반드시
+    #   「문서가 어긋남」이 뜨는데 — 3초 뒤에 저절로 맞춰진다.
+    #
+    #   매번 뜨는 경고는 **사람을 무디게 한다.** 진짜로 어긋난 때(따로 돌린
+    #   repair 스크립트가 그래프만 바꾼 경우)를 이 소음에 묻히게 하면
+    #   검사를 넣은 의미가 없다. 그때는 이 모듈을 직접 돌리면 나온다.
+    skip_doc = "--skip-doc-check" in sys.argv
+
     print("=" * 62)
     print(f"BizNode 데이터 품질 감사  (기준일 {TODAY})")
     print("=" * 62)
@@ -614,6 +852,9 @@ def main() -> int:
         flags += _run_graph_checks(session)
         flags += _special_checks(session)
         flags += _cross_db_checks(session)
+        flags += _subtype_quality(session)
+        if not skip_doc:
+            flags += _doc_freshness_check(session)
 
     print("\n" + "=" * 62)
     if flags:

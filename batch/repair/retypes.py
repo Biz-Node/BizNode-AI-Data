@@ -30,6 +30,7 @@ from collections import Counter
 
 from app.core.database import neo4j_session
 from pipeline.importer.evidence import fetch_texts
+from pipeline.normalizer.relations import _DEFAULT_SUBTYPE
 from pipeline.validators.matrix import validate_edge
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -54,12 +55,34 @@ RETURN elementId(r) AS eid, type(r) AS edge, r.retype_hint AS hint,
 #       삼성전자 -PARTNERS_WITH-> 세메스  →  삼성전자 -SUPPLIES_TO-> 세메스
 #       그런데 실제로는 세메스가 삼성전자에 장비를 공급한다. 거꾸로다.
 #   그래서 표시를 걷어 방향 검사가 이들을 **다시 보게** 한다.
+# ★근거 검증 **도장**도 함께 걷는다(2026-08-11).
+#
+#   전에는 `grounding_suspect`(의심 표시)만 지우고 `grounding_checked_at`(검사 도장)은
+#   남겼다. 그런데 `audit/grounding`은 도장으로 대상을 고른다:
+#
+#       pool_rows = [s for s in base if args.full or not s[0]["checked"]]
+#
+#   그래서 재분류된 엣지가 **영영 재검증되지 않았다.** 결과가 셋으로 갈렸다:
+#     · 낡은 `grounding_verdict`(재분류 **전** 판정)가 그대로 남고
+#     · 의심 표시는 지워져 **조회에 그대로 노출**되고
+#     · 도장 때문에 다시 볼 기회도 없다
+#   실측(2026-08-11): 재분류 123건 중 57건이 「판정 없이 도장만」, 그중 8건은
+#   `unfounded` 판정을 달고도 조회에 보였다.
+#
+#   타입이 바뀌었으면 **판정 전체가 무효**다 — 「협력이 아니다」는 판정으로
+#   「공급이다」를 막을 수 없다. 방향 검사를 다시 보게 한 것과 같은 이유다.
 _RETYPE = """
 MATCH ()-[r]->() WHERE elementId(r) = $eid
 CALL apoc.refactor.setType(r, $new) YIELD output
 SET output.retyped_from = $old, output.retype_suspect = NULL,
-    output.retype_hint = NULL, output.grounding_suspect = NULL,
-    output.direction_checked_at = NULL, output.parallel_checked_at = NULL
+    output.retype_hint = NULL,
+    output.grounding_suspect = NULL, output.grounding_reason = NULL,
+    output.grounding_stage1 = NULL,
+    output.grounding_verdict = NULL, output.grounding_verdict_why = NULL,
+    output.grounding_checked_at = NULL,
+    output.direction_checked_at = NULL, output.parallel_checked_at = NULL,
+    output.subtype = CASE WHEN output.subtype = $old_name THEN ''
+                          ELSE output.subtype END
 RETURN 1 AS ok
 """
 
@@ -185,7 +208,10 @@ def main() -> int:
             print(f"  ⇄ 재분류 {pair} → {hint}")
             tally["재분류"] += 1
             if not args.dry_run:
-                session.run(_RETYPE, eid=r["eid"], new=hint, old=cur)
+                # `old_name` — 옛 타입의 한국어 이름. subtype이 그 값이면 비운다
+                # (「협력이 아니라 공급」인데 subtype에 「협력」이 남는 것을 막는다).
+                session.run(_RETYPE, eid=r["eid"], new=hint, old=cur,
+                            old_name=_DEFAULT_SUBTYPE.get(cur) or chr(1))
 
     print(f"\n{'[dry-run] ' if args.dry_run else '✅ '}"
           + " · ".join(f"{k} {v}건" for k, v in tally.most_common()))

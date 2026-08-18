@@ -24,13 +24,6 @@ from pipeline.normalizer.base import (
 from pipeline.normalizer.entities import build_company, master_company_ref
 
 # 지분율이 이 값을 **넘으면** "자회사", 아니면 "출자"로 subtype 판정.
-#
-# ★`>=`가 아니라 `>`다. 상법상 자회사는 지분 **50% 초과**이고, 정확히 50%면
-#   지배력이 없는 **합작(JV)**이다. 실측(2026-08-01): `>=`로 판정해 50.0%인
-#   합작사 14건이 자회사로 들어와 있었다:
-#       현대모비스 → Beijing Hyundai Mobis Parts (50.0%)   ← 베이징현대와의 합작
-#       LG전자 → Arcelik-LG Klima (50.0%)                 ← 아르첼릭과의 합작
-#   지분 구조를 보여 주는 화면에서 「자회사」와 「합작」은 뜻이 전혀 다르다.
 _SUBSIDIARY_RATIO_THRESHOLD = 50.0
 
 

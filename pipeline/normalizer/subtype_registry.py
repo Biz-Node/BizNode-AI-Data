@@ -39,6 +39,18 @@ _MIN_LEN = 2
 # 직위 정규화가 필요하면 서열 사전을 따로 만들어야 한다.
 EXCLUDED_EDGE_TYPES = frozenset({"IS_EXECUTIVE_OF"})
 
+# ★subtype이 **비어 있는 것이 정상**인 타입 (2026-08-13 추가).
+#
+#   `ontology.SUBTYPE_RULES`가 이 셋은 비우라고 못 박는다 — 「무엇을」을 target
+#   노드가 이미 말하기 때문이다. DEVELOPS의 대상은 Product 노드고, HAS_EVENT·
+#   IMPACTS의 대상은 Event 노드다. subtype이 할 말이 없어서 타입 이름이 들어간다.
+#
+#   실측(2026-08-13): 레지스트리에 이 셋이 133종 3,747건 남아 있었다.
+#       DEVELOPS/개발 1364 · IMPACTS/영향 899 · HAS_EVENT/사건 875
+#   그래프는 이미 비웠는데 레지스트리만 옛 값을 들고 있었다. 이대로 배선하면
+#   새 subtype이 **저 쓰레기 값으로 끌려간다.** 아예 등록도 조회도 하지 않는다.
+BLANK_BY_DESIGN = frozenset({"DEVELOPS", "HAS_EVENT", "IMPACTS"})
+
 _CREATE = """
 CREATE TABLE IF NOT EXISTS edge_subtypes (
     edge_type    TEXT NOT NULL,
@@ -68,6 +80,36 @@ def _trigrams(text: str) -> set[str]:
 
 MIN_MODIFIER_LEN = 2   # 「전략적」협력 ✓ / 「부」사장 ✗
 _MAX_LEN_RATIO = 3     # 길이가 3배 넘게 차이나면 다른 개념으로 본다
+
+
+def same_notation(a: str, b: str) -> bool:
+    """**표기만 다른 같은 값**인가 — 공백·구두점·대소문자 차이뿐인가.
+
+    ★병합 기준을 이걸로 좁혔다(2026-08-13).
+
+      원래는 `similarity() >= 0.75`로 병합했다. 그 기준은 「수식어 + 명사」를
+      0.9로 인정하는데, **수식어는 정보를 더하는 것이지 같은 뜻이 아니다.**
+      실측으로 정리 대상 238건 중 215건이 정보를 지우고 있었다:
+
+          지분 인수    → 인수      「무엇을」이 사라진다
+          자회사 인수  → 인수      같은 값으로 뭉개진다
+          경영권 지분  → 지분
+          순환출자    → 출자      순환출자는 별개 개념이다
+          3나노 파운드리 → 파운드리   세대가 사라진다
+          OLED DDI  → DDI       제품 구분이 사라진다
+          부품       → 전자부품   ★근거 없는 구체화(반대 방향)
+
+      ★왜 이런 일이 생겼나 — **전제가 바뀌었는데 규칙이 안 따라왔다.**
+        이 모듈을 만든 2026-07-28에는 subtype의 꼬리 표현이 잡음이라고 봤다
+        (「전략적 협력」·「협업」은 「협력」과 같은 말이라고).
+        그런데 2026-08-11에 subtype을 **「이 관계가 무엇에 관한 것인지」**로
+        다시 정의했다(`ontology.SUBTYPE_RULES`). 그 순간부터 꼬리가 곧 정보다.
+        「K-車 반도체 협력」은 「협력」으로 접으면 아무 말도 안 하게 된다.
+
+      그래서 레지스트리의 역할을 **표기 통일**로 좁힌다. 동의어(취득=인수)는
+      `_SUBTYPE_CANON`이 명시적으로 다루고, 그 밖의 차이는 **다른 값으로 둔다.**
+    """
+    return _compact(a) == _compact(b) and bool(_compact(a))
 
 
 def similarity(a: str, b: str) -> float:
@@ -132,6 +174,8 @@ class SubtypeRegistry:
 
         반환값이 곧 저장할 subtype이다.
         """
+        if edge_type in BLANK_BY_DESIGN:
+            return ""                       # 설계상 비우는 타입 — 등록도 안 한다
         value = (raw or "").strip().strip(".·-")
         if len(_compact(value)) < _MIN_LEN:
             return value
@@ -141,16 +185,12 @@ class SubtypeRegistry:
             self._touch(conn, edge_type, value)
             return value
 
-        # 가장 비슷한 기존 표현 찾기 — 임계값을 넘으면 그쪽으로 병합.
-        # 동점이면 **자주 쓰인 것**을 고른다(꼬리 표현으로 빨려들지 않게).
-        best, best_score = None, 0.0
-        for candidate, count in pool.items():
-            score = similarity(value, candidate)
-            if score > best_score or (
-                score == best_score and best is not None and count > pool[best]
-            ):
-                best, best_score = candidate, score
-        if best is not None and best_score >= _MERGE_THRESHOLD:
+        # **표기만 다른** 기존 표현이 있으면 그쪽으로 통일한다.
+        # 여럿이면 자주 쓰인 것을 고른다(꼬리 표기로 빨려들지 않게).
+        # ★수식어가 다른 것은 합치지 않는다 — `same_notation` 주석 참고.
+        twins = [(c, n) for c, n in pool.items() if same_notation(value, c)]
+        if twins:
+            best = max(twins, key=lambda cn: cn[1])[0]
             self._touch(conn, edge_type, best)
             return best
 
@@ -184,8 +224,11 @@ def consolidate(conn) -> list[tuple[str, str, str]]:
     `resolve()`가 「전략적 협력」을 이미 있는 값으로 보고 그대로 통과시킨다.
     그래서 등록분끼리 한 번 정리해야 한다.
 
-    규칙: 빈도 높은 표현을 **몸통**으로 두고, 유사한 저빈도 표현을 붙인다.
-    (빈도가 곧 그 도메인에서 통용되는 표현이라는 신호다.)
+    규칙: **표기만 다른** 것끼리만 묶고, 그중 빈도 높은 쪽을 몸통으로 둔다.
+    (빈도가 곧 그 도메인에서 통용되는 표기라는 신호다.)
+
+    ★수식어가 다르면 합치지 않는다 — `same_notation` 주석 참고. 「지분 인수」와
+      「인수」는 다른 값이고, 그 차이가 subtype이 담으려는 정보 그 자체다.
 
     반환: [(엣지타입, 없앨표현, 남길표현), ...]
     """
@@ -215,9 +258,7 @@ def consolidate(conn) -> list[tuple[str, str, str]]:
             if subtype in protected:
                 kept.append(subtype)
                 continue
-            target = next(
-                (k for k in kept if similarity(subtype, k) >= _MERGE_THRESHOLD), None
-            )
+            target = next((k for k in kept if same_notation(subtype, k)), None)
             if target:
                 mapping.append((edge_type, subtype, target))
             else:
@@ -255,7 +296,12 @@ def seed_from_graph(conn, session) -> int:
     n = 0
     with conn.cursor() as cur:
         cur.execute(_CREATE)
+        # 설계상 비우는 타입은 레지스트리에서 통째로 지운다(옛 시드 정리 포함).
+        cur.execute("DELETE FROM edge_subtypes WHERE edge_type = ANY(%s)",
+                    (sorted(BLANK_BY_DESIGN),))
         for row in rows:
+            if row["edge_type"] in BLANK_BY_DESIGN:
+                continue
             cur.execute(
                 "INSERT INTO edge_subtypes (edge_type, subtype, seen_count) "
                 "VALUES (%s, %s, %s) ON CONFLICT (edge_type, subtype) "

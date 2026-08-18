@@ -198,9 +198,22 @@ RETURN elementId(node) AS id
 #   속성 이름을 다 적을 수 없으니 **원래 배열인 속성만 빼고 전부** 되돌린다.
 #
 #   원래 배열인 것 = 여러 값을 담으려고 우리가 복수형으로 지은 것들.
+# ★**원래부터 목록인 속성**은 절대 스칼라로 되돌리면 안 된다.
+#
+#   이 목록이 빠뜨린 필드 때문에 두 번 데였다(2026-08-15 둘 다 실측으로 발견):
+#     · `candidate_corp_codes`  후보 9곳이 첫 번째 하나로 잘려 42곳이 망가졌다
+#     · `timeline`             국면 배열이 문자열이 되어 28건이 망가졌다
+#                              (`size()`가 글자 수를 세고, 순회하면 글자가 나온다)
+#
+#   원본은 `<이름>_variants`에 남아 복구는 되지만, **애초에 건드리면 안 되는
+#   필드**다. 새 목록형 속성을 만들면 반드시 여기에 함께 적을 것.
 _LIST_BY_DESIGN = {
     "evidence_ids", "source_docs", "subtypes", "sector", "etf_list",
     "aliases", "tags",
+    "timeline",               # Event 국면 — "연월|이름|id" 문자열의 배열
+    "candidate_corp_codes",   # Company 동명 후보
+    "also_names",             # Company 흡수한 표기
+    "merged_keys",            # Person 흡수한 키
 }
 _VARIANT_SUFFIX = "_variants"
 
@@ -319,34 +332,17 @@ def merge_duplicates(dry_run: bool) -> int:
 #       corp_code_master  01587542 → 「김동진」   01461271 → 「장남」
 #   원천이 그렇게 주는 값을 우리가 임의로 사람으로 바꾸면 DART와 대조가 깨진다.
 
-_CORP_MARKERS = ("㈜", "(주)", "(유)", "주식회사", "유한회사", "재단", "조합",
-                 "홀딩스", "그룹")
-_CORP_SUFFIXES = frozenset({
-    "inc", "ltd", "llc", "corp", "co", "gmbh", "sa", "nv", "plc",
-    "limited", "holdings", "company", "ag", "pte", "bhd", "sdn", "kk",
-})
-
-# ★단체(:Organization)로 보내야 하는 것들. 이 검사를 **법인 검사보다 먼저** 한다 —
+# 법인격·기관 표기는 `pipeline/normalizer/legal_forms.py` 한 곳에서만 정한다
+# (2026-08-13). 전에는 이 파일이 자기 목록을 들고 있어 **연구기관을 못 잡았다**
+# (「한국전자기술연구원」 → 회사 후보). 합친 목록이 그 빈칸을 메운다.
+#
+# ★단체 검사를 **법인 검사보다 먼저** 하는 규칙은 `legal_forms`가 그대로 갖고 있다 —
 #   「조합원」이 「조합」에 걸려 회사가 되는 일이 실제로 있었다:
 #       삼성전자 DX부문 조합원 -SUES/가처분-> 초기업노조(:Organization)
-#   상대는 이미 Organization인데 이쪽만 Company가 되면 노조 분쟁이 기업 소송으로
-#   보인다. 매트릭스도 `SUES`에 Organization↔Organization을 허용한다.
-_ORG_MARKERS = ("조합원", "노조", "노동조합", "위원회", "협회", "연맹", "학회",
-                "지부", "근로자", "직원")
-
-
-def _looks_organization(name: str) -> bool:
-    return any(m in name for m in _ORG_MARKERS)
-
-
-def _looks_corporate(name: str) -> bool:
-    """이름만으로 **법인이 확실한가**. 애매하면 False — 사람을 회사로 만들지 않는다."""
-    if _looks_organization(name):
-        return False
-    if any(m in name for m in _CORP_MARKERS):
-        return True
-    tokens = [t.strip(".,()").lower() for t in re.split(r"[\s,]+", name) if t.strip(".,()")]
-    return len(tokens) > 1 and tokens[-1] in _CORP_SUFFIXES
+from pipeline.normalizer.legal_forms import (
+    looks_like_company as _looks_corporate,
+    looks_like_organization as _looks_organization,
+)
 
 
 _PERSON_NODES = """

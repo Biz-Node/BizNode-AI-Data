@@ -51,6 +51,8 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 
 
 @dataclass
@@ -140,6 +142,13 @@ VERIFY: list[Step] = [
     #   마지막 감사가 자기가 방금 만든 찌꺼기를 경고로 띄운다(실측 25건).
     Step("고아 근거 정리(2차)", "batch.repair.evidence",
          args=["--only", "prune"], halt_on_fail=False),
+    # ★고아 **노드**도 같은 이유로 생긴다(2026-08-12). 검사가 엣지를 지우면
+    #   그 엣지 하나만 붙들고 있던 노드가 홀로 남는다.
+    #     실측: 근거 없는 엣지 485건을 지웠더니 고아 노드 273건이 생겼다.
+    #   그런데 이 단계가 `finalize`에 **배선돼 있지 않아** 감사가 273건을
+    #   경고로 띄우고, 사람이 따로 돌려야 했다. 만든 자리에서 치우게 한다.
+    #   (삭제가 아니라 표시 + 벡터 검색에서 제외 — 엣지가 붙으면 표시가 풀린다)
+    Step("고아 노드 표시", "batch.repair.orphan_nodes", halt_on_fail=False),
     # ★기업 카드도 같은 이유로 찌꺼기가 남는다(2026-08-07). 앞 단계들이 노드를
     #   병합·삭제하면 그래프에서는 사라지는데 **검색 카드는 남는다.** 검색으로
     #   들어가면 관계가 하나도 없는 빈 화면이 열린다.
@@ -147,16 +156,114 @@ VERIFY: list[Step] = [
     #   병합·삭제된 것은 노드 자체가 없기 때문이다.
     Step("유효하지 않은 기업 카드 정리", "batch.repair.stale_cards",
          halt_on_fail=False),
+    # 문서 정합은 뺀다 — 바로 뒤 `DOC_STEP`이 맞추므로 여기서 뜨면 헛경보다
     Step("그래프 무결성 감사", "batch.audit.graph",
-         halt_on_fail=False, takes_dry_run=False),
+         args=["--skip-doc-check"], halt_on_fail=False, takes_dry_run=False),
     # 마지막은 "무엇이 걸렸나"가 아니라 **"무엇을 아직 안 봤나"**다.
     # 검사를 다 돌렸다는 것과 그래프가 정확하다는 것은 다른 얘기다.
     Step("검사 커버리지", "batch.audit.coverage",
          halt_on_fail=False, takes_dry_run=False),
 ]
 
+# ★진행현황 문서 갱신은 **어느 단계에서 끝나든 반드시 돈다**(2026-08-09).
+#
+#   원래 VERIFY의 마지막 줄이었는데 그러면 세 갈래로 빠진다:
+#     ① halt_on_fail 단계가 실패 → `return 1`이 뒷단계를 통째로 건너뛴다
+#     ② `--only cleanup` / `--only selftest` → VERIFY 자체를 안 돈다
+#     ③ 사람이 Ctrl-C
+#   ①이 실제로 났다. 문서는 01:29 숫자에 멈춰 있는데 그 뒤 정리가 돌아
+#   **뉴스 엣지 102개가 지워졌다.** 문서와 DB가 1시간 45분 어긋났다.
+#
+#   문서는 「성공했을 때의 상보」가 아니라 **「지금 DB가 이렇다」는 기록**이다.
+#   중간에 멈췄으면 멈춘 시점의 숫자가 적혀야 맞다.
+DOC_STEP = Step("진행현황 문서 갱신", "batch.ops.status",
+                args=["--write-doc"], halt_on_fail=False, takes_dry_run=False)
 
-def run(step: Step, *, dry_run: bool, full: bool, tail: int) -> tuple[bool, str]:
+
+LOG_DIR = Path("logs")
+
+
+def graph_counts() -> dict[str, int] | None:
+    """노드·엣지 수를 센다. Neo4j가 없으면 None — **기록 때문에 배치를 죽이지 않는다.**"""
+    try:
+        from app.core.database import neo4j_session
+        with neo4j_session() as s:
+            return {
+                "노드": s.run("MATCH (n) RETURN count(*) AS n").single()["n"],
+                "엣지": s.run("MATCH ()-[r]->() RETURN count(*) AS n").single()["n"],
+                "뉴스엣지": s.run("MATCH ()-[r]->() WHERE r.source_type='news' "
+                              "RETURN count(*) AS n").single()["n"],
+            }
+    except Exception:
+        return None
+
+
+def fmt_delta(before: dict | None, after: dict | None) -> str:
+    """「엣지 -102」처럼 **변한 것만** 적는다. 안 변한 줄이 많으면 변한 줄이 안 보인다."""
+    if not before or not after:
+        return ""
+    parts = [f"{k} {after[k]-before[k]:+,}" for k in before if after[k] != before[k]]
+    return " · ".join(parts)
+
+
+class RunLog:
+    """단계별 **전체 출력**과 그래프 증감을 파일로 남긴다.
+
+    ★왜 필요한가 (2026-08-09)
+
+    정리 단계가 뉴스 엣지 102개를 지웠는데 **무엇이 지웠는지 알 방법이 없었다.**
+    화면에는 단계마다 마지막 6줄만 찍히고, 세션이 끝나면 그마저 사라진다.
+    남은 단서가 Neo4j 트랜잭션 카운터뿐이라 「01:29~01:44에 쓰기 1,055건」까지만
+    알아내고 멈췄다. 되짚을 수 없는 변경은 **되돌릴 수도 없다.**
+
+    그래서 두 가지를 남긴다:
+      ① 단계별 stdout/stderr **전문** — 각 스크립트가 무엇을 몇 건 고쳤다고 했는지
+      ② 단계 **전후의 노드·엣지 수** — 스크립트가 말하지 않은 것까지 잡힌다
+
+    ②가 ①보다 중요하다. 스크립트는 자기가 지운 것만 세는데, `mergeNodes`처럼
+    **부수적으로 사라지는 엣지**는 아무도 세지 않는다. 전후 차이는 그걸 잡는다.
+    """
+
+    def __init__(self, argv: list[str]):
+        LOG_DIR.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.path = LOG_DIR / f"finalize_{stamp}.log"
+        self.deltas: list[tuple[str, str]] = []
+        self._fh = self.path.open("w", encoding="utf-8", buffering=1)
+        self.write(f"# finalize {datetime.now():%Y-%m-%d %H:%M:%S} KST")
+        # argv[0]은 스크립트 **경로**라 그대로 적으면 다시 못 친다 —
+        # 되짚는 사람이 복사해 붙일 수 있는 형태로 남긴다.
+        self.write(f"# 명령: python -m batch.ops.finalize {' '.join(argv[1:])}")
+
+    def write(self, text: str) -> None:
+        self._fh.write(text.rstrip() + "\n")
+
+    def step(self, step: Step, cmd: list[str], proc, elapsed: float,
+             before: dict | None, after: dict | None) -> None:
+        d = fmt_delta(before, after)
+        self.write("\n" + "=" * 72)
+        self.write(f"[{datetime.now():%H:%M:%S}] {step.name}"
+                   f"  ({elapsed:.1f}초 · 종료코드 {proc.returncode})")
+        self.write(f"  $ {' '.join(cmd[2:])}")
+        if before and after:
+            self.write(f"  그래프  {before['노드']:,}노드 {before['엣지']:,}엣지"
+                       f"  →  {after['노드']:,}노드 {after['엣지']:,}엣지"
+                       f"{'   Δ ' + d if d else '   (변화 없음)'}")
+        self.write("=" * 72)
+        if proc.stdout:
+            self.write(proc.stdout)
+        if proc.stderr:
+            self.write("\n--- stderr ---")
+            self.write(proc.stderr)
+        if d:
+            self.deltas.append((step.name, d))
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+def run(step: Step, *, dry_run: bool, full: bool, tail: int,
+        log: RunLog | None = None) -> tuple[bool, str]:
     """한 단계를 실행하고 (성공여부, 마지막 출력)을 돌려준다."""
     cmd = [sys.executable, "-m", step.module, *step.args]
     if dry_run and step.takes_dry_run:
@@ -164,10 +271,12 @@ def run(step: Step, *, dry_run: bool, full: bool, tail: int) -> tuple[bool, str]
     if full and step.takes_full:
         cmd.append("--full")
 
+    before = graph_counts() if log else None
     started = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True,
                           encoding="utf-8", errors="replace")
     elapsed = time.time() - started
+    after = graph_counts() if log else None
 
     lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
     for ln in lines[-tail:]:
@@ -175,8 +284,12 @@ def run(step: Step, *, dry_run: bool, full: bool, tail: int) -> tuple[bool, str]
     if proc.returncode != 0:
         for ln in (proc.stderr or "").splitlines()[-6:]:
             print(f"    ! {ln}")
+    delta = fmt_delta(before, after)
     print(f"    └ {elapsed:.1f}초  "
-          f"{'✅' if proc.returncode == 0 else '❌ 종료코드 ' + str(proc.returncode)}")
+          f"{'✅' if proc.returncode == 0 else '❌ 종료코드 ' + str(proc.returncode)}"
+          f"{'   Δ ' + delta if delta else ''}")
+    if log:
+        log.step(step, cmd, proc, elapsed, before, after)
     return proc.returncode == 0, "\n".join(lines[-3:])
 
 
@@ -195,6 +308,8 @@ def main() -> int:
                     help="검사기 회귀 확인을 건너뛴다 (프롬프트를 안 고쳤을 때)")
     ap.add_argument("--tail", type=int, default=6,
                     help="단계별로 보여줄 출력 줄 수")
+    ap.add_argument("--no-log", action="store_true",
+                    help=f"{LOG_DIR}/ 에 실행 기록을 남기지 않는다")
     args = ap.parse_args()
 
     phases = []
@@ -218,31 +333,71 @@ def main() -> int:
     print(f"  후처리 파이프라인{'  [' + ' · '.join(mode) + ']' if mode else ''}")
     print("=" * 66)
 
+    log = None if args.no_log else RunLog(sys.argv)
+    if log:
+        print(f"  기록: {log.path}")
+
     started = time.time()
+    began = graph_counts()
     ran = skipped = failed = 0
     summaries: list[tuple[str, str]] = []
 
-    for phase, steps in phases:
-        print(f"\n── {phase} ──────────────────────────────────────")
-        for i, step in enumerate(steps, 1):
-            if args.skip_llm and step.costs_money:
-                print(f"\n[{phase} {i}/{len(steps)}] {step.name}  ⏭ 건너뜀(유료)")
-                skipped += 1
-                continue
-            print(f"\n[{phase} {i}/{len(steps)}] {step.name}"
-                  f"{'  💰' if step.costs_money else ''}")
-            ok, summary = run(step, dry_run=args.dry_run, full=args.full,
-                              tail=args.tail)
-            ran += 1
-            summaries.append((step.name, summary))
-            if not ok:
-                failed += 1
-                if step.halt_on_fail:
-                    # 뒷단계가 이 결과를 전제한다 — 망가진 채로 진행하면 더 나빠진다
-                    print(f"\n❌ 「{step.name}」 실패로 중단합니다. "
-                          f"고친 뒤 다시 실행하세요.")
-                    return 1
-                print(f"    ⚠ 검사 단계라 계속 진행합니다.")
+    def write_doc() -> None:
+        """중단·완주·Ctrl-C 어느 쪽이든 문서를 지금 DB 상태로 맞춘다."""
+        if args.dry_run:                    # 바뀐 게 없으니 문서도 그대로 둔다
+            return
+        print(f"\n[마무리] {DOC_STEP.name}")
+        run(DOC_STEP, dry_run=False, full=False, tail=args.tail, log=log)
+
+    def finish(code: int) -> int:
+        """어떻게 끝나든 **무엇이 얼마나 바뀌었는지**를 남긴다."""
+        if log:
+            ended = graph_counts()
+            total = fmt_delta(began, ended)
+            log.write("\n" + "#" * 72)
+            log.write(f"# 종료코드 {code} · 총 {time.time()-started:.0f}초")
+            log.write(f"# 전체 증감: {total or '변화 없음'}")
+            for name, d in log.deltas:
+                log.write(f"#   {name:<28} {d}")
+            log.close()
+            if log.deltas:
+                print("\n  그래프를 바꾼 단계")
+                for name, d in log.deltas:
+                    print(f"    {name:<28} {d}")
+                print(f"    {'─'*28} {'─'*20}")
+                print(f"    {'합계':<28} {total or '변화 없음'}")
+            print(f"\n  기록: {log.path}")
+        return code
+
+    try:
+        for phase, steps in phases:
+            print(f"\n── {phase} ──────────────────────────────────────")
+            for i, step in enumerate(steps, 1):
+                if args.skip_llm and step.costs_money:
+                    print(f"\n[{phase} {i}/{len(steps)}] {step.name}  ⏭ 건너뜀(유료)")
+                    skipped += 1
+                    continue
+                print(f"\n[{phase} {i}/{len(steps)}] {step.name}"
+                      f"{'  💰' if step.costs_money else ''}")
+                ok, summary = run(step, dry_run=args.dry_run, full=args.full,
+                                  tail=args.tail, log=log)
+                ran += 1
+                summaries.append((step.name, summary))
+                if not ok:
+                    failed += 1
+                    if step.halt_on_fail:
+                        # 뒷단계가 이 결과를 전제한다 — 망가진 채로 가면 더 나빠진다
+                        print(f"\n❌ 「{step.name}」 실패로 중단합니다. "
+                              f"고친 뒤 다시 실행하세요.")
+                        write_doc()   # ★멈춘 시점까지의 변경도 문서에 남긴다
+                        return finish(1)
+                    print(f"    ⚠ 검사 단계라 계속 진행합니다.")
+    except KeyboardInterrupt:
+        print("\n\n⛔ 사람이 중단했습니다.")
+        write_doc()
+        return finish(130)
+
+    write_doc()
 
     print("\n" + "=" * 66)
     print(f"  실행 {ran} · 건너뜀 {skipped} · 실패 {failed} · "
@@ -250,7 +405,7 @@ def main() -> int:
     if args.dry_run:
         print("  [dry-run] 실제로 바뀐 것은 없습니다.")
     print("=" * 66)
-    return 0 if failed == 0 else 2
+    return finish(0 if failed == 0 else 2)
 
 
 if __name__ == "__main__":
