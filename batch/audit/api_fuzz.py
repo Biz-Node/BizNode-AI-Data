@@ -128,6 +128,11 @@ def check_invariants(g: dict, keys: list[str], body: dict) -> list[str]:
     pinned_keys = {n["key"] for n in g["nodes"] if n["role"] == "pinned"}
     if pinned_keys - set(keys):
         out.append(f"요청에 없는 키가 pinned 로: {pinned_keys - set(keys)}")
+    # ★보낸 키는 **노드가 되거나 `unknown_keys` 에 있거나** 둘 중 하나다.
+    #   조용히 사라지면 화면이 「담았는데 왜 안 보이지」를 설명할 수 없다.
+    lost = set(keys) - pinned_keys - set(g.get("unknown_keys") or [])
+    if lost and not g.get("truncated"):
+        out.append(f"보낸 키가 노드도 unknown_keys 도 아니고 사라짐: {sorted(lost)}")
 
     # ── 여기부터는 「응답 안에서 서로 맞는가」 ──────────────────
     touch: dict[str, int] = {}
@@ -398,7 +403,7 @@ def _fuzz_company(cli, pool, rng, args) -> int:
             bugs.append(([f"HTTP {r.status_code}: {r.text[:120]}"], label))
             continue
         d = r.json()
-        bad = check_company(d, key)
+        bad = check_company(d, key) + check_detail_level(d)
         stat[d["detail_level"]] += 1
 
         for sub, fn in (("market", lambda j: check_market(j)),
@@ -523,6 +528,30 @@ def main() -> int:
 # ══════════════════════════════════════════════════════════════════
 #  기업 라우트 — 무작위 기업으로 두들긴다
 # ══════════════════════════════════════════════════════════════════
+
+
+def check_detail_level(d: dict) -> list[str]:
+    """`detail_level` 이 **실제 보유 자료와 맞나.**
+
+    프론트가 이 값으로 「상세 페이지로 가기」를 켠다. 전에는 블록 **개수**로
+    판정해서 재무도 공시도 없는 외국 기업이 `full` 로 나갔고, 눌러 보면
+    빈 페이지였다.
+    """
+    out, B, lv = [], d.get("blocks") or {}, d.get("detail_level")
+    has_num = B.get("financials") != "none" or B.get("market") != "none"
+    if lv == "full" and B.get("overview") == "none":
+        out.append("detail_level=full 인데 사업개요가 없다")
+    if lv == "partial" and not has_num:
+        out.append("detail_level=partial 인데 재무도 시세도 없다")
+    if lv == "none" and has_num:
+        out.append("detail_level=none 인데 재무나 시세가 있다")
+    # ★`none` 은 「빈 노드」가 아니다. 관계·사건·뉴스는 있어야 한다 —
+    #   화면이 좌 패널을 그려야 하므로.
+    if lv == "none" and all(v == "none" for v in B.values()):
+        out.append("detail_level=none 인데 채워진 블록이 하나도 없다")
+    if lv not in ("full", "partial", "none"):
+        out.append(f"detail_level 값이 {lv!r}")
+    return out
 
 
 def check_company(d: dict, key: str) -> list[str]:

@@ -186,6 +186,15 @@ def workspace_insights(keys: list[str], limit: int = 5) -> list[dict]:
     if not names_of:
         return []
 
+    # ★그래프에 없는 키는 **여기서 떨군다.** 검색은 DART 명부 118,535곳까지
+    #   보여 주므로(`in_graph=false`) 아직 수집 안 한 회사가 그대로 담겨 올 수 있다.
+    #   실측(2026-08-18): 한화오션엔지니어링(01622599)을 담으면 `names_of[k]` 가
+    #   KeyError 로 터져 **500** 이 났다. 겹칠 것이 없는 회사지 오류가 아니다.
+    ks = [k for k in ks if k in names_of]
+    of = len(ks)
+    if of < 2:
+        return []
+
     cust: dict[str, set] = defaultdict(set)
     supp: dict[str, set] = defaultdict(set)
     own: dict[str, set] = defaultdict(set)

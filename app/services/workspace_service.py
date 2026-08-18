@@ -260,7 +260,7 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
     keys = list(dict.fromkeys(keys))
     if not keys:
         return {"nodes": [], "edges": [], "islands": [], "truncated": False,
-                "omitted": {}, "ref_candidates": 0}
+                "omitted": {}, "ref_candidates": 0, "unknown_keys": []}
 
     with neo4j_session() as s:
         base = _nodes(s, keys)
@@ -453,9 +453,13 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
     for n in out:
         n["is_island"] = n["key"] in island_set
 
+    # ★그래프에 없는 키를 **조용히 버리지 않는다.** 검색은 DART 명부까지
+    #   보여 주므로(`in_graph=false`) 아직 수집 안 한 회사가 담겨 올 수 있다.
+    #   말없이 빼면 화면이 「담았는데 왜 안 보이지」를 설명할 수 없다.
     return {"nodes": out, "edges": edges, "islands": islands,
             "truncated": truncated, "omitted": omitted,
-            "ref_candidates": ref_candidates}
+            "ref_candidates": ref_candidates,
+            "unknown_keys": [k for k in keys if k not in base]}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -493,7 +497,9 @@ def suggest(keys: list[str], limit: int = 5) -> list[dict]:
             "key": r["key"], "name": r["name"], "reason": "shared_customer",
             "reason_text": f"공통 고객 {r['overlap']}곳 — {' · '.join(via)}",
             "overlap": r["overlap"], "via": via, "in_graph": True,
-            "detail_level": "full" if r["stub"] is False else "relations_only",
+            # 추천 목록에서는 재무 보유 여부를 안 읽는다 — `partial` 을 가르려면
+            # PG 를 한 번 더 쳐야 하고, 추천은 「담을까 말까」라 그만큼이 필요 없다.
+            "detail_level": "full" if r["stub"] is False else "none",
             "ksic_label": label_of(r["ksic"]) if r["ksic"] else None,
         })
     return out

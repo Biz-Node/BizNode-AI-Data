@@ -553,8 +553,25 @@ def company_detail(key: str) -> Optional[dict]:
         "market": _fill(1 if market else 0),
         "graph": _fill(len(graph["edges"])),
     }
-    filled = sum(1 for v in blocks.values() if v == "full")
-    detail_level = "full" if filled >= 7 else ("relations_only" if related else "none")
+    # ★블록 **개수**로 판정하면 안 된다. 블록은 무게가 서로 다르다 —
+    #   `news`·`risk`·`graph` 는 관계만 있어도 채워져서, 재무도 공시도 없는
+    #   외국 기업이 7개를 넘겨 `full` 로 나갔다(엔비디아 7/11 → full).
+    #   프론트가 이 값으로 「상세 페이지로 가기」를 켜므로 **빈 페이지로 보낸다.**
+    #
+    #   무엇을 실제로 갖고 있느냐로 가른다. 검색·워크스페이스는 `is_stub` 으로
+    #   이미 이렇게 판정하고 있었다 — 상세만 어긋나 있었다.
+    #
+    #       full             사업개요가 있다 (= is_stub=false = 시드 64곳)
+    #                        사업보고서 본문을 파야 나오므로 재무·사업부문·공시가
+    #                        함께 온다. 파이프라인이 끝까지 돈 증거다
+    #       partial          재무나 시세가 있다 (416곳) — corp_code 가 있어야 한다
+    #       none   그 외 (2,952곳) — 외국 기업이 여기 온다. 정상이다
+    if p.get("is_stub") is False:
+        detail_level = "full"
+    elif fins or market:
+        detail_level = "partial"
+    else:
+        detail_level = "none"
 
     return {
         "key": node_key, "name": p.get("name"),
