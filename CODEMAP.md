@@ -22,7 +22,7 @@ DART API   ──┐
 
 ---
 
-# batch/ — 실행하는 것 (46개)
+# batch/ — 실행하는 것
 
 디렉터리가 **동사**다. 파일 이름에 `build_`·`fix_`·`audit_` 접두어를 붙이지 않는다.
 
@@ -42,7 +42,10 @@ DART API   ──┐
 | `ownership.py` | 대량보유(5%룰) 원본 수집 |
 | `subtype_taxonomy.py` | subtype 분류 체계 수립 (1회성) |
 | `company_vectors.py` | 기업 소개 카드 임베딩 — **말로 회사 찾기** (개요+제품+거래처) |
-| `stub_profiles.py` | stub 2,267곳에 정체 붙이기 (DART 기업개황 → LLM 한 줄) |
+| `stub_profiles.py` | stub에 정체 붙이기 (DART 기업개황 → LLM) — 상세는 PG로 |
+| `business_overview.py` | 사업보고서 「사업의 내용」 **원문** → PG (받아 둔 XML 재파싱 · **0원**) |
+| `market_data.py` | 주가·거래량(pykrx) + 유통주식수(DART) → PG · 지표는 **뷰로 계산** |
+| `dart_aliases.py` | DART 명부에서 별칭 사전 채우기 |
 | `all.py` | 위를 순서대로 한 번에 |
 
 ## batch/repair/ — 고친다 (이미 들어온 것 · 대부분 0원)
@@ -64,6 +67,29 @@ DART API   ──┐
 | `segment_units.py` | 사업부문 매출 단위 오류 교정 (백만원↔원) |
 | `misclassified_edges.py` | 오분류 엣지 재배정 (방향까지 판단) |
 | `retypes.py` | 유형오류 판정을 실제로 적용 — **매트릭스가 거른다** |
+| `retype_recheck.py` | 유형오류 표시를 다시 확인 |
+| `event_merge.py` | 같은 사건 병합 — **어근 매칭**으로 후보를 만든다(토큰겹침은 재현율 38%) |
+| `person_merge.py` | 동명 인물 판정·병합 (손 목록이 이긴다) |
+| `foreign_merge.py` | 해외 기업 표기 병합 |
+| `cluster_reps.py` | 병합 클러스터의 대표 이름 고르기 |
+| `org_types.py` | 기관을 10종으로 분류 (규제기관·수사사법·정부부처…) |
+| `product_category.py` | 제품 6종 분류 (제품·부품·기술·장비·서비스·소재) |
+| `subtype_backfill.py` | 빈 subtype을 근거에서 소급 채우기 |
+| `ksic_backfill.py` | 업종코드 소급 채우기 |
+| `node_lastseen.py` | 노드의 `last_seen`을 엣지에서 되계산 |
+| `ambiguous_corps.py` | 동명 법인이라 못 좁힌 노드 찾기 |
+| `corp_code_resolve.py` | 그 노드들을 LLM으로 판정 (`matched`/`none`/`unsure` · 캐시) |
+| `purge_unfounded.py` | 근거 없는 엣지를 `purged_edges`에 기록하고 뺀다 |
+| `purge_orphans.py` | 관계가 0이 된 노드를 `purged_nodes`에 기록하고 뺀다 |
+
+**스키마 정리 — 2026-08-15 1회성 (기록으로 남긴다)**
+
+| 파일 | 하는 일 |
+|---|---|
+| `schema_slim.py` | Company 속성 49 → 11. 사업부문 노드 병합 · PG 이관 |
+| `edge_slim.py` | 엣지 속성 정리 — **계산되는 파생값 6종 제거** · ratio 단위 교정 |
+| `edge_audit_move.py` | 검사 사유·이력 37종 → PG `edge_audits`. ★`loaded_at`은 **옮기면 안 된다** |
+| `pg_tidy.py` | 빈 표·중복 표 정리 (`companies`·`ingest_runs` 삭제) |
 
 ## batch/audit/ — 본다 (지우지 않고 표시만)
 
@@ -90,6 +116,8 @@ DART API   ──┐
 | `status.py` | 어느 기업을 얼마나 돌렸나 (진행현황 문서 생성) |
 | `lookup.py` | 근거 원문 조회 CLI (ChromaDB엔 UI가 없다) |
 | `refilter.py` | 저장된 기사에 **현재** 규칙 필터를 다시 적용 |
+| `leftover_extract.py` | 필터는 통과했는데 추출이 안 된 기사 마저 돌리기 |
+| `collect_state.py` | 수집 상태 점검 |
 
 ---
 
@@ -109,7 +137,7 @@ DART API   ──┐
 **dart/** `corp_code`(기업 마스터) · `company_info`(기업개황) · `financials`(재무)
 · `disclosure_list`(공시 목록) · `document`·`downloader`(원문 ZIP)
 · `xml_parser`·`text_cleaner`(원문 파싱) · `business_report`·`company_detail`·`sales_customers`(절 추출)
-· `major_reports`(주요사항보고서)
+· `major_reports`(주요사항보고서) · `shares`(유통주식수 — 시가총액 계산용)
 
 **news/** `naver`(관계 기사 발견) · `gnews`(기간 제약을 푸는 경로) · `rss`(전문 제공 매체)
 · `crawler`(본문 크롤 · robots.txt 준수)
@@ -138,6 +166,13 @@ DART API   ──┐
 | `product_names.py` | 제품 표기 통일 (`HBM3E` / `HBM 3E`) |
 | `generic_names.py` | 설명형·익명 개체명 판별 (「글로벌 대형기업」 차단) |
 | `foreign_aliases.py` | 해외 기업 한글·영문 표기 통일 |
+| `canonical_name.py` | 대표 표기 결정 |
+| `legal_forms.py` | 법인격 표기 (주식회사·(주)·Inc·Ltd) 사전 |
+| `translit.py` | 로마자 ↔ 한글 음차 |
+| `company_registry.py` | 별칭 사전 조회·기록 (PG `company_aliases`) |
+| `product_registry.py` | 알려진 제품 표기 (PG `product_names`) — **사후 병합은 안 한다** |
+| `name_judge.py` | 「고유명인가 설명인가」 LLM 판정 + 캐시 |
+| `ksic.py` | 업종 중분류 59종 |
 | `resolver.py` | 이름 → `corp_code` 개체 해소 |
 | `person_index.py` | 이름 → 생년월 인덱스 (인물 분열 방지) |
 | `common.py` | 투자조합·신탁·펀드 분류 |
@@ -185,7 +220,7 @@ DART API   ──┐
 | `core/config.py` | 환경 설정 (`.env` → docker-compose 기본값 폴백) |
 | `core/database.py` | Neo4j · PostgreSQL 접속 헬퍼 |
 | `services/graph_service.py` | ★**그래프를 읽는 유일한 통로.** 신선도·근거 검증 결과를 적용해 거르고, 질의 시점에 파급을 계산한다 |
-| `api/` | 미구현 |
+| `api/` | 미구현 — [연동 계획](BizNode_연동_계획.md) 2단계 |
 
 # schemas/
 

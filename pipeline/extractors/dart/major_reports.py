@@ -1,7 +1,7 @@
-"""주요사항보고서(DS005) 구조화 API 수집 — 합병·주식취득·소송 (경로 B).
+"""주요사항보고서(DS005) 구조화 API 수집 — 합병·주식취득·소송.
 
 원문 파싱이 아니라 구조화 JSON. corp_code + bgn_de/end_de(사건 기반).
-Sprint 2D 실측: 반도체·로봇 시드는 합병 9·주식양수 5·소송 1건, 부도/회생 0.
+반도체·로봇 시드 실측 시 합병 9·주식양수 5·소송 1건, 부도/회생 0로 양이 적다.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from app.core.config import DART_KEY
 
 _BASE = "https://opendart.fss.or.kr/api"
 
-# 유형 → 엔드포인트 slug (Sprint 2D 실측 확인)
+# 유형 → 엔드포인트 slug
 SLUGS = {
     "merger": "cmpMgDecsn",                   # 회사합병결정
     "stock_acquisition": "otcprStkInvscrInhDecsn",  # 타법인 주식 양수결정

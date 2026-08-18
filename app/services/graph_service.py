@@ -290,6 +290,11 @@ WITH e, i, coalesce(parent, hit) AS c, hit,
 //   `c`가 사는 쪽이면 `d`는 공급사(매출 상실). 둘을 `flow`로 구분해 감쇠를 달리한다.
 OPTIONAL MATCH (c)-[s:SUPPLIES_TO]-(d:Company)
 WHERE coalesce(s.is_current, true) AND {_HIDE.format(r='s')}
+// ★`only` 를 주면 **그 회사에 닿는 갈래만** 계산한다. 선을 클릭했을 때는 반대쪽
+//   끝 하나만 알면 되는데, 전부 계산하면 삼성전자 사건 하나가 129곳을 낸다.
+//   필터를 Cypher 로 내려야 한다 — 파이썬에서 걸러도 계산은 이미 끝나 있다.
+WITH e, i, c, hit, unit, s, d
+WHERE $only IS NULL OR c.name = $only OR d.name = $only
 RETURN e.name AS event, c.name AS direct, unit,
        CASE WHEN startNode(s) = c THEN 'supply' ELSE 'demand' END AS flow,
        coalesce(i.sign,'') AS sign, properties(i) AS i_props,
@@ -304,14 +309,18 @@ RETURN e.name AS event, c.name AS direct, unit,
 
 
 def propagate_risk(event_name: str, *, today: Optional[date] = None,
-                   min_score: float = 0.05) -> list[Propagation]:
+                   min_score: float = 0.05,
+                   only: Optional[str] = None) -> list[Propagation]:
     """사건 → 영향받는 기업들. 1홉은 보도된 것, 2홉은 공급망으로 **계산한 것**.
 
     돌려주는 각 항목에 경로가 붙어 있어, 어디까지가 기사이고 어디부터가
     계산인지 사용자가 구분할 수 있다.
+
+    `only` 를 주면 **그 회사에 닿는 갈래만** 계산한다(선을 클릭했을 때).
+    점수 계산은 그대로라 전체를 돌린 뒤 걸러낸 것과 값이 같다.
     """
     with neo4j_session() as session:
-        rows = [dict(r) for r in session.run(_PROPAGATE, event=event_name)]
+        rows = [dict(r) for r in session.run(_PROPAGATE, event=event_name, only=only)]
     if not rows:
         return []
 

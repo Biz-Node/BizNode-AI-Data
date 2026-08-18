@@ -1,0 +1,803 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BizNode API 미리보기</title>
+<!--
+  ★이 파일은 **프론트엔드가 아니다.** 응답 JSON 이 화면에서 어떻게 보이는지
+    확인하기 위한 도구다. 디자인은 팀원 소관이고, 여기서 보는 건 데이터다.
+
+    JSON 만 봐서는 안 보이는 것을 잡는다 —
+      60노드·82엣지가 한 화면에 들어가나 (상한이 적당한가)
+      「연관 기업」 60줄이 감당되나
+      긴 이름(「서울남부지검 금융·증권범죄합동수사부」)이 겹치나
+      범례 넷이 실제로 갈리나
+      null 필드가 얌전히 비나
+
+    FastAPI 가 같은 출처에서 서빙하므로 CORS 설정이 필요 없다.
+-->
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #fff; --ink: #16181d; --dim: #6b7280;
+    --line: #e3e6ea; --accent: #2b5cd9; --warn: #c2410c; --bad: #b91c1c;
+    --trade: #2b5cd9; --own: #7c3aed; --person: #0891b2;
+    --product: #059669; --event: #dc2626; --org: #92722a;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.55 "Malgun Gothic", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { background: var(--card); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; display: flex; gap: 12px; align-items: center;
+           position: sticky; top: 0; z-index: 10; }
+  header b { font-size: 15px; }
+  header .note { color: var(--dim); font-size: 12px; }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav button { border: 1px solid var(--line); background: var(--card);
+               padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+  nav button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  .pane { display: none; }
+  .pane.on { display: block; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  input[type=text], textarea { font: inherit; padding: 7px 10px; border: 1px solid var(--line);
+                               border-radius: 6px; background: var(--card); color: inherit; }
+  input[type=text] { min-width: 260px; }
+  textarea { min-width: 420px; min-height: 62px; font-family: var(--mono); font-size: 12px; }
+  button.go { background: var(--accent); color: #fff; border: 0; padding: 8px 14px;
+              border-radius: 6px; cursor: pointer; font: inherit; }
+  label.chk { color: var(--dim); display: flex; gap: 5px; align-items: center; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 12px 14px; margin-bottom: 12px; }
+  .card > h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: .02em;
+               display: flex; align-items: baseline; gap: 8px; }
+  .card > h3 .c { color: var(--dim); font-weight: 400; font-size: 12px; }
+  .fill { font-size: 11px; padding: 1px 6px; border-radius: 99px; border: 1px solid var(--line);
+          color: var(--dim); margin-left: auto; }
+  .fill.full { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+  .fill.partial { color: var(--warn); border-color: #fed7aa; background: #fff7ed; }
+  .fill.none { color: var(--dim); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; font-size: 11px; white-space: nowrap; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+  .scroll { max-height: 340px; overflow: auto; }
+  .wide { overflow-x: auto; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
+  .kv dt { color: var(--dim); }
+  .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line);
+         color: var(--dim); }
+  .tag.stale { color: var(--warn); border-color: #fed7aa; }
+  .tag.risk { color: var(--bad); border-color: #fecaca; background: #fef2f2; }
+  .tag.no { color: var(--dim); background: #f3f4f6; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 99px; margin-right: 5px; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--dim);
+            margin-bottom: 6px; }
+  canvas { width: 100%; height: 520px; display: block; border: 1px solid var(--line);
+           border-radius: 8px; background: var(--card); cursor: grab; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .err { color: var(--bad); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+  .muted { color: var(--dim); }
+  .hitrow { cursor: pointer; }
+  .hitrow:hover td { background: #f0f4ff; }
+  .flag { font-size: 11px; color: var(--warn); }
+  pre.raw { font-family: var(--mono); font-size: 11px; max-height: 300px; overflow: auto;
+            background: #0f1115; color: #d7dbe0; padding: 10px; border-radius: 6px; }
+  .bar { height: 6px; background: #eef1f5; border-radius: 99px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+</style>
+
+<header>
+  <b>BizNode API 미리보기</b>
+  <span class="note">응답 JSON 이 화면에서 어떻게 보이는지 확인하는 도구 · 디자인 아님</span>
+  <nav>
+    <button data-p="search" class="on">검색</button>
+    <button data-p="company">기업 상세</button>
+    <button data-p="ws">워크스페이스</button>
+    <button data-p="ins">인사이트</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ══ 검색 ══════════════════════════════════════════════════ -->
+  <section class="pane on" id="p-search">
+    <div class="row">
+      <input type="text" id="q" value="삼성" placeholder="기업명 또는 별칭">
+      <button class="go" id="q-go">검색</button>
+      <span class="muted" id="q-stat"></span>
+    </div>
+    <div class="card">
+      <h3>GET /search <span class="c" id="q-url"></span></h3>
+      <div class="scroll wide"><table id="q-tbl"></table></div>
+      <div class="hint">행을 누르면 기업 상세로 넘어갑니다.
+        <b>수집 안 됨</b>은 DART 명부에만 있는 회사입니다 — 실재하지만 자료가 없습니다.</div>
+    </div>
+  </section>
+
+  <!-- ══ 기업 상세 ═════════════════════════════════════════════ -->
+  <section class="pane" id="p-company">
+    <div class="row">
+      <input type="text" id="ck" value="00126380" placeholder="corp_code 또는 norm_name">
+      <button class="go" id="c-go">불러오기</button>
+      <span class="muted" id="c-stat"></span>
+    </div>
+    <div id="c-body"></div>
+  </section>
+
+  <!-- ══ 워크스페이스 ═══════════════════════════════════════════ -->
+  <section class="pane" id="p-ws">
+    <div class="row">
+      <textarea id="wk">00126380
+01095722
+00164779
+01133217</textarea>
+      <div>
+        <label class="chk"><input type="checkbox" id="wrefs" checked> refs (참조 기업 붙이기)</label>
+        <label class="chk">max_nodes <input type="text" id="wmax" value="60" style="min-width:60px"></label>
+      </div>
+      <button class="go" id="w-go">그리기</button>
+      <span class="muted" id="w-stat"></span>
+    </div>
+    <div class="grid" style="grid-template-columns: 300px 1fr;">
+      <div id="w-side"><div class="card"><h3>선택</h3>
+        <div class="muted">노드나 선을 누르세요.</div></div></div>
+      <div>
+        <div class="legend" id="w-legend"></div>
+        <canvas id="w-cv"></canvas>
+        <div class="hint" id="w-hint"></div>
+      </div>
+    </div>
+  </section>
+  <!-- ══ 인사이트 ═══════════════════════════════════════════ -->
+  <section class="pane" id="p-ins">
+    <div class="row">
+      <textarea id="ik">01095722
+00164779
+00126380
+00161383</textarea>
+      <label class="chk">카드 <input type="text" id="ilim" value="5" style="min-width:50px"></label>
+      <button class="go" id="i-go">뽑기</button>
+      <span class="muted" id="i-stat"></span>
+    </div>
+    <div id="i-body"></div>
+  </section>
+</main>
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+//  공통
+// ══════════════════════════════════════════════════════════════════
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// ★null 을 「0」이나 빈칸으로 그리면 **모르는 것과 없는 것이 섞인다.**
+const dash = v => (v === null || v === undefined || v === '') ? '<span class="muted">—</span>' : esc(v);
+const num = v => (v === null || v === undefined) ? '<span class="muted">—</span>'
+                                                 : Number(v).toLocaleString('ko-KR');
+const eok = v => (v === null || v === undefined) ? '<span class="muted">—</span>'
+                                                 : (v / 1e8).toLocaleString('ko-KR',
+                                                     { maximumFractionDigits: 0 }) + '억';
+const pct = v => (v === null || v === undefined) ? '<span class="muted">—</span>'
+                                                 : Number(v).toFixed(2) + '%';
+
+const KIND = { trade: '거래 기업', ownership: '주주·자회사', person: '인물',
+               product: '제품', event: '위험 사건', org: '기관' };
+const KCOLOR = { trade: '--trade', ownership: '--own', person: '--person',
+                 product: '--product', event: '--event', org: '--org' };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+async function api(path) {
+  const t = performance.now();
+  const r = await fetch(path);
+  const ms = Math.round(performance.now() - t);
+  if (!r.ok) throw new Error(`${r.status} ${path}\n` + (await r.text()).slice(0, 600));
+  return { data: await r.json(), ms, stub: r.headers.get('X-Stub') === 'true' };
+}
+async function post(path, body) {
+  const t = performance.now();
+  const r = await fetch(path, { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const ms = Math.round(performance.now() - t);
+  if (!r.ok) throw new Error(`${r.status} ${path}\n` + (await r.text()).slice(0, 600));
+  return { data: await r.json(), ms, stub: r.headers.get('X-Stub') === 'true' };
+}
+const stamp = (ms, stub, extra = '') =>
+  `${ms}ms${stub ? ' · <b style="color:var(--warn)">스텁</b>' : ''}${extra ? ' · ' + extra : ''}`;
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.pane').forEach(p =>
+    p.classList.toggle('on', p.id === 'p-' + b.dataset.p));
+});
+const go = p => document.querySelector(`nav button[data-p=${p}]`).click();
+
+// ══════════════════════════════════════════════════════════════════
+//  검색
+// ══════════════════════════════════════════════════════════════════
+async function doSearch() {
+  const q = $('#q').value.trim(); if (!q) return;
+  const url = `/search?q=${encodeURIComponent(q)}&limit=30`;
+  $('#q-url').textContent = url;
+  $('#q-stat').textContent = '…';
+  try {
+    const { data: d, ms, stub } = await api(url);
+    $('#q-stat').innerHTML = stamp(ms, stub,
+      `<b>${num(d.total)}</b>건 중 ${d.hits.length}건 · 수집 ${num(d.graph_total)} · 명부만 ${num(d.registry_total)}`);
+    $('#q-tbl').innerHTML =
+      `<tr><th>이름</th><th>업종</th><th>시장</th><th>종목</th><th>수집</th>
+           <th style="text-align:right">관계</th><th>걸린 곳</th><th>key</th></tr>` +
+      d.hits.map(h => `<tr class="hitrow" data-k="${esc(h.key)}">
+        <td><b>${esc(h.name)}</b></td>
+        <td>${dash(h.ksic_label)}</td>
+        <td>${dash(h.market)}</td>
+        <td>${dash(h.stock_code)}</td>
+        <td>${h.in_graph ? `<span class="tag">${esc(h.detail_level)}</span>`
+                         : '<span class="tag no">수집 안 됨</span>'}</td>
+        <td class="n">${num(h.degree)}</td>
+        <td><span class="tag">${esc(h.matched_on)}</span></td>
+        <td class="muted" style="font-family:var(--mono);font-size:11px">${esc(h.key)}</td>
+      </tr>`).join('');
+    $('#q-tbl').querySelectorAll('.hitrow').forEach(tr => tr.onclick = () => {
+      $('#ck').value = tr.dataset.k; go('company'); loadCompany();
+    });
+  } catch (e) { $('#q-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('#q-go').onclick = doSearch;
+$('#q').onkeydown = e => { if (e.key === 'Enter') doSearch(); };
+
+// ══════════════════════════════════════════════════════════════════
+//  기업 상세 — 목업 4-3 의 블록 순서를 그대로 따른다
+// ══════════════════════════════════════════════════════════════════
+function block(title, count, fill, inner, extra = '') {
+  const f = fill ? `<span class="fill ${fill}">${fill}</span>` : '';
+  const c = (count === null || count === undefined) ? '' : `<span class="c">${count}</span>`;
+  return `<div class="card"><h3>${title} ${c} ${extra} ${f}</h3>${inner}</div>`;
+}
+// 「더보기」 — 상세는 블록마다 10건만 주므로 나머지는 서브 라우트로 가져온다
+let MORE = 0;
+function more(path, shown, total, render) {
+  if (!total || total <= shown) return '';
+  const id = 'more' + (++MORE);
+  MORE_FN[id] = { path, render };
+  return `<div style="margin-top:8px"><button class="go" data-more="${id}"
+    style="padding:5px 12px;font-size:12px">더보기 — 나머지 ${total - shown}건</button></div>`;
+}
+const MORE_FN = {};
+function wireMore(root) {
+  root.querySelectorAll('[data-more]').forEach(b => b.onclick = async () => {
+    const { path, render } = MORE_FN[b.dataset.more];
+    b.textContent = '…';
+    try {
+      const { data, ms } = await api(path);
+      const box = document.createElement('div');
+      box.innerHTML = render(data) + `<div class="hint">${path} · ${ms}ms</div>`;
+      b.replaceWith(box);
+    } catch (e) { b.outerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  });
+}
+const empty = w => `<div class="muted">${w}</div>`;
+
+async function loadCompany() {
+  const k = $('#ck').value.trim(); if (!k) return;
+  $('#c-stat').textContent = '…'; $('#c-body').innerHTML = '';
+  try {
+    const { data: d, ms, stub } = await api('/companies/' + encodeURIComponent(k));
+    const B = d.blocks || {}, C = d.counts || {};
+    $('#c-stat').innerHTML = stamp(ms, stub,
+      `${esc(d.detail_level)} · 관계 ${num(C.relations)} · 사건 ${num(C.events)} · 뉴스 ${num(C.news)}`);
+
+    let h = '';
+    // ── 머리
+    h += `<div class="card"><h3>${esc(d.name)}
+        <span class="c">${dash(d.ksic_label)}</span>
+        ${d.market ? `<span class="tag">${esc(d.market)}</span>` : ''}
+        ${d.stock_code ? `<span class="tag">${esc(d.stock_code)}</span>` : ''}
+        <span class="fill ${esc(d.detail_level)}">${esc(d.detail_level)}</span></h3>
+      <dl class="kv">
+        <dt>대표</dt><dd>${dash(d.ceo)}</dd>
+        <dt>설립</dt><dd>${dash(d.established_at)}</dd>
+        <dt>업종</dt><dd>${dash(d.induty)}</dd>
+        <dt>영문</dt><dd>${dash(d.name_en)}</dd>
+        <dt>corp_code</dt><dd>${dash(d.corp_code)}</dd>
+        <dt>수집 시점</dt><dd>${dash(d.collected_at)}</dd>
+      </dl>
+      ${d.overview ? `<p style="margin:8px 0 0">${esc(d.overview)}</p>` : ''}
+      <div class="row" style="margin:10px 0 0">
+        ${Object.entries(C).map(([k2, v]) =>
+          `<span class="tag">${esc(k2)} <b>${num(v)}</b></span>`).join('')}
+      </div></div>`;
+
+    // ── 시장 정보 ★상세엔 series 가 없다 → 차트는 /market 을 따로 불러야 한다
+    const m = d.market_metrics;
+    h += block('시장 정보', m ? m.trade_date : null, B.market,
+      m ? `<dl class="kv">
+        <dt>종가</dt><dd>${num(m.close_price)}원
+          <span class="tag ${m.change_pct < 0 ? 'risk' : ''}">${m.change_pct > 0 ? '+' : ''}${m.change_pct}%</span></dd>
+        <dt>거래량</dt><dd>${num(m.volume)}</dd>
+        <dt>시가총액</dt><dd>${eok(m.market_cap)}</dd>
+        <dt>PER</dt><dd>${m.per === null ? '<span class="muted">— (적자)</span>' : m.per}</dd>
+        <dt>PBR</dt><dd>${dash(m.pbr)}</dd>
+        <dt>PSR</dt><dd>${dash(m.psr)}</dd>
+        <dt>기준</dt><dd class="muted">${dash(m.fin_year)}년 ${dash(m.fs_div)}</dd>
+      </dl>
+      <div class="hint">차트를 그리려면 <code>/companies/{key}/market?days=30</code> 를
+        따로 불러야 합니다 — <b>상세에는 series 가 없습니다.</b></div>`
+        : empty('비상장이거나 시세가 없습니다'));
+
+    // ── 재무 3개년
+    h += block('재무 3개년 + 비율', (d.financials || []).length, B.financials,
+      d.financials?.length ? `<div class="wide"><table>
+        <tr><th>연도</th><th>구분</th><th style="text-align:right">매출</th>
+            <th style="text-align:right">영업이익</th><th style="text-align:right">순이익</th>
+            <th style="text-align:right">부채비율</th><th style="text-align:right">ROE</th>
+            <th style="text-align:right">영업이익률</th></tr>
+        ${d.financials.map(f => `<tr><td>${esc(f.bsns_year)}</td><td>${esc(f.fs_div)}</td>
+          <td class="n">${eok(f.revenue)}</td><td class="n">${eok(f.operating_profit)}</td>
+          <td class="n">${eok(f.net_profit)}</td><td class="n">${pct(f.debt_ratio)}</td>
+          <td class="n">${pct(f.roe)}</td><td class="n">${pct(f.operating_margin)}</td></tr>`).join('')}
+      </table></div>` : empty('재무 미수집 — 전체 3,432곳 중 477곳만 있습니다'));
+
+    // ── 사업부문
+    h += block('사업부문', (d.segments || []).length, B.segments,
+      d.segments?.length ? `<table>${d.segments.map(s => `<tr>
+        <td>${esc(s.name ?? s.segment_name)}</td>
+        <td class="n">${eok(s.revenue)}</td>
+        <td style="width:35%"><div class="bar"><i style="width:${Math.min(100, (s.ratio ?? 0))}%"></i></div></td>
+        <td class="n">${pct(s.ratio)}</td></tr>`).join('')}</table>`
+        : empty('사업부문 미수집'));
+
+    // ── 기업 관계 그래프 ★상세에 함께 온다
+    const g = d.graph;
+    h += block('기업 관계 그래프', g ? `노드 ${g.nodes.length} · 선 ${g.edges.length}` : null, B.graph,
+      g ? `<div class="legend" id="c-legend"></div>
+           <canvas id="c-cv"></canvas>
+           <div class="hint" id="c-ghint"></div>`
+        : empty('그래프 없음'));
+
+    // ── 연관 기업 ★그래프에 그려진 것과 같은 목록이어야 한다
+    h += block('연관 기업', `${(d.related || []).length}건 / 전체 ${num(C.related_companies)}곳`,
+      B.related,
+      d.related?.length ? `<div class="scroll wide"><table>
+        <tr><th>유형</th><th>상대</th><th>무엇을</th><th style="text-align:right">금액</th>
+            <th style="text-align:right">지분</th><th>신선도</th><th style="text-align:right">점수</th></tr>
+        ${d.related.map(r => {
+          const mine = (r.source.key === d.key);
+          const other = mine ? r.target : r.source;
+          return `<tr><td><span class="tag">${esc(r.type)}</span>
+              <span class="muted">${mine ? '→' : '←'}</span></td>
+            <td>${esc(other.name)}</td><td>${dash(r.subtype)}</td>
+            <td class="n">${r.amount ? eok(r.amount) : '<span class="muted">—</span>'}</td>
+            <td class="n">${r.ratio ? pct(r.ratio) : '<span class="muted">—</span>'}</td>
+            <td><span class="tag ${r.freshness !== 'current' ? 'stale' : ''}">${esc(r.freshness)}</span></td>
+            <td class="n">${r.score}</td></tr>`;
+        }).join('')}
+      </table></div>
+      ${more(`/companies/${encodeURIComponent(k)}/relations`, d.related.length, C.relations,
+        rows => `<div class="scroll wide"><table>${rows.map(r => {
+          const mine = (r.source.key === d.key); const o = mine ? r.target : r.source;
+          return `<tr><td><span class="tag">${esc(r.type)}</span></td><td>${esc(o.name)}</td>
+                  <td>${dash(r.subtype)}</td><td class="n">${r.score}</td></tr>`; }).join('')}</table></div>`)}
+      <div class="hint"><b>여기 있는 건은 위 그래프에 전부 그려져 있습니다.</b>
+        관계 ${num(C.relations)}건 · 연관 기업 ${num(C.related_companies)}곳.</div>`
+        : empty('관계 없음'));
+
+    // ── 리스크·사건
+    h += block('리스크 · 사건', (d.events || []).length, B.risk,
+      d.events?.length ? `<div class="scroll wide"><table>
+        <tr><th>사건</th><th>유형</th><th>역할</th><th>발생</th>
+            <th style="text-align:right">기사</th><th>시계열</th></tr>
+        ${d.events.slice(0, 40).map(e => `<tr>
+          <td>${esc(e.name)} ${e.is_risk ? '<span class="tag risk">위험</span>' : ''}</td>
+          <td>${dash(e.event_type)}</td><td><span class="tag">${dash(e.role)}</span></td>
+          <td>${dash(e.occurred_at)}</td><td class="n">${num(e.article_count)}</td>
+          <td class="muted" style="font-size:12px">${(e.timeline || [])
+            .map(t => esc(t.period ?? t)).join(' · ') || '—'}</td></tr>`).join('')}
+      </table></div>
+      ${more(`/companies/${encodeURIComponent(k)}/events`, d.events.length, C.events,
+        rows => `<table>${rows.slice(d.events.length).map(e =>
+          `<tr><td>${esc(e.name)} ${e.is_risk ? '<span class="tag risk">위험</span>' : ''}</td>
+           <td>${dash(e.event_type)}</td><td>${dash(e.occurred_at)}</td></tr>`).join('')}</table>`)}`
+        : empty('사건 없음'));
+
+    // ── 지배구조 ★양방향
+    const owTbl = rows => `<table>${rows.map(o => `<tr><td>${esc(o.name)}</td>
+      <td><span class="tag">${dash(o.subtype)}</span></td>
+      <td class="n">${o.ratio ? pct(o.ratio) : '<span class="muted">—</span>'}</td></tr>`).join('')}</table>`;
+    h += block('지배구조',
+      `소유 ${(d.owns || []).length}/${num(C.owns)} · 피소유 ${(d.owned_by || []).length}/${num(C.owned_by)}`,
+      B.ownership, `<div class="grid">
+      <div><h3 style="font-size:12px">이 회사를 소유한 쪽</h3>
+        ${d.owned_by?.length ? owTbl(d.owned_by) : empty('없음')}</div>
+      <div><h3 style="font-size:12px">이 회사가 소유한 쪽</h3>
+        ${d.owns?.length ? owTbl(d.owns) : empty('없음')}</div></div>`
+      + more(`/companies/${encodeURIComponent(k)}/ownership?limit=500`,
+          (d.owns || []).length + (d.owned_by || []).length, C.owns + C.owned_by,
+          o => `<div class="grid">
+            <div><h3 style="font-size:12px">전체 — 이 회사를 소유한 쪽 ${o.owned_by_total}</h3>
+              <div class="scroll">${owTbl(o.owned_by)}</div></div>
+            <div><h3 style="font-size:12px">전체 — 이 회사가 소유한 쪽 ${o.owns_total}</h3>
+              <div class="scroll">${owTbl(o.owns)}</div></div></div>`));
+
+    // ── 제품 · 인물
+    h += `<div class="grid">
+      ${block('제품 · 기술', `${(d.products || []).length}건 / 전체 ${num(C.products)}건`, B.products,
+        (d.products?.length ? `<div class="scroll"><table>${d.products.map(p =>
+          `<tr><td>${esc(p.name)}</td><td class="muted">${dash(p.category)}</td>
+           <td><span class="tag">${dash(p.source)}</span></td></tr>`).join('')}</table></div>`
+          : empty('없음'))
+        + more(`/companies/${encodeURIComponent(k)}/products?limit=500`,
+            (d.products || []).length, C.products,
+            rows => `<div class="scroll"><table>${rows.slice((d.products || []).length).map(x =>
+              `<tr><td>${esc(x.name)}</td><td class="muted">${dash(x.category)}</td>
+               <td><span class="tag">${dash(x.source)}</span></td></tr>`).join('')}</table></div>`))}
+      ${block('인물 (임원)', `${(d.executives || []).length}명 / 전체 ${num(C.executives)}명`, null,
+        (d.executives?.length ? `<div class="scroll"><table>${d.executives.map(p =>
+          `<tr><td>${esc(p.name)}</td><td class="muted">${dash(p.position)}</td></tr>`).join('')}</table></div>`
+          : empty('없음'))
+        + more(`/companies/${encodeURIComponent(k)}/executives?limit=500`,
+            (d.executives || []).length, C.executives,
+            rows => `<div class="scroll"><table>${rows.slice((d.executives || []).length).map(x =>
+              `<tr><td>${esc(x.name)}</td><td class="muted">${dash(x.position)}</td></tr>`).join('')}</table></div>`))}
+    </div>`;
+
+    // ── 뉴스 · 공시
+    h += `<div class="grid">
+      ${block('관련 뉴스 (근거가 된 기사)', `${(d.news || []).length}건 / 전체 ${num(C.news)}건`,
+        B.news, d.news?.length ? `<div class="scroll"><table>${d.news.map(n =>
+          `<tr><td><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+           <div class="muted" style="font-size:12px">${dash(n.press)} · ${dash(n.published_at)}</div></td></tr>`
+          ).join('')}</table></div>
+        ${more(`/companies/${encodeURIComponent(k)}/news?limit=100`, d.news.length, C.news,
+          rows => `<div class="scroll"><table>${rows.slice(d.news.length).map(n =>
+            `<tr><td><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+             <div class="muted" style="font-size:12px">${dash(n.press)} · ${dash(n.published_at)}</div>
+             </td></tr>`).join('')}</table></div>`)}
+        <div class="hint">본문은 <b>응답에 없어야 정상입니다</b> (저작권).</div>`
+          : empty('없음'))}
+      ${block('공시', `${(d.filings || []).length}건 / 전체 ${num(C.filings)}건`, B.filings,
+        d.filings?.length ? `<div class="scroll"><table>${d.filings.map(f =>
+          `<tr><td><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.report_name ?? f.title)}</a>
+           <div class="muted" style="font-size:12px">${dash(f.rcept_dt)} ·
+             <span style="font-family:var(--mono)">${dash(f.rcept_no)}</span></div></td></tr>`
+          ).join('')}</table></div>` : empty('없음'))}
+    </div>`;
+
+    // ── 사업 개요 원문
+    if (d.business_overview) h += block('사업 개요 (사업보고서 원문)', null, B.overview,
+      `<div class="scroll" style="white-space:pre-wrap;font-size:13px">${esc(d.business_overview)}</div>`);
+
+    h += block('원본 JSON', null, null, `<pre class="raw">${esc(JSON.stringify(d, null, 1))}</pre>`);
+    $('#c-body').innerHTML = h;
+    wireMore($('#c-body'));
+
+    if (g) {
+      drawGraph($('#c-cv'), g, null);
+      $('#c-legend').innerHTML = legendFor(g);
+      const om = g.omitted || {};
+      $('#c-ghint').innerHTML =
+        `상한에 걸려 뺀 것 — ` + (Object.keys(om).length
+          ? Object.entries(om).sort((a, b) => b[1] - a[1])
+              .map(([k2, v]) => `${esc(k2)} <b>${num(v)}</b>`).join(' · ')
+          : '없음') +
+        `<br>그린 ${g.edges.length} + 뺀 ${num(Object.values(om).reduce((a, b) => a + b, 0))}
+         = <b>${num(g.edges.length + Object.values(om).reduce((a, b) => a + b, 0))}</b>
+         (상세가 말한 관계 ${num(C.relations)}) —
+         <b>이 둘이 같아야 합니다.</b>`;
+    }
+  } catch (e) { $('#c-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('#c-go').onclick = loadCompany;
+$('#ck').onkeydown = e => { if (e.key === 'Enter') loadCompany(); };
+
+// ══════════════════════════════════════════════════════════════════
+//  워크스페이스
+// ══════════════════════════════════════════════════════════════════
+let wsGraph = null;
+async function loadWs() {
+  const keys = $('#wk').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
+  if (!keys.length) return;
+  $('#w-stat').textContent = '…';
+  try {
+    const { data: g, ms, stub } = await post('/workspace/graph',
+      { keys, refs: $('#wrefs').checked, max_nodes: Number($('#wmax').value) || 60 });
+    wsGraph = g;
+    const isl = g.islands || [];
+    $('#w-stat').innerHTML = stamp(ms, stub,
+      `노드 ${g.nodes.length} · 선 ${g.edges.length} · 섬 ${isl.length}` +
+      (g.truncated ? ' · <b style="color:var(--warn)">잘림</b>' : '') +
+      (g.ref_candidates ? ` · 참조 후보 ${num(g.ref_candidates)}곳` : ''));
+    $('#w-legend').innerHTML = legendFor(g) +
+      `<span><span class="dot" style="background:#111"></span>담은 기업(굵은 테두리)</span>`;
+    $('#w-hint').innerHTML =
+      (isl.length ? `<b style="color:var(--warn)">섬 ${isl.length}곳</b> — ` +
+        isl.map(k => esc(g.nodes.find(n => n.key === k)?.name ?? k)).join(' · ') +
+        ' (관계를 못 찾아 선이 없습니다. 없는 관계를 그리는 것보다 없다고 말합니다)'
+        : '섬 없음 — 모든 노드가 선으로 이어졌습니다') +
+      `<br>선 ${g.edges.length}개 중 담은 기업끼리 직접 연결 <b>` +
+      g.edges.filter(e => {
+        const p = new Set(g.nodes.filter(n => n.role === 'pinned').map(n => n.key));
+        return p.has(e.source) && p.has(e.target);
+      }).length + `</b>개`;
+    drawGraph($('#w-cv'), g, onPick);
+    $('#w-side').innerHTML = `<div class="card"><h3>선택</h3>
+      <div class="muted">노드나 선을 누르세요.</div></div>`;
+  } catch (e) { $('#w-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('#w-go').onclick = loadWs;
+
+// 노드 클릭 → /workspace/summary · 선 클릭 → /relations/{edge_id}
+async function onPick(kind, obj) {
+  const side = $('#w-side');
+  side.innerHTML = `<div class="card"><h3>불러오는 중</h3></div>`;
+  const keys = wsGraph.nodes.filter(n => n.role === 'pinned').map(n => n.key);
+  try {
+    if (kind === 'node') {
+      const { data: s, ms, stub } = await post('/workspace/summary',
+        { key: obj.key, workspace_keys: keys });
+      side.innerHTML = `<div class="card">
+        <h3>${esc(s.name ?? obj.name)} <span class="c">노드</span>
+          <span class="fill ${stub ? 'partial' : 'full'}">${stub ? '스텁' : ms + 'ms'}</span></h3>
+        <dl class="kv">
+          <dt>업종</dt><dd>${dash(s.ksic_label)}</dd>
+          <dt>시장</dt><dd>${dash(s.market)}</dd>
+          <dt>연결 수</dt><dd>${num(obj.degree)}</dd>
+          <dt>역할</dt><dd>${esc(obj.role)} · ${esc(KIND[obj.kind] ?? obj.kind ?? '—')}</dd>
+          ${obj.members !== null && obj.members !== undefined
+            ? `<dt>담은 기업과</dt><dd>${num(obj.members)}곳 연결</dd>` : ''}
+          ${obj.risk_weight !== null && obj.risk_weight !== undefined
+            ? `<dt>위험 가중</dt><dd>${obj.risk_weight} (사건 ${num(obj.risk_count)}건)</dd>` : ''}
+        </dl>
+        <div class="hint">이 워크스페이스와의 관계 · 재무 · 리스크 요약이 여기 옵니다.
+          <b>「상세 페이지로 가기」</b>가 기업 상세로 넘깁니다.</div>
+        <pre class="raw">${esc(JSON.stringify(s, null, 1))}</pre></div>`;
+    } else {
+      const { data: r, ms, stub } = await api('/relations/' + encodeURIComponent(obj.edge_id));
+      const nm = k => esc(wsGraph.nodes.find(n => n.key === k)?.name ?? k);
+      const rel = r.relation ?? {};
+      // ★근거 원문에 URL 이 박혀 있다 — 링크로 만들어 되짚을 수 있게 한다
+      const linkify = t => esc(t).replace(/https?:\/\/\S+/g,
+        u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 46 ? u.slice(0, 46) + '…' : u}</a>`);
+      const src = e => e.source_type === 'dart'
+        ? `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(e.source_doc)}"
+             target="_blank" rel="noopener">공시 ${esc(e.source_doc)}</a>`
+        : esc(e.press ?? '기사');
+
+      side.innerHTML = `<div class="card">
+        <h3>${nm(obj.source)} → ${nm(obj.target)} <span class="c">관계</span>
+          <span class="fill ${stub ? 'partial' : 'full'}">${stub ? '스텁' : ms + 'ms'}</span></h3>
+        <dl class="kv">
+          <dt>유형</dt><dd>${esc(obj.type)}${obj.symmetric ? ' <span class="tag">방향 없음</span>' : ''}</dd>
+          <dt>무엇을</dt><dd>${dash(obj.subtype)}</dd>
+          <dt>신선도</dt><dd><span class="tag ${obj.freshness !== 'current' ? 'stale' : ''}">${esc(obj.freshness)}</span></dd>
+          <dt>점수</dt><dd>${obj.score}</dd>
+          ${rel.amount ? `<dt>금액</dt><dd>${eok(rel.amount)}</dd>` : ''}
+          ${rel.ratio ? `<dt>지분</dt><dd>${pct(rel.ratio)}</dd>` : ''}
+          ${rel.corroboration > 1 ? `<dt>교차 확인</dt><dd>${rel.corroboration}건</dd>` : ''}
+        </dl></div>
+
+      <div class="card"><h3>근거 원문 <span class="c">${(r.evidence || []).length}건</span></h3>
+        ${(r.evidence || []).length ? (r.evidence).map(e => e.missing
+          ? `<div class="err">근거 ${esc(e.evidence_id)} — id 는 있는데 원문을 못 찾았습니다</div>`
+          : `<div style="border-left:3px solid var(--accent);padding:2px 0 2px 10px;margin-bottom:10px">
+              <div style="white-space:pre-wrap;font-size:13px">${linkify(e.text)}</div>
+              <div class="muted" style="font-size:11px;margin-top:4px">
+                ${src(e)} · ${dash(e.published_at)} ·
+                <span style="font-family:var(--mono)">${esc(e.evidence_id)}</span></div>
+            </div>`).join('')
+          : empty('근거 없음')}
+        <div class="hint"><b>우리가 요약한 문장이 아닙니다.</b>
+          기사·공시에 실제로 쓰여 있는 문장이라 화면이 그대로 인용할 수 있습니다.</div></div>
+
+      <div class="card"><h3>리스크 전파 <span class="c">${(r.propagation || []).length}건</span></h3>
+        ${(r.propagation || []).length ? `<table>
+          ${(r.propagation).map(p => `<tr>
+            <td><span class="tag ${p.stated ? 'risk' : ''}">${p.stated ? '보도' : '계산'}</span></td>
+            <td><b>${esc(p.target)}</b> <span class="muted">${p.score}</span>
+              <div class="muted" style="font-size:11px">${esc(p.event)}</div>
+              <div class="muted" style="font-size:11px">${(p.path || []).map(esc).join(' → ')}</div></td>
+          </tr>`).join('')}</table>
+          <div class="hint"><b>보도</b>는 기사가 직접 말한 것, <b>계산</b>은 우리가 공급망을
+            타고 낸 것입니다. 화면이 반드시 갈라 그려야 합니다.</div>`
+          : empty(obj.type === 'SUPPLIES_TO'
+              ? '이 선을 타고 닿는 위험이 없습니다 (양쪽 끝에 최근 위험 사건이 없음)'
+              : `파급은 공급 관계에서만 계산합니다 — ${esc(obj.type)} 은 위험을 실어 나르는 통로가 아닙니다`)}
+      </div>
+
+      <div class="card"><h3>원본 JSON</h3>
+        <pre class="raw">${esc(JSON.stringify(r, null, 1))}</pre></div>`;
+    }
+  } catch (e) {
+    side.innerHTML = `<div class="card"><h3>선택</h3><div class="err">${esc(e.message)}</div></div>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  그래프 — 외부 라이브러리를 못 쓰므로 힘기반 레이아웃을 직접 돈다
+//  ★노드 60개 수준이면 O(n²) 반발력으로 충분하다.
+// ══════════════════════════════════════════════════════════════════
+function legendFor(g) {
+  const seen = [...new Set(g.nodes.map(n => n.kind).filter(Boolean))];
+  return seen.map(k =>
+    `<span><span class="dot" style="background:${css(KCOLOR[k] ?? '--dim')}"></span>${KIND[k] ?? k}</span>`
+  ).join('');
+}
+
+function drawGraph(cv, g, onpick) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const cx = cv.getContext('2d'); cx.scale(dpr, dpr);
+
+  // 좌표를 원 위에 흩어 놓고 시작 — 한 점에서 시작하면 안 풀린다
+  const N = g.nodes.map((n, i) => {
+    const a = i / g.nodes.length * Math.PI * 2;
+    return { ...n, x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.33,
+                   y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.33, vx: 0, vy: 0 };
+  });
+  const idx = new Map(N.map((n, i) => [n.key, i]));
+  const E = g.edges.filter(e => idx.has(e.source) && idx.has(e.target))
+                   .map(e => ({ ...e, a: idx.get(e.source), b: idx.get(e.target) }));
+  const rad = n => n.role === 'pinned' ? 9 : (n.kind === 'event' ? 6 : 5.5);
+
+  for (let step = 0; step < 320; step++) {
+    const k = 1 - step / 320;                        // 점점 식힌다
+    for (let i = 0; i < N.length; i++) {
+      for (let j = i + 1; j < N.length; j++) {
+        let dx = N[j].x - N[i].x, dy = N[j].y - N[i].y;
+        let d2 = dx * dx + dy * dy || 0.01;
+        if (d2 > 90000) continue;                    // 멀면 무시 — 계산을 아낀다
+        const f = 2600 / d2, d = Math.sqrt(d2);
+        const ux = dx / d * f, uy = dy / d * f;
+        N[i].vx -= ux; N[i].vy -= uy; N[j].vx += ux; N[j].vy += uy;
+      }
+    }
+    for (const e of E) {                              // 선은 당긴다
+      const a = N[e.a], b = N[e.b];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01;
+      const f = (d - 78) * 0.035;
+      const ux = dx / d * f, uy = dy / d * f;
+      a.vx += ux; a.vy += uy; b.vx -= ux; b.vy -= uy;
+    }
+    for (const n of N) {                              // 가운데로 살짝
+      n.vx += (W / 2 - n.x) * 0.006; n.vy += (H / 2 - n.y) * 0.006;
+      n.x += n.vx * k; n.y += n.vy * k; n.vx *= 0.82; n.vy *= 0.82;
+      n.x = Math.max(24, Math.min(W - 24, n.x));
+      n.y = Math.max(18, Math.min(H - 18, n.y));
+    }
+  }
+
+  function paint(hi) {
+    cx.clearRect(0, 0, W, H);
+    for (const e of E) {
+      const a = N[e.a], b = N[e.b];
+      const on = hi && hi.kind === 'edge' && hi.o.edge_id === e.edge_id;
+      cx.strokeStyle = on ? css('--accent') : (e.freshness === 'current' ? '#c9cfd8' : '#e6d8c6');
+      cx.lineWidth = on ? 2.4 : 0.4 + e.score * 1.3;
+      cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
+      if (!e.symmetric) {                              // 화살촉
+        const ang = Math.atan2(b.y - a.y, b.x - a.x), r = rad(b) + 2.5;
+        const hx = b.x - Math.cos(ang) * r, hy = b.y - Math.sin(ang) * r;
+        cx.fillStyle = cx.strokeStyle;
+        cx.beginPath();
+        cx.moveTo(hx, hy);
+        cx.lineTo(hx - Math.cos(ang - 0.42) * 7, hy - Math.sin(ang - 0.42) * 7);
+        cx.lineTo(hx - Math.cos(ang + 0.42) * 7, hy - Math.sin(ang + 0.42) * 7);
+        cx.fill();
+      }
+    }
+    for (const n of N) {
+      const on = hi && hi.kind === 'node' && hi.o.key === n.key;
+      cx.beginPath(); cx.arc(n.x, n.y, rad(n) + (on ? 2 : 0), 0, 7);
+      cx.fillStyle = css(KCOLOR[n.kind] ?? '--dim');
+      if (n.is_island) cx.fillStyle = '#9aa2ad';
+      cx.fill();
+      if (n.role === 'pinned') { cx.lineWidth = 2.5; cx.strokeStyle = '#111'; cx.stroke(); }
+      else if (n.role === 'bridge') { cx.lineWidth = 1.6; cx.strokeStyle = '#111'; cx.setLineDash([2, 2]); cx.stroke(); cx.setLineDash([]); }
+      // ★이름을 반드시 그린다. 겹치는지 봐야 하니까 자르지 않는다.
+      cx.font = (n.role === 'pinned' ? '600 ' : '') + '11px "Malgun Gothic", sans-serif';
+      cx.fillStyle = n.role === 'pinned' ? '#111' : '#5b626c';
+      cx.textAlign = 'center';
+      cx.fillText(n.name ?? n.key, n.x, n.y - rad(n) - 4);
+    }
+  }
+  paint(null);
+  if (!onpick) return;
+
+  const hit = (mx, my) => {
+    for (const n of N) if (Math.hypot(n.x - mx, n.y - my) < rad(n) + 7)
+      return { kind: 'node', o: n };
+    let best = null, bd = 7;
+    for (const e of E) {                               // 선까지의 거리
+      const a = N[e.a], b = N[e.b];
+      const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+      let t = ((mx - a.x) * dx + (my - a.y) * dy) / L2;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(mx - (a.x + t * dx), my - (a.y + t * dy));
+      if (d < bd) { bd = d; best = { kind: 'edge', o: e }; }
+    }
+    return best;
+  };
+  cv.onmousemove = ev => {
+    const r = cv.getBoundingClientRect();
+    const h = hit(ev.clientX - r.left, ev.clientY - r.top);
+    cv.style.cursor = h ? 'pointer' : 'default';
+    paint(h);
+  };
+  cv.onclick = ev => {
+    const r = cv.getBoundingClientRect();
+    const h = hit(ev.clientX - r.left, ev.clientY - r.top);
+    if (h) onpick(h.kind, h.o);
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════
+//  인사이트 — 합쳐야 드러나는 것
+// ══════════════════════════════════════════════════════════════════
+const IKIND = {
+  shared_risk:          ['같은 위험에 노출', 'var(--event)'],
+  cascade_risk:         ['위험이 번짐',      'var(--warn)'],
+  shared_customer:      ['거래 집중 · 고객',  'var(--trade)'],
+  shared_supplier:      ['거래 집중 · 공급',  'var(--trade)'],
+  shared_owner:         ['지분 집중',        'var(--own)'],
+  internal_competition: ['내부 경쟁',        'var(--person)'],
+  sector_concentration: ['업종 쏠림',        'var(--product)'],
+  no_overlap:           ['겹치는 것 없음',    'var(--dim)'],
+};
+
+async function loadIns() {
+  const keys = $('#ik').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
+  if (!keys.length) return;
+  $('#i-stat').textContent = '…'; $('#i-body').innerHTML = '';
+  try {
+    const { data: cards, ms, stub } = await post('/insights',
+      { keys, limit: Number($('#ilim').value) || 5 });
+    $('#i-stat').innerHTML = stamp(ms, stub, `담은 ${keys.length}곳 · 카드 ${cards.length}장`);
+    if (!cards.length) {
+      $('#i-body').innerHTML = `<div class="card"><h3>카드 없음</h3>
+        <div class="muted">담은 곳이 1곳이면 「겹친다」가 성립하지 않아 빈 배열이 정상입니다.</div></div>`;
+      return;
+    }
+    $('#i-body').innerHTML = cards.map(x => {
+      const [label, color] = IKIND[x.kind] ?? [x.kind, 'var(--dim)'];
+      // ★대상을 카드 제목으로 올린다. 대상이 없는 카드(내부 경쟁·겹침 없음)는
+      //   종류 이름이 그 자리를 대신한다.
+      const title = x.subject ?? label;
+      // ★lift 는 **말로** 보여 주고 원 수치는 툴팁에 남긴다 — 검증은 숫자로 한다
+      const badge = [];
+      if (x.lift_label) badge.push(
+        `<b title="lift ${x.lift}배">${esc(x.lift_label)}</b> 전국 ${num(x.base)}곳`);
+      if (x.coverage !== null) badge.push(
+        `전국 ${num(x.base)}곳 중 <b>${x.shared}곳</b>`);
+      if (x.score !== null) badge.push(
+        `<b>${x.stated ? '보도' : '계산'}</b> ${x.score}`);
+      return `<div class="card" style="border-left:4px solid ${color}">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <span style="font-size:17px;font-weight:600">${esc(title)}</span>
+          <span class="tag" style="color:${color};border-color:${color}">${esc(label)}</span>
+          <span class="fill" style="margin-left:auto">${x.shared}/${x.of}</span>
+        </div>
+        <div style="font-size:14px;margin-top:6px">${esc(x.headline)}</div>
+        <div style="color:var(--dim);font-size:13px;margin-top:2px">${esc(x.why)}</div>
+        ${badge.length ? `<div class="row" style="margin:8px 0 0;font-size:12px">
+          ${badge.map(t => `<span class="tag" style="padding:3px 8px">${t}</span>`).join('')}</div>` : ''}
+        <div class="row" style="margin:8px 0 0">
+          ${x.names.map((n2, i) => `<span class="tag" data-goto="${esc(x.keys[i])}"
+            style="cursor:pointer">${esc(n2)}</span>`).join('')}
+        </div>
+        ${x.path?.length ? `<div class="hint">${x.path.map(esc).join(' → ')}</div>` : ''}
+        ${x.event_id ? `<div class="hint"><code>/events/${esc(x.event_id)}/impact</code>
+          로 파급을 봅니다</div>` : ''}
+      </div>`;
+    }).join('') + `<div class="card"><h3>원본 JSON</h3>
+      <pre class="raw">${esc(JSON.stringify(cards, null, 1))}</pre></div>`;
+    $('#i-body').querySelectorAll('[data-goto]').forEach(el => el.onclick = () => {
+      $('#ck').value = el.dataset.goto; go('company'); loadCompany();
+    });
+  } catch (e) { $('#i-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('#i-go').onclick = loadIns;
+
+doSearch();
+</script>

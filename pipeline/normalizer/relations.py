@@ -1,25 +1,10 @@
-"""관계 정규화 — L3 subtype 통일 + OTHER 매핑 (방법서 §2, §12-4).
+"""관계 정규화 — L3 subtype 통일 + OTHER 매핑.
 
-3층 온톨로지에서 L2(엣지 12종)는 고정이지만 **L3 subtype은 개방형**이다. 개방형이
-곧 자유형은 아니다 — 같은 뜻이 표기만 달라지면(`특허 크로스 라이선스` /
-`특허크로스라이선스` / `Joint Venture` / `합작투자`) 집계·필터가 쪼개진다.
-여기서 대표형으로 접는다.
+3층 온톨로지에서 L2(엣지 12종)는 고정이지만 L3 subtype은 개방형이므로 대표형으로 정규화한다.
 
-하는 일 3가지:
-  1. **subtype 정규화** — 표기 변형을 대표형으로. 빈 값은 엣지별 기본값으로.
-  2. **OTHER 매핑** — 12종에 못 넣은 관계를 원문 표현으로 재판정.
-  3. **미매핑 기록** — 버린 표현을 남겨, 렉시콘을 실측으로 키운다.
-
-★설계 원칙: **추출기를 이기려 들지 않는다.**
-   추출 LLM은 이미 12종 매트릭스를 프롬프트로 받고도 OTHER를 골랐다. 렉시콘이
-   그 판단을 뒤집으려면 근거가 확실해야 한다. 그래서 매핑은 **행위가 명시된
-   표현만**(지분 취득·합작법인 설립·특허 침해 소송) 받고, 애매하면 버린다.
-   버린 것은 unmapped_relations에 쌓여 다음 렉시콘 개정의 근거가 된다.
-
-★방향을 바꾸는 재배정은 하지 않는다.
-   PARTNERS_WITH(대칭)를 SUPPLIES_TO(방향)로 옮기려면 "누가 누구에게 공급하는지"를
-   알아야 하는데 subtype 문자열엔 그 정보가 없다. 잘못된 방향의 엣지는 없는 엣지보다
-   나쁘므로, 이런 오분류는 여기서 고치지 않고 **추출 프롬프트에서** 잡는다.
+- subtype 정규화 — 표기 변형을 대표형으로. 빈 값은 엣지별 기본값으로.
+- OTHER 매핑 — 12종에 못 넣은 관계를 원문 표현으로 재판정.
+- 미매핑 기록 — 버린 표현을 남겨, 렉시콘을 실측으로 키운다.
 """
 
 from __future__ import annotations
@@ -29,15 +14,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 # ── L3 subtype 대표형 ────────────────────────────────────────────
-# (대표형, 변형 패턴) — 패턴은 공백 제거·소문자화 후 부분일치로 본다.
 _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
-    # ⚠ '출자'·'자회사'는 investment_normalizer가 타법인 출자현황에서 **지분율로
-    #   구분해 붙인 의미 있는 값**이다. 여기서 접으면 그 구분이 사라진다 → 건드리지 않는다.
-    # ★영문 표기를 함께 접는다(표본 심층검사 2026-08-02). LLM이 영문 기사에서
-    #   뽑으면 subtype도 영문으로 온다. 「지분보유」와 `investment`가 갈려 있으면
-    #   지분 관계 필터가 쪼개진다. 실측: investment 10 · minority 10 · acquisition 5.
-    #   `majority`·`<50%` 같은 **지분율 표현은 subtype이 아니다** — 비율은 이미
-    #   `ratio` 필드에 있으므로 기본형으로 접는다.
     "OWNS_STAKE_IN": (
         ("최대주주", ("최대주주", "largestshareholder", "controllingshareholder")),
         ("특수관계인", ("특수관계", "친인척", "relatedparty")),
@@ -49,32 +26,23 @@ _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
         ("지분보유", ("majority", "minority", "partial", "ownership", "joint",
                      "indirect", "100%", "<50%", ">50%")),
     ),
-    # OEM·ODM은 일반 공급과 **분석상 의미가 다르다**(고객 설계·브랜드로 위탁생산).
-    # 순서가 우선순위이므로 포괄어(공급계약)보다 앞에 둔다.
-    # ★「고객사」「매출처」류를 넣은 이유 — 기사가 공급 관계를 **받는 쪽에서**
-    #   서술하면 subtype이 「주요 매출처」「고객사」로 온다. 대표형으로 접지 않으면
-    #   「공급」과 갈려 공급망 필터에서 빠진다. 영문 표기도 같이 접는다.
     "SUPPLIES_TO": (
         ("OEM공급", ("oem",)),
         ("ODM공급", ("odm",)),
-        ("공급계약", ("공급계약", "납품계약", "구매계약", "물품거래", "거래기본",
-                     "단일판매", "supplyagreement", "supplycontract")),
-        ("수주", ("수주", "발주", "낙찰", "purchaseorder")),
-        ("공급", ("납품", "공급", "고객사", "거래처", "매출처", "수요처", "납품처",
-                 "벤더", "협력사", "supplier", "vendor", "customer", "client")),
+        ("공급계약", ("supplyagreement", "supplycontract")),
+        ("수주", ("purchaseorder",)),
+        ("공급", ("supplier", "vendor", "customer", "client")),
     ),
-    "PARTNERS_WITH": (
-        ("합작투자", ("합작", "jointventure", "jv", "조인트벤처", "jointinvestment")),
-        ("특허크로스라이선스", ("크로스라이선스", "crosslicense", "특허크로스")),
-        ("특허라이선스", ("특허라이선스", "특허실시", "patentlicense")),
-        ("기술이전", ("기술이전", "기술제공", "기술도입", "기술공여", "techtransfer")),
-        ("공동개발", ("공동개발", "공동연구", "공동기술",
-                     "jointdevelopment", "joint_development", "jointresearch",
+   "PARTNERS_WITH": (
+        ("합작투자", ("jointventure", "jv", "jointinvestment")),
+        ("특허크로스라이선스", ("crosslicense",)),
+        ("특허라이선스", ("patentlicense",)),
+        ("기술이전", ("techtransfer",)),
+        ("공동개발", ("jointdevelopment", "joint_development", "jointresearch",
                      "joint_research", "productdevelopment", "product_development",
                      "jointpatentapplication", "joint_patent_application")),
-        ("업무협약", ("mou", "업무협약", "양해각서", "협약체결")),
-        ("기술제휴", ("기술제휴", "제휴", "파트너십", "협력계약",
-                     "strategicpartnership", "partnership")),
+        ("업무협약", ("mou",)),
+        ("기술제휴", ("strategicpartnership", "partnership")),
         ("협력", ("collaboration", "cooperation")),
     ),
     "ACQUIRES": (
@@ -94,15 +62,12 @@ _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
         ("특허무효", ("특허무효", "무효심판", "patentinvalidation", "invalidation")),
         ("상표침해", ("상표침해", "trademarkinfringement")),
         ("집단소송", ("집단소송", "classaction")),
-        ("소송", ("소송", "제소", "고소", "고발", "중재",
-                 "lawsuit", "litigation", "complaint", "arbitration",
+        ("소송", ("lawsuit", "litigation", "complaint", "arbitration",
                  "intellectualproperty", "declaratoryjudgment", "noncompete")),
     ),
-    # 구체형을 먼저 둔다 — '점유율경쟁'이 '경쟁'에 먼저 걸리면 대표형이 자기 자신으로
-    # 안 돌아와 멱등성이 깨진다(import 시 고정점 검사가 잡아낸다).
     "COMPETES_WITH": (
         ("점유율경쟁", ("점유율", "marketshare")),
-        ("경쟁", ("경쟁", "competition", "competitor", "rivalry")),
+        ("경쟁", ("competition", "competitor", "rivalry")),
     ),
     "REGULATES": (
         ("제재", ("제재", "과징금", "시정명령", "처분", "sanction", "penalty", "fine")),
@@ -111,10 +76,6 @@ _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
         ("인허가", ("인허가", "승인", "허가", "인증", "approval", "clearance")),
         ("수출규제", ("수출규제", "수출통제", "exportcontrol", "exportrestriction")),
     ),
-    # ★**영문 일반어만** 접는다. 한글 표현은 건드리지 않는다 — L3는 개방형이고,
-    #   「양산 검증 완료」「로봇기술개발 선행 연구」는 그 자체가 정보다. 이걸
-    #   「생산」·「개발」로 뭉개면 개방형을 둔 이유가 사라진다.
-    #   (첫 시도에서 한글 패턴을 넣었다가 실측 dry-run이 잡아냈다)
     "DEVELOPS": (
         ("공동개발", ("jointdevelopment", "joint_development",
                      "collaboration", "cooperation")),
@@ -124,11 +85,6 @@ _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
         ("출시", ("launch", "release")),
     ),
     # 직위 — 영문만 한글 대표형으로. **한글 직위는 그대로 둔다.**
-    #
-    # ★부분 문자열 매칭이라 「사장」 패턴이 **「부사장」에도 걸린다.** 첫 시도에서
-    #   `("사장", ("사장", "president"))`를 넣었더니 dry-run이 **부사장 99건 →
-    #   사장**을 잡아냈다. 부사장과 사장은 다른 직위다. 한글을 빼서 막는다.
-    #   (같은 이유로 「회장」을 넣으면 「부회장」이 걸린다)
     "IS_EXECUTIVE_OF": (
         ("대표이사", ("ceo", "chiefexecutive", "representativedirector")),
         ("사장", ("president",)),
@@ -138,8 +94,9 @@ _SUBTYPE_CANON: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "DEPENDS_ON": (
         ("라이선스", ("license", "라이선스", "실시권")),
-        ("기술의존", ("기술", "공정")),
-        ("부품의존", ("부품", "소재", "원자재")),
+        ("매출의존", ("매출의존", "매출비중", "매출")),
+        ("공급의존", ("공급의존", "기술의존", "부품의존",
+                     "부품", "소재", "원자재", "기술", "공정")),
     ),
 }
 
@@ -169,6 +126,12 @@ _OTHER_LEXICON: tuple[tuple[str, str, str], ...] = (
     # 기사는 "지분 20% 취득"처럼 수량을 끼워 넣는다 → 숫자·단위만 사이에 허용
     (r"(?:지분|주식)\s*(?:[\d.,]+\s*(?:%|퍼센트|주|만주|억원)?\s*)?"
      r"(?:투자|취득|매입|인수|확보)|출자", "OWNS_STAKE_IN", "지분투자"),
+    # ★`unmapped_relations` 실측(2026-08-15)에서 가장 잦았던 두 표현.
+    #   「삼성전자가 3천333만주(1천710억원) 유상증자에 참여한다」 6건 ·
+    #   「APS는 KCGI와 최대주주 변경을 수반하는 주식 양도 계약을 체결했다」.
+    #   둘 다 명백한 지분 거래인데 위 패턴이 「참여」·「양도」를 안 받아 버려졌다.
+    (r"유상\s*증자\s*(?:에\s*)?참여|제3자\s*배정\s*(?:유상)?증자", "OWNS_STAKE_IN", "유상증자"),
+    (r"주식\s*양도\s*계약|지분\s*양수도\s*계약", "OWNS_STAKE_IN", "지분양수도"),
     (r"합작\s*(?:법인|회사)?|조인트\s*벤처|joint\s*venture", "PARTNERS_WITH", "합작투자"),
     (r"양해\s*각서|업무\s*협약|\bMOU\b", "PARTNERS_WITH", "업무협약"),
     (r"공동\s*(?:개발|연구)|기술\s*(?:제휴|이전|공여)", "PARTNERS_WITH", "공동개발"),
@@ -266,10 +229,11 @@ _UNKNOWN_SUBTYPE = {
 
 
 def canonical_subtype(edge_type: str, subtype: Optional[str]) -> str:
-    """subtype을 대표형으로. 매칭 없으면 원본 유지(L3는 개방형이므로 버리지 않는다)."""
+    """subtype을 대표형으로. 매칭 없으면 원본 유지(L3는 개방형이므로 버리지 않는다).
+    """
     raw = (subtype or "").strip().strip(".·-")
     if not raw or raw.lower() in _UNKNOWN_SUBTYPE:
-        return _DEFAULT_SUBTYPE.get(edge_type, "")
+        return ""
 
     compact = _compact(raw)
     for canon, variants in _SUBTYPE_CANON.get(edge_type, ()):
@@ -292,32 +256,6 @@ def canonical_forms(edge_type: str) -> frozenset[str]:
     return frozenset(forms)
 
 
-def pick_representative(edge_type: str, subtypes: list[str]) -> str:
-    """여러 subtype 중 **대표**를 고른다 (엣지 클러스터링용).
-
-    같은 관계가 표현만 달리해 여러 엣지였던 것을 하나로 접을 때, 무엇을 대표로
-    보여줄지 정한다. 길이나 빈도로 고르면 엉뚱한 게 뽑힌다 —
-    실측: 「인수」가 26번 나왔는데 한 번뿐인 「acquisition process」가 대표가 됐다.
-
-    우선순위:
-      ① `_SUBTYPE_CANON`에 등재된 대표형 (사전 순서 = 구체성 순서)
-      ② 한글 표기 (영문 잔재보다 읽기 좋다)
-      ③ 짧은 것 (군더더기 없는 표현)
-    """
-    if not subtypes:
-        return _DEFAULT_SUBTYPE.get(edge_type, "")
-    order = {canon: i for i, (canon, _) in enumerate(_SUBTYPE_CANON.get(edge_type, ()))}
-
-    def rank(s: str) -> tuple:
-        return (
-            order.get(s, len(order) + 1),                    # ① 사전 순서
-            0 if re.search(r"[가-힣]", s) else 1,             # ② 한글 우선
-            len(s),                                          # ③ 짧은 것
-        )
-
-    return min(subtypes, key=rank)
-
-
 def map_other(raw_expression: Optional[str], evidence: str = "") -> Optional[tuple[str, str]]:
     """OTHER 관계를 12종 중 하나로. 확신이 없으면 None(→ 폐기 후 기록).
 
@@ -332,9 +270,32 @@ def map_other(raw_expression: Optional[str], evidence: str = "") -> Optional[tup
     return None
 
 
+def _settle_subtype(edge_type: str, subtype: Optional[str], registry, conn) -> str:
+    """사전으로 한 번, 레지스트리로 한 번 — 2단으로 정한다(2026-08-13).
+
+    ★왜 2단인가
+      `_SUBTYPE_CANON`은 **미리 적어 둔 변형**만 접는다(48개). 실측으로 그래프에는
+      subtype이 2,040종 있으니 사전이 덮는 건 2%다. 사전을 아무리 늘려도 LLM이
+      만들어 내는 새 표현을 못 따라간다 — 열린 어휘를 목록으로 막으려는 시도다.
+
+      레지스트리는 반대로 **이미 그래프에 있는 표현**을 기준으로 삼는다. 새 표현이
+      오면 대조해서 비슷하면 기존 것에 붙이고, 정말 새로우면 등록한다(개방형 유지).
+
+      사전이 먼저인 이유: 동의어(취득=인수, 출자=투자)는 문자 유사도로 못 잡는다.
+      그건 사전의 몫이고, 레지스트리는 **표기 변형과 수식어 확장**을 맡는다.
+
+    `conn`이 없으면 사전까지만 적용한다 — 레지스트리는 DB가 있어야 한다.
+    """
+    canon = canonical_subtype(edge_type, subtype)
+    if registry is None or conn is None:
+        return canon
+    return registry.resolve(conn, edge_type, canon)
+
+
 def normalize(
     edge_type: str, subtype: Optional[str], confidence: float,
     *, raw_expression: Optional[str] = None, evidence: str = "",
+    registry=None, conn=None,
 ) -> Optional[NormalizedRelation]:
     """관계 하나를 정규화한다. 적재할 수 없으면 None."""
     if edge_type == "OTHER":
@@ -343,12 +304,13 @@ def normalize(
             return None
         edge_type, subtype = mapped
         return NormalizedRelation(
-            edge_type, subtype,
+            edge_type, _settle_subtype(edge_type, subtype, registry, conn),
             round(confidence * _REMAP_CONFIDENCE_FACTOR, 3), remapped=True,
         )
 
     return NormalizedRelation(
-        edge_type, canonical_subtype(edge_type, subtype), confidence, remapped=False,
+        edge_type, _settle_subtype(edge_type, subtype, registry, conn),
+        confidence, remapped=False,
     )
 
 

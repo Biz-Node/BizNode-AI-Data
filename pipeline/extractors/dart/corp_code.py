@@ -1,9 +1,8 @@
 """DART 고유번호(corpCode.xml) 수집 → PostgreSQL `corp_code_master` 적재.
 
-방법서 10장 [1]단계 · 14장 Tier 1.
-전 종목(10만+)을 얕게 넣어 "관계는 없어도 검색은 되는" 상태를 먼저 만든다.
+전 종목(10만+)을 관계 수집은 안되어도 검색이 가능한 상태로 만든다.
 이 테이블의 `corp_name`에 걸린 pg_trgm GIN 인덱스가 이후 개체 해소(ER)의
-Lexical 블로킹 기반이 된다(방법서 12-3).
+Lexical 블로킹 기반이 된다.
 """
 
 from __future__ import annotations

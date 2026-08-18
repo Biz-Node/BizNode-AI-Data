@@ -28,13 +28,11 @@ from pipeline.normalizer.base import (
 from pipeline.normalizer.entities import build_company, build_person, looks_like_company, master_company_ref
 from pipeline.normalizer.person_index import lookup_birth
 
-# 개인 주주 폭발 방지(방법서 §10[2]): 개인은 5% 이상만 노드화.
+# 개인 주주 폭발 방지: 개인은 5% 이상만 노드화.
 # <5% 특수관계인(친인척 0.x%)은 N차 리스크 추론에 무용 → 제외. 법인·펀드는 무관.
 _PERSON_MIN_RATIO = 5.0
 
-# ★예외: 지분이 낮아도 '지배구조 핵심'인 개인은 유지한다.
-# 한국 재벌은 총수가 낮은 지분(이재용 1.65%)으로 순환출자를 통해 지배하므로
-# 지분율만으로 거르면 총수를 놓친다. DART relate(관계) 필드가 신분을 알려준다.
+# 지분이 낮아도 '지배구조 핵심'인 개인은 유지한다.
 #   유지: "최대주주 본인"/"본인"/"최대주주"/"최대주주의 특수관계인"/"최대주주의 자"
 #   제외: 일반 "특수관계인"·"미등기임원"·"계열회사 임원" (5% 미만이면)
 _CONTROLLING_RELATE_MARKER = "최대주주"
@@ -48,14 +46,6 @@ def _is_controlling_person(relate: str | None) -> bool:
     normalized = relate.replace(" ", "").replace("\n", "")
     return _CONTROLLING_RELATE_MARKER in normalized or normalized in _SELF_RELATE_VALUES
 
-
-# ── subtype 판정 ────────────────────────────────────────────
-# ★DART 「최대주주 및 특수관계인 현황」은 **그룹 전원**을 돌려준다. 그중
-#   relate가 「본인」인 행 하나만 실제 최대주주이고 나머지는 특수관계인이다.
-#   전원을 `최대주주`로 붙였더니 화면에 이런 게 떴다(실측 2026-08-01, 44건):
-#       현대글로비스 -최대주주-> 현대모비스   지분 0.72%  relate=계열회사
-#       삼성생명   -최대주주-> 삼성에스디에스  지분 0.06%  relate=계열회사
-#   「최대주주」는 지배구조 화면의 핵심 라벨이라 틀리면 바로 눈에 띈다.
 _SELF_MARKERS = ("본인",)
 
 
@@ -74,12 +64,7 @@ def _stake_subtype(relate: str | None) -> str:
 # ── 주식 종류별 분리 행 ──────────────────────────────────────
 # ★DART는 **같은 주주를 주식 종류마다 따로** 준다(보통주 행 + 우선주 행).
 #   적재는 (주주, 회사, subtype)로 MERGE하므로 뒤 행이 앞 행을 **덮어쓴다**.
-#   실측(2026-08-01): 삼성생명의 삼성전자 지분이 **우선주 0.01%(43,950주)**로
-#   남고 보통주 8.51%가 사라져 있었다. 「최대주주 지분 0.01%」로 화면에 뜬다.
-#
-#   합산하지 않는 이유 — 보통주와 우선주는 **분모가 다른 비율**이라 더할 수 없고,
-#   지배구조에서 말하는 지분은 **의결권 있는 보통주**다. 보통주 행을 남기고
-#   우선주는 별도 속성으로 붙인다.
+#   보통주 행을 남기고 우선주는 별도 속성으로 붙인다.
 _COMMON_STOCK = ("보통", "의결권")
 
 
@@ -137,7 +122,6 @@ def normalize_shareholders(rows: list[dict[str, Any]], corp_code: str) -> Normal
 
         # 주주를 Company(펀드 포함) 또는 Person으로 분류
         # 개인은 전역 임원 인덱스에서 생년월을 찾아 person_key를 안정화한다
-        # (없으면 name@corp 폴백 → 회사 간 분열은 P2 ER이 처리)
         if is_company:
             entity, from_ref = build_company(name)
         else:

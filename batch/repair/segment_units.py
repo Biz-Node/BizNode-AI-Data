@@ -51,7 +51,7 @@ SELECT s.corp_code, co.name, s.bsns_year,
        count(*)                            AS n_seg,
        max(f.revenue)                      AS total
   FROM business_segments s
-  JOIN companies  co ON co.corp_code = s.corp_code
+  JOIN company_attributes co ON co.corp_code = s.corp_code
   LEFT JOIN financials f
          ON f.corp_code = s.corp_code AND f.bsns_year = s.bsns_year
  WHERE coalesce(s.trust_reason,'') NOT LIKE '합계 행%'
@@ -95,7 +95,7 @@ _NOT_TOTAL = "coalesce(s.trust_reason,'') NOT LIKE '합계 행%'"
 
 _RATIOS = f"""
 SELECT s.corp_code, co.name, s.bsns_year, sum(s.revenue_ratio) AS total, count(*) AS n
-  FROM business_segments s JOIN companies co ON co.corp_code = s.corp_code
+  FROM business_segments s JOIN company_attributes co ON co.corp_code = s.corp_code
  WHERE s.revenue_ratio IS NOT NULL AND {_NOT_TOTAL}
  GROUP BY s.corp_code, co.name, s.bsns_year
 """

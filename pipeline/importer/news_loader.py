@@ -33,14 +33,22 @@ from pipeline.normalizer.generic_names import (
     is_market_noise_event,
     is_placeholder_name,
 )
+from pipeline.normalizer.product_registry import record as record_products
 from pipeline.normalizer.product_names import canonical_product
 from pipeline.normalizer.product_names import norm_key as product_key
+from pipeline.normalizer.name_judge import judge_names
+from pipeline.normalizer.subtype_registry import get_registry
 from pipeline.normalizer.relations import normalize, reclassify_sues
 
 # 대칭 엣지 — 키 사전순 단방향 저장(방법서 §11)
 _SYMMETRIC = {"PARTNERS_WITH", "COMPETES_WITH"}
 # 사건 엣지 — occurred_at 사용
 _EVENT_EDGES = {"ACQUIRES", "SUES", "HAS_EVENT", "IMPACTS"}
+
+
+_AMOUNT_TYPES = frozenset({
+    "ACQUIRES", "SUPPLIES_TO", "REGULATES", "SUES", "OWNS_STAKE_IN",
+})
 
 
 def _resolve_name(name: str, node_type: str, article_title: str) -> Optional[str]:
@@ -113,12 +121,44 @@ def build_news_document(
     article_url: str,
     article_title: str,
     published_at: Optional[date],
+    conn=None,
 ) -> tuple[NormalizedDocument, list[EvidenceRecord], list[dict]]:
     """추출 관계 → (문서, evidence, 미매핑목록).
 
     매트릭스 위반은 staging이 재검증해 걸러낸다(2단 방어).
     미매핑목록은 unmapped_relations에 쌓여 렉시콘 개정 근거가 된다.
+
+    ★`conn`을 주면 subtype 레지스트리가 붙는다(2026-08-13). 사전(`_SUBTYPE_CANON`
+      48개)만으로는 실제 2,040종을 못 덮는다 — 레지스트리가 이미 그래프에 있는
+      표현으로 새 표현을 흡수한다. 없으면 사전까지만 적용한다(하위 호환).
     """
+    registry = get_registry(conn) if conn is not None else None
+
+    # ★설명형 판정 2단 — 문법으로 거른 뒤 남은 것만 모델에게 묻는다(2026-08-13).
+    #
+    #   1차(`is_generic_name`)는 문법·닫힌 목록이라 무료다. 그런데 「글로벌 빅테크」
+    #   같은 **의미상 설명형**은 문법으로 못 가른다. 전에는 키워드 목록으로 잡았는데
+    #   부분 문자열이 실명을 때렸다(「총파**업계**획」·「한국**정보**통신」).
+    #
+    #   이 기사에 나온 이름을 한 번에 모아 물으므로 기사당 호출이 1회 늘어난다
+    #   (0.25원 — 추출 14.7원 대비 1.7%). 판정은 이름 단위로 캐시된다.
+    #   ★타입에 따라 기준이 다르다 — 제품은 카테고리(「감속기」·「휴머노이드 로봇」)도
+    #     이름으로 인정한다. 한 기준으로 묶었다가 「휴머노이드 로봇」이 「일반명사
+    #     조합」으로 버려졌다. 우리 그래프는 제품군을 일부러 노드로 쓴다.
+    proper: dict[str, bool] = {}
+    if conn is not None:
+        by_kind: dict[str, set[str]] = {"entity": set(), "product": set()}
+        for r in relations:
+            for nm, ntype in (
+                (_resolve_name(r.source, r.source_type, article_title), r.source_type),
+                (_resolve_name(r.target, r.target_type, article_title), r.target_type),
+            ):
+                if nm and not is_generic_name(nm):
+                    by_kind["product" if ntype == "Product" else "entity"].add(nm)
+        for kind, names in by_kind.items():
+            if names:
+                proper.update(judge_names(conn, sorted(names), kind))
+
     entities: dict[str, EntityDTO] = {}
     rels: list[RelationshipDTO] = []
     evs: list[EvidenceRecord] = []
@@ -136,6 +176,10 @@ def build_news_document(
             continue
         if is_generic_name(src_name) or is_generic_name(tgt_name):
             continue
+        # 2차 — 모델이 「설명이다」라고 한 것은 노드로 만들지 않는다.
+        # (판정이 없으면 통과 — 판정기가 죽었다고 실명을 버리지 않는다)
+        if not proper.get(src_name, True) or not proper.get(tgt_name, True):
+            continue
 
         # SUES 재분류 — 규제기관이 주체면 REGULATES, 단순 의사표시면 폐기
         edge_in = r.edge_type
@@ -148,6 +192,7 @@ def build_news_document(
 
         # 관계 정규화 — subtype 대표형 통일 + OTHER 재판정
         norm = normalize(edge_in, r.subtype, r.confidence,
+                         registry=registry, conn=conn,
                          raw_expression=r.raw_expression, evidence=r.evidence)
         if norm is None:
             # 12종에 못 넣은 표현 — 버리되 무엇을 버렸는지는 남긴다
@@ -193,6 +238,40 @@ def build_news_document(
         seen_edges.add(ev_id)
 
         props = {"subtype": subtype, "direction": direction, "sign": r.sign, **meta}
+
+        # ★`raw_expression`은 **엣지에 싣지 않는다.**
+        #
+        #   2026-08-11에 한 번 실었다가 되돌렸다. 「추출기가 뽑는데 로더가 버린다」가
+        #   이유였는데, 다시 보니 **버리는 게 맞았다.** 이 필드는 원래
+        #   「12종에 안 맞는 관계」의 탈출구다(프롬프트 규칙 4) — `map_other`가
+        #   이걸 보고 되살리고, 실패하면 `unmapped_relations`에 쌓여 무엇을
+        #   놓치는지 추적한다. 그 일은 아래 `unmapped`에서 이미 하고 있다.
+        #
+        #   적재에 성공한 엣지에는 답할 질문이 없다. 원문이 필요하면 `evidence`가
+        #   문장 그대로 있고, 요약이 필요하면 `subtype`이 있다. 가운데 값은
+        #   **아무도 읽지 않는다** — 그리고 안 읽히는 필드는 썩는다. subtype이
+        #   딱 그렇게 3개월 만에 「영향」 899건이 됐다.
+
+        # ★HAS_EVENT의 role — 당사자(subject)와 단순 언급(mentioned)을 가른다.
+        #   없으면 mentioned로 본다(과하게 당사자로 만들면 「이 기업에 난 일」
+        #   집계가 부풀려진다).
+        if edge_type == "HAS_EVENT":
+            props["role"] = r.role or "mentioned"
+
+        # ★지분율 — `OWNS_STAKE_IN`은 DART가 채우지만 뉴스에도 나온다.
+        #   `ACQUIRES`는 **담을 칸이 아예 없어** 「지분 61.6%」가 subtype으로
+        #   밀려 있었다(2026-08-12). 61.6%면 경영권, 5%면 단순 투자라 전혀 다른
+        #   사실인데 문자열로는 조회도 비교도 안 된다.
+        if r.ratio is not None and edge_type in ("OWNS_STAKE_IN", "ACQUIRES"):
+            props["ratio"] = float(r.ratio)
+
+        # ★거래 규모 — 「420억원 규모 공급계약」과 「4억원 규모」는 리스크가 전혀
+        #   다른데 담을 칸이 없어 둘 다 그냥 SUPPLIES_TO였다(2026-08-12 신설).
+        #   타입마다 세는 대상이 다르다 — 인수 대금 / 계약 규모 / 과징금 / 청구액.
+        #   `ontology.AMOUNT_RULES` 참고. 그 밖의 타입은 금액이 뜻을 갖지 않는다.
+        if r.amount is not None and edge_type in _AMOUNT_TYPES:
+            props["amount"] = float(r.amount)
+
         if norm.remapped:
             props["remapped_from"] = "OTHER"    # 추출기 판단을 뒤집은 엣지 — 감사 흔적
         rels.append(RelationshipDTO(edge_type, src_ref, tgt_ref, props))
@@ -211,5 +290,14 @@ def build_news_document(
                 "occurred_at": int(observed.replace("-", "")) if observed else 0,
             },
         ))
+
+    # ★적재한 제품명을 레지스트리에 남긴다(2026-08-13).
+    #   다음 추출 때 프롬프트로 되돌아가 **같은 이름을 다시 쓰게** 한다.
+    #   제품은 이름이 곧 식별자라, 표기가 갈리면 그 제품의 관계도 갈린다.
+    if conn is not None:
+        names = [e.properties.get("name") for e in entities.values()
+                 if e.type == "Product" and e.properties.get("name")]
+        if names:
+            record_products(conn, names)
 
     return NormalizedDocument(list(entities.values()), rels), evs, unmapped

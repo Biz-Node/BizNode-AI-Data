@@ -23,7 +23,7 @@ from collections import defaultdict
 from app.core.database import postgres_connection
 from pipeline.extractors.news.crawler import enrich_bodies
 from pipeline.extractors.news.gnews import (
-    FAILED_QUERIES, RateLimited, collect_company, resolve_urls)
+    FAILED_QUERIES, RateLimited, clear_checkpoint, collect_company, resolve_urls)
 from pipeline.importer.evidence import upsert_evidence
 from pipeline.importer.event_er import resolve_events
 from pipeline.importer.extraction_ledger import record, resolve_corp_code
@@ -32,6 +32,7 @@ from pipeline.importer.news_loader import build_news_document
 from pipeline.importer.person_er import resolve_persons
 from pipeline.importer.staging import stage_document
 from pipeline.news.extractor import extract_relations
+from pipeline.normalizer.product_registry import prompt_block as product_prompt_block
 from pipeline.news.relevance import llm_router_batch, rule_filter
 from pipeline.normalizer import resolver
 from pipeline.normalizer.relations import record_unmapped
@@ -240,7 +241,15 @@ def main() -> int:
         print(f"   ↻ 받아온 기간까지는 저장했습니다 — 다시 돌리면 **거기서 이어갑니다**")
         if FAILED_QUERIES:
             print(f"   실패한 질의 {len(FAILED_QUERIES)}건")
-        return 3                     # 3 = 속도 제한 (배치가 구분할 수 있게)
+        # ★차단과 회선 오류를 **다른 코드로** 돌려준다(2026-08-12).
+        #   전에는 둘 다 3이라 배치가 구분을 못 했다. 실측: 하이젠알앤엠이
+        #   ReadTimeout 8연속으로 끊겼는데 `run_companies`가 「⛔ 구글 속도 제한 —
+        #   시간을 두고 재개하세요」라고 찍었다. 실제로는 **바로 재시도해도 되는**
+        #   상황이었고, 확인해 보니 구글은 200을 잘 돌려주고 있었다.
+        #   잘못된 안내는 몇 시간을 버리게 만든다.
+        #     3 = 구글이 막았다   → 3시간 규칙을 지켜야 한다
+        #     5 = 회선이 끊겼다   → 바로 다시 돌려도 된다
+        return 5 if "회선 오류" in str(exc) else 3
     funnel.append(("수집(제목 dedup 후)", len(articles), "무료"))
 
     # 수집이 0건이면 그 뒤 단계가 무의미하다. 이것도 기록하지 않는다.
@@ -327,14 +336,16 @@ def main() -> int:
     rows: list[dict] = []
 
     with postgres_connection() as conn:
+        # 이미 쓰는 제품명을 프롬프트에 붙인다 — 표기가 갈려 노드가 쪼개지는 걸 막는다
+        prod_block = product_prompt_block(conn)
         for i, a in enumerate(extract_targets, 1):
             corps, names = by_hash.get(a.title_hash, ([], []))
-            rels = extract_relations(a.title, a.body, names)
+            rels = extract_relations(a.title, a.body, names, prod_block)
             if not rels:
                 continue
             doc, evs, unmapped = build_news_document(
                 rels, a.url, a.title,
-                a.published_at.date() if a.published_at else None)
+                a.published_at.date() if a.published_at else None, conn=conn)
             n, invalid = stage_document(conn, f"news:{a.url}", doc)
             all_ev.extend(evs)
             total_edges += n
@@ -386,6 +397,12 @@ def main() -> int:
                cost_krw=round(len(extract_targets) * _EXTRACT_KRW
                               + len(with_body) * _ROUTER_KRW),
                note=f"track=both, resolve_factor={args.resolve_factor}")
+
+    # ★여기서야 중간본을 지운다 — 기사가 `news_articles`에 들어갔고 대장에도
+    #   기록됐다. 앞 단계 어디서든 죽으면 중간본이 남아 **구글을 다시 안 친다.**
+    #   (2026-08-10 덕산네오룩스: 375건을 40분에 받고 다음 단계에서 DB가 안 떠
+    #    죽었는데, 중간본이 이미 지워져 40분을 통째로 다시 써야 했다.)
+    clear_checkpoint(args.company, args.years, args.month_split)
 
     print("\nstaged_edges → Neo4j")
     load_staged_to_neo4j()

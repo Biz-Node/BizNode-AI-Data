@@ -27,7 +27,11 @@ import sys
 from collections import Counter
 
 from app.core.database import neo4j_session
-from pipeline.normalizer.relations import canonical_subtype
+from pipeline.normalizer.relations import (
+    _DEFAULT_SUBTYPE, canonical_forms, canonical_subtype)
+
+# 엣지 타입 → 등재 대표형 목록. Cypher에 통째로 넘겨 「대표형 우선」에 쓴다.
+_CANON_BY_TYPE = {t: sorted(canonical_forms(t)) for t in _DEFAULT_SUBTYPE}
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -98,24 +102,61 @@ RETURN t + ' ' + coalesce(a.name, '?') + '→' + coalesce(b.name, '?')
 # 관계망에서 "삼성전자가 레인보우로보틱스 지분을 갖고 있다"는 **하나의 사실**이다.
 # 엣지를 하나로 접고, 세부 표현은 `subtypes` 배열에 전부 남긴다.
 #   · 대표 subtype = 가장 많이 관측된 것 (동수면 더 구체적인 = 긴 것)
+#     ★단, **엣지 타입 이름은 대표가 될 수 없다** (아래 참조)
 #   · occurred_at·valid_from = 가장 이른 것 (사건의 시작)
 #   · last_seen = 가장 늦은 것 (신선도)
 #   · evidence_ids·source_docs = 전부 보존 → 근거는 하나도 잃지 않는다
+#
+# ★타입 이름을 대표에서 빼는 이유 (2026-08-11)
+#
+#   최빈값 규칙이 **옛 데이터를 편든다.** 과거 프롬프트가 subtype을 타입 이름으로
+#   채워서 「공급」이 528건 쌓여 있는데, 새 방식으로 뽑은 「취출 로봇」은 1건이다.
+#   같은 두 노드에 둘이 겹치면 최빈값 규칙으로 **「공급」이 이긴다** — 새로 잘 뽑은
+#   값이 조용히 덮인다.
+#
+#     한양로보틱스 → 삼성전자   [공급 ×3(옛) | 취출 로봇 ×1(새)]  → 「공급」  ✗
+#
+#   타입 이름은 애초에 정보가 없다(타입이 이미 하는 말). 대표 후보에서 빼면
+#   백필 순서에 상관없이 안전해진다. 다만 **후보가 전부 타입 이름이면 손대지
+#   않는다** — 그건 클러스터링이 아니라 백필이 할 일이다.
+#
+#   ※`subtypes` 배열에는 타입 이름도 그대로 남긴다. 무엇이 관측됐는지의 기록이다.
 _CLUSTER = """
 MATCH (a)-[r]->(b)
 WITH a, b, type(r) AS t, collect(r) AS rels
 WHERE size(rels) > 1
-WITH rels,
+WITH t, rels,
      [x IN rels WHERE x.evidence_id IS NOT NULL | x.evidence_id]
        + reduce(acc = [], x IN rels | acc + coalesce(x.evidence_ids, [])) AS all_ev,
      [x IN rels WHERE x.source_doc IS NOT NULL | x.source_doc]
        + reduce(acc = [], x IN rels | acc + coalesce(x.source_docs, [])) AS all_docs,
      [x IN rels WHERE x.subtype IS NOT NULL AND x.subtype <> '' | x.subtype] AS all_subs
-// 대표 subtype — 최빈값, 동수면 긴 것
+// ── 대표 후보를 3단계로 좁힌다 ──────────────────────────────
+// 각 단계는 **비면 앞 단계로 되돌린다** — 걸러서 후보가 없어지면 안 되므로.
+//
+//   ① 타입 이름 제외   「공급」·「협력」은 타입이 이미 하는 말이다.
+//                     최빈값 규칙이 옛 데이터를 편들던 것을 막는다.
+//   ② 숫자 제외       「지분 12.42%」는 `ratio` 필드에 이미 있다. 중복이고,
+//                     문자열이라 조회도 안 된다. (실측 2026-08-11)
+//   ③ 한글 우선       「defamation」이 「명예훼손」을 이겼다 — 동수일 때
+//                     「긴 것」 규칙이 영어를 편든다. 화면에 뜨는 값이라
+//                     읽히는 쪽을 고른다.
+WITH t, rels, all_ev, all_docs, all_subs,
+     [s IN all_subs WHERE s <> coalesce($defaults[t], '\\u0000')] AS c0
+WITH t, rels, all_ev, all_docs, all_subs, c0,
+     [s IN c0 WHERE NOT s =~ '.*\\\\d+(\\\\.\\\\d+)?\\\\s*(%|퍼센트|억|조|만원|억원).*'] AS c1
+WITH t, rels, all_ev, all_docs, all_subs,
+     CASE WHEN size(c1) > 0 THEN c1 ELSE c0 END AS c2
+WITH t, rels, all_ev, all_docs, all_subs, c2,
+     [s IN c2 WHERE s =~ '.*[가-힣].*'] AS c3
+WITH t, rels, all_ev, all_docs, all_subs,
+     CASE WHEN size(c3) > 0 THEN c3 ELSE c2 END AS c4
+WITH t, rels, all_ev, all_docs, all_subs, c4 AS cand
+// 대표 subtype — 최빈값, 동수면 긴 것(더 구체적)
 WITH rels, all_ev, all_docs, all_subs,
-     reduce(best = '', s IN all_subs |
-        CASE WHEN size([x IN all_subs WHERE x = s]) > size([x IN all_subs WHERE x = best])
-                  OR (size([x IN all_subs WHERE x = s]) = size([x IN all_subs WHERE x = best])
+     reduce(best = '', s IN cand |
+        CASE WHEN size([x IN cand WHERE x = s]) > size([x IN cand WHERE x = best])
+                  OR (size([x IN cand WHERE x = s]) = size([x IN cand WHERE x = best])
                       AND size(s) > size(best))
              THEN s ELSE best END) AS top_sub
 WITH rels, all_ev, all_docs, all_subs, top_sub,
@@ -127,7 +168,19 @@ WITH rels, all_ev, all_docs, all_subs, top_sub,
      reduce(best = head(rels), x IN tail(rels) |
         CASE WHEN coalesce(x.confidence, 0) > coalesce(best.confidence, 0)
              THEN x ELSE best END) AS keep
-SET keep.subtype        = CASE WHEN top_sub <> '' THEN top_sub ELSE keep.subtype END,
+// ★근거 검증 도장을 걷는다(2026-08-11).
+//   접고 나면 `evidence_ids`가 **여러 근거의 합집합**이 되는데, 판정은 대표 엣지
+//   하나를 보고 내린 것이라 낡는다. 대표가 `unfounded`였다면 합쳐진 다른 근거가
+//   뒷받침해도 그대로 물리쳐진다.
+//   1차(토큰 대조)는 매번 전수라 알아서 다시 보지만, 2차(LLM)는 도장으로
+//   대상을 고르므로 여기서 걷어야 다시 본다. (`retypes`와 같은 이유)
+SET keep.grounding_checked_at = NULL,
+    keep.grounding_verdict    = NULL,
+    keep.grounding_verdict_why = NULL,
+    keep.grounding_reason     = NULL,
+    keep.grounding_stage1     = NULL,
+    keep.grounding_suspect    = NULL,
+    keep.subtype        = CASE WHEN top_sub <> '' THEN top_sub ELSE keep.subtype END,
     keep.subtypes       = apoc.coll.toSet(all_subs),
     keep.evidence_ids   = apoc.coll.toSet(all_ev),
     keep.source_docs    = apoc.coll.toSet(all_docs),
@@ -221,10 +274,11 @@ def main() -> int:
 
         if dry_run:
             print("\n[dry-run] 각 쌍을 1개로 접습니다 "
-                  "(subtype은 최빈값을 대표로, 전체는 subtypes 배열에 보존).")
+                  "(대표는 **타입 이름이 아닌 것** 중 최빈값, 전체는 subtypes 배열에 보존).")
             return 0
 
-        n = session.run(_CLUSTER).single()["clusters"]
+        n = session.run(_CLUSTER,
+                        defaults=_DEFAULT_SUBTYPE).single()["clusters"]
         print(f"\n✅ {n}쌍 클러스터링 완료 "
               f"(subtypes·evidence_ids·source_docs 전부 보존)")
     return 0

@@ -1,4 +1,4 @@
-"""공시 원문(document.xml) 다운로드 → 파일 스토리지 + documents 메타 (경로 B).
+"""공시 원문(document.xml) 다운로드 → 파일 스토리지 + documents 메타.
 
 "저장은 전부, 임베딩은 선별" — 원문 전체는 파일로 보관(임베딩 안 함),
 근거 스니펫만 ChromaDB로. documents 테이블은 메타(경로·유형·일자)만.
