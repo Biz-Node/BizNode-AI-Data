@@ -36,9 +36,9 @@ from __future__ import annotations
 from app.api.schemas import (
     Change, CompanyDetail, CompanySummary, DetailBlocks, DetailCounts,
     Evidence, Event, EventTimelinePhase,
-    FinancialYear, Filing, GraphEdge, GraphNode, GraphResponse, InsightCard,
+    FinancialYear, Filing, GraphEdge, GraphNode, GraphResponse,
     MarketMetrics, MarketPoint, MarketResponse, NewsFeedItem, NewsFeedResponse,
-    NewsItem, OwnershipItem, ProductItem, Propagation, PropagationStep,
+    NewsItem, OwnershipItem, ProductItem, Propagation, EdgePropagation,
     Relation, RelationDetail, RelationEndpoint, RiskEvent, Segment,
     SharedCustomer, Suggestion, TrendingItem,
 )
@@ -93,15 +93,18 @@ EVIDENCE_SUPPLY = Evidence(
     source_type="news", press="핀포인트뉴스", published_at="2026-04-06",
 )
 
+# ★`/relations/{edge_id}` 는 **실제 데이터로 구현됐다.** 이 예시는 계약 문서용으로만
+#   남는다 — 실측값(2026-08-18): 담합 혐의 피소 → 마이크론 0.900(보도) ·
+#   AMD 0.222(2홉 계산).
 RELATION_DETAIL = RelationDetail(
     relation=REL_SUPPLY,
     evidence=[EVIDENCE_SUPPLY],
     propagation=[
-        Propagation(key="01095722", name="심텍", score=0.24, hops=2,
-                    path=[PropagationStep(key="00164779", name="SK하이닉스",
-                                          edge_type="HAS_EVENT"),
-                          PropagationStep(key="01095722", name="심텍",
-                                          edge_type="SUPPLIES_TO")]),
+        EdgePropagation(
+            event_id="evt_news_0e95c793dc87", event="담합 혐의 피소",
+            target="삼성전자", key="00126380", score=0.48, hops=1,
+            stated=True, channel=None,
+            path=["담합 혐의 피소", "IMPACTS(negative)", "삼성전자"]),
     ],
 )
 
@@ -429,21 +432,19 @@ TRENDING = [
     TrendingItem(key="00161383", name="한미반도체", mention_count=164),
 ]
 
-INSIGHTS = [
-    InsightCard(key="01095722", name="심텍", headline="사건 4건 중 위험 2건",
-                why="품질 관련 사건이 두 건 — 내부고발과 포장갈이 의혹",
-                event_ids=["evt_news_1664a8f17eed", "evt_news_34d7bfaeea8c"]),
-    InsightCard(key="01095722", name="심텍", headline="거래가 메모리 3사에 몰려 있습니다",
-                why="공급 관계가 삼성전자·SK하이닉스·엔비디아로 향한다",
-                event_ids=[]),
-]
+# ★`INSIGHTS` 는 지웠다 — `/insights` 가 실제 데이터로 구현됐다.
+#   계약 예시는 `schemas.InsightCard` 의 `examples=` 에 있다.
 
+# ★`/events/{id}/impact` 도 실제 데이터로 구현됐다. 아래는 계약 문서용 예시로,
+#   **보도된 것 하나와 계산한 것 하나**를 나란히 두어 `stated` 의 뜻을 보인다.
 PROPAGATION = [
-    Propagation(key="01095722", name="심텍", score=0.24, hops=2,
-                path=[PropagationStep(key="00164779", name="SK하이닉스",
-                                      edge_type="HAS_EVENT"),
-                      PropagationStep(key="01095722", name="심텍",
-                                      edge_type="SUPPLIES_TO")]),
+    Propagation(target="마이크론", key=None, score=0.9, hops=1,
+                stated=True, channel=None,
+                path=["담합 혐의 피소", "IMPACTS(negative)", "마이크론"]),
+    Propagation(target="AMD", key=None, score=0.222, hops=2,
+                stated=False, channel="supply",
+                path=["2분기 영업손실 7000억", "IMPACTS(negative)", "삼성전자",
+                      "SUPPLIES_TO(공급 차질)", "AMD"]),
 ]
 
 # ★relation_ended 가 여기 없는 게 정상이다. loaded_at 이 2026-07-31 도입이라

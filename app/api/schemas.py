@@ -47,11 +47,8 @@ from pydantic import BaseModel, Field
 
 
 class DetailLevel(str, Enum):
-    """이 기업에 대해 **얼마나 아는가.**
-
-    ★이게 없으면 프론트가 「엔비디아는 재무가 없다」를 **오류로 처리한다.**
-      실제 분포(2026-08-15): 전체 3,432곳 중 재무 477 · 시세 427 · 공시 64.
-      **대부분은 이름·업종·관계만 있는 게 정상이다.**
+    """이 기업에 대해 **얼마나 아는가.** `relations_only` 가 정상이다 —
+    3,432곳 중 재무 477 · 시세 427 · 공시 64.
     """
 
     full = "full"                      # 재무·공시·사업부문까지 (시드 64곳)
@@ -59,28 +56,25 @@ class DetailLevel(str, Enum):
     none = "none"                      # 이름만 아는 노드
 
 
+# `partial` 은 구글 차단이나 상한에 걸려 중간에 멈춘 것이다. 화면이
+# 「이 회사는 자료가 적네」와 「아직 덜 모았네」를 구별해야 한다.
 class Coverage(str, Enum):
-    """수집이 **끝까지 갔는가.**
-
-    `partial` 은 구글 차단이나 상한에 걸려 중간에 멈춘 것이다. 화면이
-    「이 회사는 자료가 적네」와 「아직 덜 모았네」를 구별해야 한다.
-    """
+    """수집이 **끝까지 갔는가.**"""
 
     complete = "complete"
     partial = "partial"
 
 
 class Freshness(str, Enum):
-    """관계가 **언제 관측됐는지**의 판정. 모델이 아니라 산수다.
+    """관계를 **언제 관측했는지.** 모델이 아니라 산수다.
 
-        expired   종료가 확인됨 또는 유효기간 경과      가중치 0.3
-        current   `refresh_cycle_days × 1.5` 이내      가중치 1.0
-        stale     그 이상                            가중치 0.6
-        unknown   날짜 정보 없음                      가중치 0.7
+        current   `refresh_cycle_days × 1.5` 이내   가중치 1.0
+        stale     그 이상                          0.6
+        expired   종료 확인 또는 유효기간 경과        0.3  (응답에서 빠진다)
+        unknown   날짜 없음                        0.7
 
-    ★뉴스는 관계의 **시작만 보도하고 종료는 보도하지 않는다.** 그래서 오래된
-      관계를 지우면 살아 있는 관계를 잃고, 그대로 두면 끝난 관계를 현재형으로
-      말하게 된다. 지우지 않고 **언제 봤는지**를 함께 보낸다.
+    `stale` 도 지우지 않고 보낸다 — 뉴스는 관계의 시작만 보도하고 종료는
+    보도하지 않는다. 「2024-06에 그렇게 보도됨」으로 표시한다.
     """
 
     current = "current"
@@ -90,12 +84,10 @@ class Freshness(str, Enum):
 
 
 class EntityKind(str, Enum):
-    """노드가 **무엇인가.**
+    """노드가 무엇인가.
 
-    ⚠ **해외 여부는 이 값으로 판정하면 안 된다.** `해외` 는 9곳뿐이고
-      엔비디아·TSMC·ASML 이 전부 `기업` 으로 들어가 있다. 해외를 가려내는
-      확실한 필드가 아직 없어서, 화면도 **「해외 기업」이라고 단정해 표시하지
-      않는다.**
+    ⚠ **해외 여부를 이 값으로 판정하면 안 된다.** `해외` 는 9곳뿐이고
+    엔비디아·TSMC·ASML 이 전부 `기업` 으로 들어가 있다.
     """
 
     기업 = "기업"
@@ -157,7 +149,7 @@ class SearchHit(BaseModel):
     ksic: Optional[str] = Field(None, description="업종 중분류 코드 2자리. **묶어 세기용**",
                                 examples=["26"])
     ksic_label: Optional[str] = Field(
-        None, description="★**화면에 쓸 업종 이름.** 코드는 사용자가 못 읽는다",
+        None, description="**화면에 쓸 업종 이름.** 코드는 사용자가 못 읽는다",
         examples=["전자부품·컴퓨터·영상·음향·통신장비"])
     detail_level: DetailLevel = DetailLevel.relations_only
     matched_on: Literal["name", "alias", "corp_code"] = Field(
@@ -166,19 +158,10 @@ class SearchHit(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """**부분 일치**로 찾는다. 「삼성」을 치면 삼성으로 시작하는 회사가 전부 나온다.
+    """**부분 일치.** 결과가 두 종류 섞여 있다 — `in_graph=true` 는
+    수집한 것, `false` 는 DART 명부에만 있는 것(실재하지만 자료가 없다).
 
-    ★결과가 두 종류 섞여 있다.
-
-        in_graph = true    우리가 수집했다 — 관계·사건·재무를 조회할 수 있다
-        in_graph = false   DART 명부에만 있다 — **실재하지만 자료가 없다**
-
-      「있는데 아직 안 모았다」와 「그런 회사가 없다」는 완전히 다른 말이라
-      후자를 전자로 답하면 안 된다.
-
-    ★`total` 은 **가져온 수가 아니라 있는 수**다. 명부 쪽은 한 번에 50건까지만
-      실어 보내므로 `total` 과 `len(hits)` 가 다를 수 있다 — 화면은
-      「295건 중 20건」이라고 쓰면 된다.
+    `total` 은 **있는 수**, `hits` 는 실어 보낸 수. 「295건 중 20건」.
     """
 
     query: str = Field(examples=["삼성"])
@@ -200,11 +183,10 @@ class RelationEndpoint(BaseModel):
 
 
 class Relation(BaseModel):
-    """관계 한 건.
+    """관계 한 건. **근거 검증에서 걸린 관계는 여기 오지 않는다.**
 
-    ★**근거가 없는 관계는 여기 오지 않는다.** 검증에서 걸린 것은 응답에서
-      아예 빠진다. 파급 계산도 마찬가지 — 근거 없는 관계 하나가
-      **없는 파급을 만들어 내기** 때문이다.
+    `edge_id` 가 이 관계의 유일한 id 다. `evidence_id` 로 대신하면 안 된다 —
+    한 근거가 여러 관계를 뒷받침해서 **유일하지 않다**(엣지 11,060 : 근거 9,228).
     """
 
     edge_id: str = Field(
@@ -261,41 +243,66 @@ class Relation(BaseModel):
 class Evidence(BaseModel):
     """관계의 **근거 원문.** 챗봇이 인용하는 것이 이것이다."""
 
-    evidence_id: str = Field(examples=["ev_1fb80cd92f197c6a"])
-    text: str = Field(description="원문 1~2문장. 우리가 요약하지 않은 것",
-                      examples=["한미반도체는 SK하이닉스와 단일판매·공급계약을 체결하였다. "
-                                "계약금액은 44,200,000,000원이다."])
-    source_doc: str = Field(description="기사 URL 또는 DART 접수번호",
-                            examples=["20260608800436"])
-    source_type: Literal["dart", "dart_filing", "news"] = "dart"
-    press: Optional[str] = Field(None, examples=["전자신문"])
-    published_at: Optional[str] = Field(None, examples=["2026-06-08"])
-
-
-class PropagationStep(BaseModel):
-    key: str
-    name: str
-    edge_type: EdgeType
+    evidence_id: str = Field(examples=["ev_684dc0c435ca1676"])
+    text: str = Field(
+        description="원문. **우리가 요약하지 않은 것** — 화면이 그대로 인용한다",
+        examples=["공급 관계 — 공급자: SFA반도체 / 수요자: 삼성전자(주) "
+                  "계약유형: 공급계약 / 체결: 1999-01 "
+                  "목적·내용: BOC 등 계약제품에 대한 안정적인 생산 공급"])
+    source_doc: str = Field(description="DART 접수번호 또는 기사 URL. **되짚을 수 있는 값**",
+                            examples=["20260323000826"])
+    source_type: Literal["dart", "news"] = "dart"
+    press: Optional[str] = Field(None, description="기사면 언론사, 공시면 보고서 제목",
+                                 examples=["전자신문"])
+    published_at: Optional[str] = Field(None, examples=["2026-03-23"])
+    # ★못 꺼낸 근거를 **조용히 빼지 않는다.** 빼면 「근거가 없는 관계」로 읽힌다.
+    missing: bool = Field(False, description="`true` 면 id 는 있는데 원문을 못 찾았다")
 
 
 class Propagation(BaseModel):
-    """리스크 파급 한 갈래. **저장하지 않고 질의 시점에 계산한다.**"""
+    """리스크 파급 한 갈래. 질의 시점에 계산한다.
 
-    key: str = Field(examples=["00164779"])
-    name: str = Field(examples=["한미반도체"])
-    score: float = Field(ge=0, le=1, examples=[0.71])
-    hops: int = Field(examples=[2])
-    path: list[PropagationStep] = Field(default_factory=list,
-                                        description="어떤 관계를 타고 닿았는지")
+    `stated` 를 **갈라 그려야 한다.** `true` 기사가 직접 말한 것,
+    `false` 우리가 공급망으로 계산한 것. 섞으면 추론을 사실로 팔게 된다.
+    실측(모트라스 파업): 124곳 = 보도 10 + 계산 114.
+    """
+
+    target: str = Field(description="영향받는 기업 이름", examples=["현대차증권"])
+    key: Optional[str] = Field(None, description="기업 키. 이름만 있고 노드가 없으면 null",
+                               examples=["00164779"])
+    score: float = Field(ge=0, le=1, examples=[0.297])
+    hops: int = Field(description="1 = 보도된 것 · 2 이상 = 공급망으로 계산한 것",
+                      examples=[2])
+    stated: bool = Field(description="기사가 직접 말했나. `false` 면 우리 계산이다",
+                         examples=[False])
+    channel: Optional[str] = Field(
+        None, description="무엇을 타고 왔나 — `supply`(공급 차질) · `demand`(매출 상실)",
+        examples=["supply"])
+    path: list[str] = Field(
+        default_factory=list, description="어떤 관계를 타고 닿았는지. **화면이 그대로 보여 준다**",
+        examples=[["모트라스 파업", "IMPACTS(negative)", "현대차",
+                   "SUPPLIES_TO(공급 차질)", "현대차증권"]])
+
+
+class EdgePropagation(Propagation):
+    """`/relations/{edge_id}` 의 파급 — **어느 사건에서 왔는지**가 붙는다."""
+
+    event_id: str = Field(examples=["evt_news_9eae2c4cb76a"])
+    event: str = Field(examples=["모트라스 파업"])
 
 
 class RelationDetail(BaseModel):
-    """선을 클릭했을 때 — 워크스페이스 좌 패널."""
+    """선을 클릭했을 때. `evidence[].text` 가 **원문 그대로**다.
+
+    `propagation` 은 **이 선을 타고** 번지는 위험만이다 — 공급 관계에서만
+    계산한다.
+    """
 
     relation: Relation
     evidence: list[Evidence] = Field(default_factory=list)
-    propagation: list[Propagation] = Field(
-        default_factory=list, description="이 연결을 타고 닿는 위험")
+    propagation: list[EdgePropagation] = Field(
+        default_factory=list,
+        description="이 연결을 타고 닿는 위험. **`stated` 로 보도와 계산을 가른다**")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -304,7 +311,9 @@ class RelationDetail(BaseModel):
 
 
 class FinancialYear(BaseModel):
-    """★`fs_div` 를 반드시 함께 본다. **연결과 별도는 비교하면 안 된다.**"""
+    """연도별 재무. `fs_div` 를 반드시 함께 본다 —
+    **연결(CFS)과 별도(OFS)는 비교하면 안 된다.** 비율은 계산해서 준다.
+    """
 
     bsns_year: int = Field(examples=[2025])
     fs_div: Literal["CFS", "OFS"] = Field("CFS", description="CFS=연결 · OFS=별도")
@@ -323,10 +332,8 @@ class FinancialYear(BaseModel):
 
 
 class Segment(BaseModel):
-    """사업부문.
-
-    ★사업보고서 표는 **단위가 표 밖 캡션에 있어** 자주 1,000배 틀린다.
-      못 믿는 값은 **아예 보내지 않는다** — 56개사 중 39개사가 어긋나 있었다.
+    """사업부문. **못 믿는 값은 아예 보내지 않는다**(`null`) —
+    사업보고서 표는 단위가 표 밖 캡션에 있어 자주 1,000배 틀린다.
     """
 
     name: str = Field(examples=["DS 부문"])
@@ -345,17 +352,10 @@ class MarketPoint(BaseModel):
 
 
 class MarketMetrics(BaseModel):
-    """시장 지표.
+    """시장 지표. **저장하지 않고 조회할 때 계산한다.**
 
-    ★**저장하지 않고 조회할 때 계산한다.** 종가·유통주식수·재무에서 나오는
-      값이라 저장하면 원본과 어긋난다.
-
-    ★`fin_year`·`fs_div` 가 **값과 함께 나가는 이유** — 「PER 35.4」만 주면
-      화면이 근거를 못 밝힌다. 남의 API 를 안 쓰는 이유도 이것이다(연결인지
-      별도인지, 어느 분기 실적인지를 모른다).
-
-    ★유통주식수를 못 믿는 기업은 이 블록이 **통째로 `null`** 이다. DART 원본이
-      틀리는 경우가 있어(공시 단위 오류) 그대로 두면 시총 순위가 뒤집힌다.
+    `fin_year`·`fs_div` 가 값과 함께 나가므로 화면이 「2025년 연결 기준」이라
+    밝힐 수 있다. 적자면 `per` 이 `null` 이다.
     """
 
     trade_date: str = Field(examples=["2026-08-14"])
@@ -375,16 +375,13 @@ class MarketMetrics(BaseModel):
     fs_div: Literal["CFS", "OFS"] = Field("CFS", description="연결/별도 — **기준을 밝힌다**")
 
 
+# unlisted           비상장이라 **원래 없다**       → 「비상장」
+# not_collected      상장인데 **아직 안 받았다**     → 「미수집」
+# unreliable_shares  주식수를 못 믿는다             → 「확인 중」
+# 화면이 이걸 구분해야 한다. 「비상장」은 영원히 안 채워지지만
+# 「미수집」은 배치를 돌리면 채워진다.
 class MarketUnavailable(str, Enum):
-    """시장 정보가 **왜 없는가.** 셋이 완전히 다른 말이다.
-
-        unlisted           비상장이라 **원래 없다**       → 「비상장」
-        not_collected      상장인데 **아직 안 받았다**     → 「미수집」
-        unreliable_shares  주식수를 못 믿는다             → 「확인 중」
-
-    화면이 이걸 구분해야 한다. 「비상장」은 영원히 안 채워지지만
-    「미수집」은 배치를 돌리면 채워진다.
-    """
+    """시장 정보가 **왜 없는가.** 셋이 완전히 다른 말이다."""
 
     unlisted = "unlisted"
     not_collected = "not_collected"
@@ -392,7 +389,7 @@ class MarketUnavailable(str, Enum):
 
 
 class MarketResponse(BaseModel):
-    """★상장사 427곳에만 있다. 없을 때 **왜 없는지**를 함께 보낸다."""
+    """상장사 427곳에만 있다. 없을 때 **왜 없는지**를 함께 보낸다."""
 
     key: str = Field(examples=["00126380"])
     listed: bool = Field(True, description="`false` 면 아래가 전부 `null` — **오류가 아니다**")
@@ -408,12 +405,10 @@ class EventTimelinePhase(BaseModel):
     name: str = Field(examples=["삼성전자 압수수색"])
 
 
+# ★**날짜는 사건 노드가 아니라 관계에 있다.** 같은 사건이라도 기업마다
+# 엮인 시점이 다를 수 있어서다. 그래서 `occurred_at` 이 여기 온다.
 class Event(BaseModel):
-    """사건.
-
-    ★**날짜는 사건 노드가 아니라 관계에 있다.** 같은 사건이라도 기업마다
-      엮인 시점이 다를 수 있어서다. 그래서 `occurred_at` 이 여기 온다.
-    """
+    """사건."""
 
     event_id: str = Field(examples=["evt_news_c915fa8bf141"])
     name: str = Field(examples=["삼성전자 본사 압수수색"])
@@ -429,7 +424,7 @@ class Event(BaseModel):
 
 
 class NewsItem(BaseModel):
-    """★본문은 **저장하지 않는다**(저작권). 제목·출처·링크까지만."""
+    """본문은 **저장하지 않는다**(저작권). 제목·출처·링크까지만."""
 
     url: str = Field(examples=["https://www.seoulfn.com/news/articleView.html?idxno=630959"])
     title: str = Field(examples=["삼성전자 본사 압수수색"])
@@ -452,9 +447,9 @@ class ExecutiveItem(BaseModel):
     position: Optional[str] = Field(None, examples=["대표이사"])
 
 
+# 나가는 방향으로 나눠 보여준다.
 class OwnershipItem(BaseModel):
-    """★지배구조는 **양방향**이다. 같은 `OWNS_STAKE_IN` 을 들어오는 방향과
-    나가는 방향으로 나눠 보여준다."""
+    """지배구조는 **양방향**이다. 같은 `OWNS_STAKE_IN` 을 들어오는 방향과"""
 
     key: str
     name: str = Field(examples=["국민연금공단"])
@@ -463,15 +458,12 @@ class OwnershipItem(BaseModel):
     subtype: Optional[str] = Field(None, examples=["5%이상주주"])
 
 
+# dart   사업보고서에서 나온 것 — 이미 **매출을 내는 제품**
+# news   기사에서 나온 것 — **개발 중일 수 있다**
+# 화면이 「제품」과 「개발」로 나눠 보여주는 근거가 이 필드다.
+# 실측: dart 397건 · news 1,653건.
 class ProductItem(BaseModel):
-    """★`source` 가 **성격을 가른다.**
-
-        dart   사업보고서에서 나온 것 — 이미 **매출을 내는 제품**
-        news   기사에서 나온 것 — **개발 중일 수 있다**
-
-    화면이 「제품」과 「개발」로 나눠 보여주는 근거가 이 필드다.
-    실측: dart 397건 · news 1,653건.
-    """
+    """`source` 가 **성격을 가른다.**"""
 
     key: str
     name: str = Field(examples=["HBM3E"])
@@ -497,7 +489,7 @@ class CompanyBase(BaseModel):
     entity_kind: Optional[EntityKind] = None
     ksic: Optional[str] = Field(None, description="업종 코드. **묶어 세기용**", examples=["26"])
     ksic_label: Optional[str] = Field(
-        None, description="★**화면에 쓸 업종 이름.** 숫자를 그대로 보여주지 않는다",
+        None, description="**화면에 쓸 업종 이름.** 숫자를 그대로 보여주지 않는다",
         examples=["전자부품·컴퓨터·영상·음향·통신장비"])
     also_names: list[str] = Field(default_factory=list,
                                   description="병합된 옛 표기. **옛 링크가 깨지지 않게 하는 것**")
@@ -514,11 +506,8 @@ class SharedCustomer(BaseModel):
 
 
 class CompanySummary(CompanyBase):
-    """워크스페이스 좌 패널 — **「지금 보는 그래프 안에서의 이 회사」.**
-
-    ★`company_detail` 과 다른 화면이다. 이쪽은 **담아 둔 다른 기업들과 어떻게
-      이어지는지**를 말한다. 그래서 요청에 `workspace_keys` 가 필요하다 —
-      기업 키만으로는 답이 안 나온다.
+    """**노드를 클릭했을 때** — 워크스페이스 좌 패널.
+    `company_detail` 과 다른 화면이다. 이쪽은 「지금 보는 그래프 안에서의 이 회사」다.
     """
 
     overview: Optional[str] = Field(None, description="한 줄 소개",
@@ -531,7 +520,7 @@ class CompanySummary(CompanyBase):
     latest_financial: Optional[FinancialYear] = Field(
         None, description="`financials[0]` 과 같다. 한 줄만 쓸 화면을 위한 편의 필드")
     market_metrics: Optional[MarketMetrics] = Field(
-        None, description="★상장사만. `CompanyBase.market`(KOSPI/KOSDAQ)과 **다른 필드**다 —"
+        None, description="상장사만. `CompanyBase.market`(KOSPI/KOSDAQ)과 **다른 필드**다 —"
                           " 그쪽은 시장 이름이고 이쪽은 시세·지표다")
     risk_summary: Optional[str] = Field(None, examples=["최근 12개월 리스크 사건 3건"])
     risk_event_count: int = 0
@@ -554,12 +543,10 @@ class BlockFill(str, Enum):
     none = "none"        # ○  없다
 
 
+# 「재무는 있는데 공시가 없다」가 흔한데, 통짜 등급으로는 표현이 안 된다.
+# 화면이 블록마다 접거나 「미수집」을 적으려면 **블록별로** 알아야 한다.
 class DetailBlocks(BaseModel):
-    """★`detail_level` 하나로는 부족하다.
-
-    「재무는 있는데 공시가 없다」가 흔한데, 통짜 등급으로는 표현이 안 된다.
-    화면이 블록마다 접거나 「미수집」을 적으려면 **블록별로** 알아야 한다.
-    """
+    """`detail_level` 하나로는 부족하다."""
 
     overview: BlockFill = BlockFill.none
     financials: BlockFill = BlockFill.none
@@ -571,18 +558,39 @@ class DetailBlocks(BaseModel):
     filings: BlockFill = BlockFill.none
     ownership: BlockFill = BlockFill.none
     market: BlockFill = BlockFill.none
+    graph: BlockFill = BlockFill.none
 
 
 class DetailCounts(BaseModel):
-    """화면 머리의 숫자 줄. **한 번에 세어 보낸다** — 화면이 배열 길이를 세면
-    상한에 걸린 목록에서 틀린 수가 나온다."""
+    """블록별 **실제 수.** 상세의 목록은 블록마다 10건까지(관계 그래프는
+    60)이므로, 화면은 이 수로 「148건 중 10건」이라 쓰고 전체는 서브 라우트로
+    가져온다.
+    """
 
-    relations: int = Field(0, examples=[46])
-    related_companies: int = Field(0, examples=[18])
-    events: int = Field(0, examples=[4])
-    risk_events: int = Field(0, examples=[2])
-    news: int = Field(0, examples=[18])
+    relations: int = Field(0, description="이 기업에 붙은 관계 수 (전부)", examples=[1169])
+    related_companies: int = Field(0, description="연관 **기업 수**(중복 없이)",
+                                   examples=[443])
+    events: int = Field(0, examples=[148])
+    risk_events: int = Field(0, examples=[69])
+    news: int = Field(0, examples=[583])
     filings: int = Field(0, examples=[3])
+    products: int = Field(0, examples=[152])
+    executives: int = Field(0, examples=[21])
+    owns: int = Field(0, description="이 회사가 소유한 쪽", examples=[157])
+    owned_by: int = Field(0, description="이 회사를 소유한 쪽", examples=[9])
+
+
+# ★**양방향을 한 응답에 갈라 담는다.** 같은 `OWNS_STAKE_IN` 이라도
+# 「누가 나를 소유하나」와 「내가 무엇을 소유하나」는 화면에서 다른 뜻이다.
+# 한 배열로 주고 방향 플래그를 달면 화면이 매번 다시 가른다.
+class OwnershipResponse(BaseModel):
+    """`/companies/{key}/ownership` — 지배구조 「더보기」."""
+
+    key: str = Field(examples=["00126380"])
+    owns_total: int = Field(0, description="**자르기 전 실제 수**", examples=[157])
+    owned_by_total: int = Field(0, examples=[9])
+    owns: list[OwnershipItem] = Field(default_factory=list, description="이 회사가 소유한 쪽")
+    owned_by: list[OwnershipItem] = Field(default_factory=list, description="이 회사를 소유한 쪽")
 
 
 class CompanyDetail(CompanyBase):
@@ -601,7 +609,7 @@ class CompanyDetail(CompanyBase):
     induty: Optional[str] = Field(None, description="DART 업종코드 5자리", examples=["264"])
 
     market_metrics: Optional[MarketMetrics] = Field(
-        None, description="★상장사만. 비상장이면 `null` 이 정상이다")
+        None, description="상장사만. 비상장이면 `null` 이 정상이다")
     financials: list[FinancialYear] = Field(default_factory=list, description="최근 3개년")
     segments: list[Segment] = Field(default_factory=list)
     products: list[ProductItem] = Field(default_factory=list)
@@ -613,6 +621,17 @@ class CompanyDetail(CompanyBase):
     events: list[Event] = Field(default_factory=list)
     news: list[NewsItem] = Field(default_factory=list)
     filings: list[Filing] = Field(default_factory=list)
+    # ★상세 페이지의 「기업 관계 그래프」 블록(README 4-3). 페이지가 열릴 때
+    #   어차피 필요하니 **함께 보낸다** — `market`·`events`·`news`·`filings` 도
+    #   따로 라우트가 있지만 상세가 품고 있는 것과 같은 규칙이다.
+    #
+    #   `related` 에 나가는 관계는 **반드시 이 그래프에도 있다.** 목록에서 한 줄을
+    #   누르면 그래프의 그 선을 강조할 수 있어야 한다(실측: 안 맞춰 뒀을 때
+    #   SK하이닉스에서 목록에만 있는 관계가 8건 나왔다).
+    #
+    #   `depth`·`max_nodes` 를 바꿔 다시 그리려면 `/companies/{key}/graph`.
+    graph: Optional["GraphResponse"] = Field(
+        None, description="이 회사 중심 관계 그래프 — **`related` 를 전부 포함한다**")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -620,9 +639,9 @@ class CompanyDetail(CompanyBase):
 # ══════════════════════════════════════════════════════════════════
 
 
+# 그리면 「내가 담은 건 이거고, 이어주려고 딸려온 건 저거」가 한눈에 보인다.
 class GraphNode(BaseModel):
-    """★`role` 이 **담은 기업과 다리 노드를 가른다.** 프론트가 다리를 흐리게
-    그리면 「내가 담은 건 이거고, 이어주려고 딸려온 건 저거」가 한눈에 보인다."""
+    """`role` 이 **담은 기업과 다리 노드를 가른다.** 프론트가 다리를 흐리게"""
 
     key: str
     name: str
@@ -666,14 +685,10 @@ class GraphEdge(BaseModel):
 
 
 class GraphResponse(BaseModel):
-    """워크스페이스 캔버스 · 기업 상세의 관계 그래프.
+    """그래프. **허브는 다리로 쓰지 않는다** — 삼성전자를 다리로 허용하면
+    거의 모든 쌍이 이어져 의미가 0인 그래프가 된다.
 
-    ★**허브를 다리로 쓰지 않는다.** 삼성전자(연결 150+)를 다리로 허용하면
-      거의 모든 쌍이 이어져 **의미가 0인 그래프**가 된다. 자산운용사도 마찬가지 —
-      양쪽에 지분이 있을 뿐 두 회사가 관계있다는 뜻이 아니다.
-
-    ★그래도 못 이으면 **섬으로 두고 표시한다.** 없는 관계를 그리는 것보다
-      없다고 말하는 게 낫다.
+    못 이으면 `islands` 에 담아 **없다고 말한다.** 없는 관계를 그리지 않는다.
     """
 
     nodes: list[GraphNode] = Field(default_factory=list)
@@ -725,9 +740,9 @@ class NewsFeedItem(NewsItem):
     is_risk: bool = False
 
 
+# 서로 배타적인지 겹쳐 쓸 수 있는지 알 수 없다.
 class NewsFeedResponse(BaseModel):
-    """★필터가 **세 축**이다. 한 줄에 몰면 「위험만」과 「내 워크스페이스」가
-    서로 배타적인지 겹쳐 쓸 수 있는지 알 수 없다."""
+    """필터가 **세 축**이다. 한 줄에 몰면 「위험만」과 「내 워크스페이스」가"""
 
     total: int = 0
     items: list[NewsFeedItem] = Field(default_factory=list)
@@ -740,18 +755,93 @@ class TrendingItem(BaseModel):
     mention_count: int = Field(description="최근 언급 수", examples=[42])
 
 
-class InsightCard(BaseModel):
-    """홈의 「이 회사에 이런 일이 있었다」 카드.
+class WorkspaceInsightRequest(BaseModel):
+    """`GET` 이 아니라 `POST` 인 이유 — 인사이트는 **담아 둔 기업 전부를 겹쳐야**
+    나온다. 키 목록이 길어지면 쿼리스트링에 안 들어간다."""
 
-    ★`why` 를 반드시 함께 보낸다. **왜 그렇게 봤는지 없이 결론만 주면
-      사용자가 검증할 방법이 없다.**
+    keys: list[str] = Field(
+        description="**담아 둔 기업 전부.** 1곳이면 빈 배열이 나간다 — "
+                    "「겹친다」가 성립하지 않는다",
+        examples=[["01095722", "00164779", "00126380", "00161383"]])
+    limit: int = Field(5, ge=1, le=20, description="카드 최대 장수")
+
+
+class InsightKind(str, Enum):
+    """카드 종류. 화면이 아이콘·색을 이걸로 가른다."""
+
+    shared_risk = "shared_risk"                    # 같은 위험 사건에 여럿이 걸림
+    cascade_risk = "cascade_risk"                  # A 의 사건이 B 까지 번짐
+    shared_customer = "shared_customer"            # 같은 곳에 판다
+    shared_supplier = "shared_supplier"            # 같은 곳에서 사온다
+    shared_owner = "shared_owner"                  # 같은 주주
+    internal_competition = "internal_competition"  # 담은 기업끼리 경쟁
+    sector_concentration = "sector_concentration"  # 업종 쏠림
+    no_overlap = "no_overlap"                      # 겹치는 게 없다
+
+
+# ★`why` 를 반드시 함께 보낸다. **왜 그렇게 봤는지 없이 결론만 주면
+#   사용자가 검증할 방법이 없다.**
+# ★`headline`·`why` 는 아래 숫자로 채운 **템플릿**이다. 해석(「엔비디아 수요가
+#   꺾이면 위험하다」)은 넣지 않는다 — 숫자에서 안 나온다. 필요하면 추론 계층이
+#   이 재료를 받아 쓴다(`/retrieve` 와 같은 경계).
+class InsightCard(BaseModel):
+    """**합쳐야 드러나는 것.** 기업 하나를 열어서는 안 보인다.
+
+    `lift` 가 핵심이다 — 「몇 곳이 겹치나」가 아니라 **「보통보다 얼마나
+    몰려 있나」**다. 삼성전자에 공급하는 회사는 전체의 4.37%라 반도체
+    워크스페이스면 당연히 겹치고, 엔비디아는 0.26%라 겹치면 특이하다.
+
+          엔비디아  4/4 = 100% ÷ 0.26% = 381배
+          삼성전자  3/4 =  75% ÷ 4.37% =  17배
+
+    정렬은 **`shared` 1차, `lift` 2차**다. lift 만 쓰면 `2/4`(858배)가
+    `4/4`(381배)를 이겨 화면이 이상해진다.
     """
 
-    key: str
-    name: str = Field(examples=["SK하이닉스"])
-    headline: str = Field(examples=["최근 3개월 리스크 사건 2건"])
-    why: str = Field(description="근거 한 줄", examples=["화재·라인 전환 연기가 같은 분기에 보도됨"])
-    event_ids: list[str] = Field(default_factory=list)
+    kind: InsightKind
+    # ★`headline` 에는 **대상 이름이 없다.** 화면이 `subject` 를 카드 제목으로
+    #   올리기 때문에, 문장에도 넣으면 「엔비디아 / 엔비디아에 …」가 된다.
+    headline: str = Field(description="`subject` 아래에 쓰는 한 줄",
+                          examples=["담은 4곳이 전부 공급합니다"])
+    why: str = Field(
+        description="**근거.** 결론만 주면 사용자가 검증할 수 없다",
+        examples=["엔비디아에 공급하는 회사는 전국 9곳뿐입니다"])
+    keys: list[str] = Field(default_factory=list,
+                            description="**걸린 기업들.** 화면이 그래프에서 강조한다",
+                            examples=[["01095722", "00164779"]])
+    names: list[str] = Field(default_factory=list, examples=[["심텍", "SK하이닉스"]])
+    shared: int = Field(0, description="걸린 기업 수", examples=[4])
+    of: int = Field(0, description="워크스페이스 크기", examples=[4])
+
+    # ── 무엇을 공유하나 (`no_overlap`·`internal_competition` 은 비어 있다)
+    subject: Optional[str] = Field(
+        None, description="**카드 제목.** 공유하는 대상 — 회사·주주·사건·업종 이름. "
+                          "`internal_competition`·`no_overlap` 은 대상이 없어 `null`",
+        examples=["엔비디아"])
+    subject_key: Optional[str] = Field(None, description="사건이면 `event_id`")
+
+    # ── 거래·지분 집중일 때
+    base: Optional[int] = Field(None, description="전체에서 그런 회사가 몇 곳인가",
+                                examples=[9])
+    base_pct: Optional[float] = Field(None, examples=[0.26])
+    lift: Optional[float] = Field(None, description="**보통의 몇 배로 몰려 있나**",
+                                  examples=[381.0])
+    # ★화면은 이 단어를 쓰고 `lift` 숫자는 검증용으로 남긴다. 수치를 지우지 않는다.
+    lift_label: Optional[str] = Field(
+        None, description="`lift` 를 말로 — 매우 이례적(100배+) · 이례적(30~) · 다소 몰림(10~)",
+        examples=["매우 이례적"])
+
+    # ── 위험 사건일 때는 lift 가 아니라 커버리지로 본다
+    coverage: Optional[float] = Field(
+        None, description="이 사건에 걸린 회사 중 **몇 %가 이 워크스페이스인가**",
+        examples=[100.0])
+    event_id: Optional[str] = Field(None, examples=["evt_news_0e95c793dc87"])
+
+    # ── 연쇄 위험일 때
+    score: Optional[float] = Field(None, examples=[0.066])
+    stated: Optional[bool] = Field(
+        None, description="`false` 면 **기사에 없고 우리가 계산한 것**이다")
+    path: list[str] = Field(default_factory=list, description="어느 관계를 타고 닿았나")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -759,12 +849,10 @@ class InsightCard(BaseModel):
 # ══════════════════════════════════════════════════════════════════
 
 
+# ★**답변을 만들지 않는다.** 사실과 근거만 준다 — 문장 생성은 추론 담당 몫이고,
+# 경계를 섞으면 「누가 지어냈나」를 못 가린다.
 class RetrieveResponse(BaseModel):
-    """추론 계층이 쓰는 재료.
-
-    ★**답변을 만들지 않는다.** 사실과 근거만 준다 — 문장 생성은 추론 담당 몫이고,
-      경계를 섞으면 「누가 지어냈나」를 못 가린다.
-    """
+    """추론 계층이 쓰는 재료."""
 
     question: str = Field(examples=["SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"])
     companies: list[RelationEndpoint] = Field(default_factory=list, description="질문에서 찾아낸 기업")
@@ -802,13 +890,11 @@ class WorkspaceSuggestRequest(BaseModel):
     limit: int = Field(5, ge=1, le=20)
 
 
+# ★**왜 추천인지를 반드시 함께 준다.** 「한미반도체를 추천합니다」만으로는
+# 사용자가 담을 이유를 모른다. 「공통 고객 4곳 — 삼성전자·SK하이닉스·
+# 마이크론·엔비디아」까지 줘야 판단이 된다.
 class Suggestion(BaseModel):
-    """「같이 담을 만한 기업」 한 건.
-
-    ★**왜 추천인지를 반드시 함께 준다.** 「한미반도체를 추천합니다」만으로는
-      사용자가 담을 이유를 모른다. 「공통 고객 4곳 — 삼성전자·SK하이닉스·
-      마이크론·엔비디아」까지 줘야 판단이 된다.
-    """
+    """「같이 담을 만한 기업」 한 건."""
 
     key: str = Field(examples=["00161383"])
     name: str = Field(examples=["한미반도체"])
@@ -825,9 +911,9 @@ class Suggestion(BaseModel):
     ksic_label: Optional[str] = None
 
 
+# 워크스페이스의 첫 벽이고, 이게 그 벽을 넘겨 준다.
 class WorkspaceSuggestResponse(BaseModel):
-    """★**담은 기업이 1곳일 때 가장 쓸모 있다.** 「한 곳만 담으면 관계가 안 보인다」가
-    워크스페이스의 첫 벽이고, 이게 그 벽을 넘겨 준다."""
+    """**담은 기업이 1곳일 때 가장 쓸모 있다.** 「한 곳만 담으면 관계가 안 보인다」가"""
 
     keys: list[str] = Field(description="요청에 담겨 있던 기업")
     suggestions: list[Suggestion] = Field(default_factory=list)
@@ -853,18 +939,10 @@ class Change(BaseModel):
 
 
 class WorkspaceChangesResponse(BaseModel):
-    """**백엔드가 주기적으로 물어보는 자리.** 마이페이지 알림 셋이 여기서 나온다.
+    """알림 셋 — `new_risk_event` · `new_relation` · `relation_ended`.
 
-        새 위험 사건    new_risk_event
-        새 관계        new_relation
-        관계 종료      relation_ended
-
-    ★알림을 **누구에게 보낼지는 우리가 모른다.** 키 목록을 받아 「그동안 뭐가
-      바뀌었나」만 답한다. 사용자·구독 설정은 백엔드 것이다.
-
-    ★`relation_ended` 는 지금 **판정할 수 없다.** `loaded_at` 이 2026-07-31에
-      도입돼 비교 대상이 없어서, 다음 DART 재적재 전까지는 언제나 빈 배열이다.
-      필드는 **미리 열어 둔다** — 나중에 채워질 때 계약이 안 바뀌게.
+    `relation_ended` 는 지금 **언제나 빈 배열**이다(비교 기준이 2026-07-31
+    도입이라 대상이 없다). 필드는 미리 열어 두었다.
     """
 
     since: str
@@ -878,10 +956,15 @@ class AskRequest(BaseModel):
                                       description="있으면 그 범위로 좁혀 찾는다")
 
 
+# 사용자가 담아 둔 기업이 조용히 사라지는 것만 막으면 된다.
 class ErrorResponse(BaseModel):
-    """★없는 키는 `404` 지만, **검증에서 제외된 노드는 사유를 함께 보낸다.**
-    사용자가 담아 둔 기업이 조용히 사라지는 것만 막으면 된다."""
+    """없는 키는 `404` 지만, **검증에서 제외된 노드는 사유를 함께 보낸다.**"""
 
     detail: str = Field(examples=["검증 결과 제외된 노드입니다"])
     reason: Optional[str] = Field(None, examples=["관계 0 — 검사가 마지막 엣지를 지운 자리"])
     purged_at: Optional[str] = Field(None, examples=["2026-08-15"])
+
+
+# ★`CompanyDetail.graph` 가 아래에 정의된 `GraphResponse` 를 가리키므로
+#   여기서 한 번 풀어 준다. 안 하면 OpenAPI 생성이 미해결 참조로 죽는다.
+CompanyDetail.model_rebuild()

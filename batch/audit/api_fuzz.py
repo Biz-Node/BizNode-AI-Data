@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import sys
 import time
 from collections import Counter
@@ -226,12 +227,217 @@ def check_smells(g: dict, body: dict) -> list[str]:
     return out
 
 
+def check_events(rows: list, d: dict) -> list[str]:
+    """`/companies/{key}/events` — **사건 목록.**"""
+    out: list[str] = []
+    seen = set()
+    for e in rows:
+        if not e.get("event_id"):
+            out.append("event_id 가 비었다")
+        if e["event_id"] in seen:
+            out.append(f"event_id 중복: {e['event_id']}")
+        seen.add(e["event_id"])
+        if e["role"] not in ("subject", "counterparty", "mentioned"):
+            out.append(f"role 이 {e['role']}")
+        if e.get("article_count", 1) < 1:
+            out.append(f"article_count 가 {e['article_count']}")
+        for ph in e.get("timeline") or []:
+            # ★`timeline` 은 **펴서** 줘야 한다. 화면이 문자열을 쪼개게 하지 않는다
+            if not ph.get("period") or not ph.get("name"):
+                out.append(f"timeline 국면이 덜 펴짐: {ph}")
+            if ph.get("period") and not re.fullmatch(r"\d{4}-\d{2}", ph["period"]):
+                out.append(f"timeline period 형식이 이상: {ph['period']}")
+        if e.get("occurred_at") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}",
+                                                    e["occurred_at"]):
+            out.append(f"occurred_at 형식이 이상: {e['occurred_at']}")
+    # 상세의 사건 수와 어긋나면 화면이 헷갈린다
+    if d and len(rows) > d["counts"]["events"]:
+        out.append(f"events {len(rows)} > counts.events {d['counts']['events']}")
+    risk = sum(1 for e in rows if e["is_risk"])
+    if d and risk > d["counts"]["risk_events"]:
+        out.append(f"위험 {risk} > counts.risk_events {d['counts']['risk_events']}")
+    return out
+
+
+def check_news(rows: list) -> list[str]:
+    """`/companies/{key}/news` — ★**본문은 없어야 한다**(저작권)."""
+    out: list[str] = []
+    urls = set()
+    for n in rows:
+        if not str(n.get("url", "")).startswith("http"):
+            out.append(f"url 이 http 로 시작 안 함: {str(n.get('url'))[:40]}")
+        if n["url"] in urls:
+            out.append(f"기사 중복: {n['url'][:50]}")
+        urls.add(n["url"])
+        if not n.get("title"):
+            out.append("제목이 비었다")
+        if "body" in n or "content" in n:
+            out.append("본문이 응답에 실렸다 — 저작권상 나가면 안 된다")
+    dates = [n["published_at"] for n in rows if n.get("published_at")]
+    if dates != sorted(dates, reverse=True):
+        out.append("최신순이 아니다")
+    return out
+
+
+def check_filings(rows: list) -> list[str]:
+    out: list[str] = []
+    seen = set()
+    for f in rows:
+        if not re.fullmatch(r"\d{14}", f.get("rcept_no", "")):
+            out.append(f"접수번호가 14자리가 아님: {f.get('rcept_no')}")
+        if f["rcept_no"] in seen:
+            out.append(f"공시 중복: {f['rcept_no']}")
+        seen.add(f["rcept_no"])
+        if f["rcept_no"] not in (f.get("url") or ""):
+            out.append("url 에 접수번호가 안 들어감")
+    dates = [f["rcept_dt"] for f in rows]
+    if dates != sorted(dates, reverse=True):
+        out.append("최신순이 아니다")
+    return out
+
+
+def check_company_graph(g: dict, key: str, d: dict) -> list[str]:
+    """`/companies/{key}/graph` — **이 기업 중심 그래프.**"""
+    out: list[str] = []
+    N = {n["key"]: n for n in g["nodes"]}
+    if key not in N and d["key"] not in N:
+        out.append("중심 기업이 노드에 없다")
+    me = N.get(key) or N.get(d["key"])
+    if me and me["role"] != "pinned":
+        out.append(f"중심 기업의 role 이 {me['role']}")
+    for e in g["edges"]:
+        if e["source"] not in N or e["target"] not in N:
+            out.append("엣지 끝이 nodes 에 없다")
+        if e["source"] == e["target"]:
+            out.append("자기 자신을 잇는 엣지")
+    ids = [e["edge_id"] for e in g["edges"]]
+    if len(ids) != len(set(ids)):
+        out.append("edge_id 중복")
+    # ★관계가 있는 기업인데 그래프에 선이 없으면 화면이 못 그린다
+    if not g["edges"] and (d.get("related") or d.get("events") or d.get("products")):
+        out.append(f"상세엔 관계 {len(d.get('related') or [])}·사건 "
+                   f"{len(d.get('events') or [])}·제품 {len(d.get('products') or [])}"
+                   f" 가 있는데 그래프 엣지가 0")
+    # ★목업의 범례는 거래·주주·사건·제품 넷이다. 전부 trade 면 못 가른다
+    kinds = {n.get("kind") for n in g["nodes"] if n["role"] != "pinned"}
+    if len(g["nodes"]) > 3 and kinds and kinds == {"trade"} and (
+            d.get("events") or d.get("products") or d.get("owned_by")):
+        out.append(f"노드 kind 가 전부 trade — 사건·제품·주주를 못 가린다 {kinds}")
+
+    om = g.get("omitted") or {}
+    # ★그린 것 + 뺀 것 = 상세가 말한 관계 수. 안 맞으면 관계가 어딘가로 샜다
+    total = (d.get("counts") or {}).get("relations")
+    if total is not None and len(g["edges"]) + sum(om.values()) != total:
+        out.append(f"그린 {len(g['edges'])} + 뺀 {sum(om.values())} ≠ 상세 관계 {total}")
+    # ★유형이 있는데 한 건도 안 그려지면 그 관계는 화면에서 통째로 사라진다
+    drawn = {e["type"] for e in g["edges"]}
+    gone = [t for t, n in om.items()
+            if n > 0 and t not in drawn and t not in ("HIDDEN", "DUPLICATE")]
+    if gone:
+        out.append(f"유형이 통째로 안 그려졌다 {gone}")
+    # ★같은 두 노드를 **같은 유형·같은 근거로** 두 번 잇지 않는다.
+    #   유형이 다르면 중복이 아니다 — 지분과 제휴가 한 문장에서 같이 나올 수 있고
+    #   성격이 달라 둘 다 그려야 한다(LG이노텍–AOE일렉트로닉스 합작 설립).
+    pair = [(frozenset((e["source"], e["target"])), e["type"], e.get("evidence_id"))
+            for e in g["edges"] if e.get("evidence_id")]
+    if len(pair) != len(set(pair)):
+        out.append("같은 유형·같은 근거로 같은 두 노드를 두 번 이었다")
+    # ★HAS_EVENT 와 IMPACTS 는 **같은 사실의 앞뒤면**이다. 둘 다 그리면 화살표가 겹친다
+    ev = {frozenset((e["source"], e["target"])) for e in g["edges"]
+          if e["type"] == "HAS_EVENT"}
+    if any(frozenset((e["source"], e["target"])) in ev
+           for e in g["edges"] if e["type"] == "IMPACTS"):
+        out.append("HAS_EVENT 와 IMPACTS 가 같은 두 노드를 겹쳐 이었다")
+    if len(g["nodes"]) > 60:
+        out.append(f"노드가 상한 60 을 넘었다 {len(g['nodes'])}")
+
+    # ★목록과 그림은 **같은 목록이어야 한다.** 양방향으로 본다.
+    #   목록에만 있으면 → 한 줄 눌렀을 때 강조할 선이 없다
+    #   그림에만 있으면 → 선을 봤는데 목록에서 못 찾는다
+    rel = {r["edge_id"] for r in (d.get("related") or []) if r.get("edge_id")}
+    if rel - drawn_ids(g):
+        out.append(f"관계 목록에만 있고 그래프엔 없는 관계 {len(rel - drawn_ids(g))}건")
+    _BLOCK_OF = {"IS_EXECUTIVE_OF": "executives", "DEVELOPS": "products",
+                 "HAS_EVENT": "events", "IMPACTS": "events"}
+    orphan = [e["type"] for e in g["edges"]
+              if e["edge_id"] not in rel and e["type"] not in _BLOCK_OF]
+    if orphan:
+        out.append(f"그래프엔 그렸는데 상세 어느 블록에도 없는 관계 {len(orphan)}건 "
+                   f"{sorted(set(orphan))}")
+    # 상세 응답에 그래프 블록이 함께 와야 한다 — 상세 페이지의 블록이니까
+    if d.get("graph") is None:
+        out.append("상세 응답에 graph 블록이 없다")
+    elif {e["edge_id"] for e in d["graph"]["edges"]} != drawn_ids(g):
+        out.append("상세의 graph 블록과 /graph 라우트가 다르다")
+    return out
+
+
+def drawn_ids(g: dict) -> set:
+    return {e["edge_id"] for e in g["edges"]}
+
+
+def _fuzz_company(cli, pool, rng, args) -> int:
+    """기업 라우트 6개를 무작위 기업으로 두들긴다."""
+    bugs: list[tuple[list[str], str]] = []
+    slow: list[tuple[float, str]] = []
+    t0 = time.time()
+    stat = Counter()
+
+    for i in range(args.n):
+        c = rng.choice(pool)
+        key, label = c["key"], f"{c['name']}({c['key']}, deg {c['deg']})"
+        t = time.time()
+        r = cli.get(f"/companies/{key}")
+        dt = time.time() - t
+        if dt > 3.0:
+            slow.append((dt, label))
+        if r.status_code == 404:
+            bugs.append((["존재하는 노드인데 404"], label))
+            continue
+        if r.status_code != 200:
+            bugs.append(([f"HTTP {r.status_code}: {r.text[:120]}"], label))
+            continue
+        d = r.json()
+        bad = check_company(d, key)
+        stat[d["detail_level"]] += 1
+
+        for sub, fn in (("market", lambda j: check_market(j)),
+                        ("events", lambda j: check_events(j, d)),
+                        ("news", lambda j: check_news(j)),
+                        ("filings", lambda j: check_filings(j)),
+                        ("graph", lambda j: check_company_graph(j, key, d)),
+                        ("relations", lambda j: [])):
+            rr = cli.get(f"/companies/{key}/{sub}")
+            if rr.status_code != 200:
+                bad.append(f"{sub} → {rr.status_code}")
+                continue
+            bad += [f"[{sub}] {x}" for x in fn(rr.json())]
+        if bad:
+            bugs.append((bad, label))
+        if (i + 1) % 50 == 0:
+            print(f"  … {i+1}/{args.n}  버그 {len(bugs)}")
+
+    print(f"\n{args.n}곳 · {time.time()-t0:.0f}초 · "
+          f"{' · '.join(f'{k} {v}' for k, v in stat.most_common())}")
+    print(f"\n■ 불변식 위반 {len(bugs)}건")
+    for bad, label in bugs[:20]:
+        print(f"   ❌ {label}")
+        for b in bad[:5]:
+            print(f"      {b}")
+    if slow:
+        print(f"\n■ 3초 넘음 {len(slow)}건")
+        for dt, label in sorted(slow, reverse=True)[:5]:
+            print(f"   {dt:.1f}초  {label}")
+    return 1 if bugs else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--n", type=int, default=200, help="시도 횟수")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--show", action="store_true", help="낌새를 조합과 함께 자세히")
+    ap.add_argument("--what", choices=["ws", "company"], default="ws")
     args = ap.parse_args()
 
     from fastapi.testclient import TestClient
@@ -247,6 +453,9 @@ def main() -> int:
     slow: list[tuple[float, str]] = []
     stat = Counter()
     t0 = time.time()
+
+    if args.what == "company":
+        return _fuzz_company(cli, pool, rng, args)
 
     for i in range(args.n):
         keys = _sample(pool, rng)
@@ -309,6 +518,101 @@ def main() -> int:
             print(f"   {dt:.1f}초  {label}")
 
     return 1 if bugs else 0
+
+
+# ══════════════════════════════════════════════════════════════════
+#  기업 라우트 — 무작위 기업으로 두들긴다
+# ══════════════════════════════════════════════════════════════════
+
+
+def check_company(d: dict, key: str) -> list[str]:
+    """`GET /companies/{key}` 의 불변식."""
+    out: list[str] = []
+    if d["key"] != key and d.get("corp_code") != key:
+        out.append(f"요청 키 {key} 와 응답 키 {d['key']} 가 다르다")
+
+    # ★`counts` 는 **목록 길이가 아니라 실제 수**다. 목록이 더 많으면 모순이다
+    if len(d.get("financials") or []) > 3:
+        out.append(f"financials 가 {len(d['financials'])}개 (최근 3개년이어야)")
+    if len(d.get("related") or []) > d["counts"]["relations"]:
+        out.append(f"related {len(d['related'])} > counts.relations {d['counts']['relations']}")
+    if len(d.get("events") or []) > d["counts"]["events"]:
+        out.append(f"events {len(d['events'])} > counts.events {d['counts']['events']}")
+
+    # ★`blocks` 와 실제 내용이 어긋나면 화면이 빈 블록을 편다
+    for block, field in [("financials", "financials"), ("segments", "segments"),
+                         ("products", "products"), ("related", "related")]:
+        has = bool(d.get(field))
+        said = d["blocks"][block] != "none"
+        if has != said:
+            out.append(f"blocks.{block}={d['blocks'][block]} 인데 {field} 는 "
+                       f"{'있음' if has else '없음'}")
+    if bool(d.get("market_metrics")) != (d["blocks"]["market"] != "none"):
+        out.append(f"blocks.market={d['blocks']['market']} 인데 market_metrics 는 "
+                   f"{'있음' if d.get('market_metrics') else 'null'}")
+
+    for f in d.get("financials") or []:
+        if f["fs_div"] not in ("CFS", "OFS"):
+            out.append(f"fs_div 가 {f['fs_div']}")
+        # 비율은 계산된 값이라 원본과 맞아야 한다
+        if f.get("total_equity") and f.get("net_profit") is not None:
+            want = round(f["net_profit"] / f["total_equity"] * 100, 2)
+            if f.get("roe") is not None and abs(f["roe"] - want) > 0.02:
+                out.append(f"{f['bsns_year']} ROE {f['roe']} ≠ 계산값 {want}")
+
+    for s in d.get("segments") or []:
+        if s.get("revenue_ratio") is not None and not (0 <= s["revenue_ratio"] <= 100):
+            out.append(f"사업부문 비중이 {s['revenue_ratio']}%")
+
+    for o in (d.get("owned_by") or []) + (d.get("owns") or []):
+        if o.get("ratio") is not None and not (0 <= o["ratio"] <= 100):
+            out.append(f"지분율이 {o['ratio']}% ({o['name']})")
+    # ★자기 자신을 소유할 수 없다
+    for o in (d.get("owned_by") or []) + (d.get("owns") or []):
+        if o["key"] == d["key"]:
+            out.append(f"자기 자신을 소유: {o['name']}")
+
+    for r in d.get("related") or []:
+        if r["source"]["key"] != d["key"] and r["target"]["key"] != d["key"]:
+            out.append(f"내 관계가 아닌 것이 섞임: {r['source']['name']}→{r['target']['name']}")
+        if r["freshness"] == "expired":
+            out.append("expired 관계가 응답에 있다")
+        if r.get("ratio") is not None and not (0 <= r["ratio"] <= 100):
+            out.append(f"관계 ratio 가 {r['ratio']}")
+
+    for e in d.get("events") or []:
+        if e["role"] not in ("subject", "counterparty", "mentioned"):
+            out.append(f"event role 이 {e['role']}")
+
+    m = d.get("market_metrics")
+    if m:
+        if m.get("per") is not None and m["per"] < 0:
+            out.append(f"PER 이 음수: {m['per']}")
+        if m["market_cap"] <= 0:
+            out.append(f"시가총액이 {m['market_cap']}")
+        # 시총 = 종가 × 유통주식수 여야 한다
+        want = m["close_price"] * m["listed_shares"]
+        if abs(m["market_cap"] - want) > max(want * 0.001, 1):
+            out.append(f"시총 {m['market_cap']:,} ≠ 종가×주식수 {want:,}")
+    return out
+
+
+def check_market(d: dict) -> list[str]:
+    out: list[str] = []
+    if d["listed"] and d.get("stock_code") is None:
+        out.append("listed=true 인데 stock_code 가 null")
+    if not d["listed"] and d.get("latest"):
+        out.append("listed=false 인데 시세가 있다")
+    if d.get("latest") is None and d.get("unavailable_reason") is None:
+        out.append("시세가 없는데 사유가 없다")
+    if d.get("latest") and d.get("unavailable_reason"):
+        out.append(f"시세가 있는데 사유가 붙음: {d['unavailable_reason']}")
+    dates = [p["trade_date"] for p in d.get("series") or []]
+    if dates != sorted(dates):
+        out.append("series 가 날짜순이 아니다")
+    if d.get("latest") and dates and d["latest"]["trade_date"] < dates[-1]:
+        out.append("latest 가 series 의 마지막보다 과거")
+    return out
 
 
 if __name__ == "__main__":
