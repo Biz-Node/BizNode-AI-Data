@@ -33,6 +33,11 @@ from search.repository.chroma_repository import ChromaRepository
 _DEFAULT_TOP_K = 10  # 실측 근거 없는 잠정치
 _HARD_LIMIT_TOP_K = 50  # 실측 근거 없는 잠정치
 
+# 모집단 한정 — 프로필 문서를 가진 기업만 본다(A6 실측, 2026-08-19).
+# 정책은 여기(Searcher)에 있고 ChromaRepository는 이 조건을 받기만 한다 —
+# EntityResolver(PostgreSQL)·GraphSearcher(Neo4j)는 영향을 받지 않는다.
+_PROFILE_ONLY = {"has_profile": True}
+
 
 def _resolve_top_k(top_k: Optional[int]) -> int:
     if top_k is None or top_k <= 0:
@@ -58,8 +63,18 @@ class VectorSearcher:
         self._repo = repo or ChromaRepository()
 
     def search(self, normalized_query: str, *, top_k: Optional[int] = None) -> list[SearchHit]:
+        """★워크스페이스로 모집단을 좁히지 않는다(2026-08-20 정책 변경).
+
+        한때 `corp_codes=workspace_keys`로 선필터를 걸었는데, 그러면 워크스페이스
+        밖의 관련 기업이 후보에서 사라진다. 워크스페이스는 필터가 아니라 랭킹
+        문맥이므로 관련도 계산은 ResultRanker가 한다.
+
+        `has_profile` 한정은 남는다 — 그건 워크스페이스와 무관한 **색인 품질**
+        문제다(A6 실측: 프로필 없는 문서는 이름만 있어 변별력이 없다).
+        """
         n_results = _resolve_top_k(top_k)
-        result = self._repo.search_company(normalized_query, n_results=n_results)
+        result = self._repo.search_company(
+            normalized_query, n_results=n_results, where=_PROFILE_ONLY)
 
         distances = result["distances"][0] if result.get("distances") else []
         metadatas = result["metadatas"][0] if result.get("metadatas") else []
@@ -69,7 +84,7 @@ class VectorSearcher:
                 entity_type=EntityType.COMPANY,
                 entity_id=_entity_id(meta.get("name") or "", meta.get("corp_code") or ""),
                 name=meta.get("name") or "",
-                score=_score_from_l2_distance(distance),
+                source_score=_score_from_l2_distance(distance),
                 sources=["chroma"],
                 kind=meta.get("kind"),
             )

@@ -136,12 +136,14 @@ def test_no_match_returns_none(entity_resolver):
     assert result is None
 
 
-def test_stub_entity_resolves_even_without_companies_row(entity_resolver, postgres_repo):
-    """corp_code_master에는 있지만 companies(64건)에는 없는 기업도 resolve
+def test_stub_entity_resolves_from_corp_code_master_only(entity_resolver):
+    """corp_code_master에 등재돼 있으면 자체 프로파일이 없는 stub 기업도 resolve
     성공해야 한다(§3, §10) — "삼성전자판매"(00252074)로 검증.
-    """
-    assert postgres_repo.find_by_corp_code("00252074") is None  # companies엔 없음(전제 확인)
 
+    ★전에는 `companies`에 없음을 전제로 확인했으나, 그 표는 ERD 정리 때 삭제됐다.
+      EntityResolver는 애초에 corp_code_master 식별 가능 여부만 판정하므로
+      주제는 그대로다.
+    """
     result = entity_resolver.resolve("삼성전자판매")
     assert result is not None
     assert result.corp_code == "00252074"

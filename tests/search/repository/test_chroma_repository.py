@@ -71,3 +71,30 @@ def test_fetch_texts_unknown_id_omitted(chroma_repo):
     """
     texts = chroma_repo.fetch_texts(["ev_존재하지않는가상아이디0000"])
     assert texts == {}
+
+
+# ── where 필터 (A6, 2026-08-19) ──────────────────────────────────────────────
+#   실측: company 컬렉션 2,430건 중 has_profile=True 는 64건.
+#   나머지 2,366건은 is_stub=True 이고 문서가 이름뿐인 30자 안팎이다.
+
+
+def test_search_company_with_where_filter(chroma_repo):
+    """호출자가 준 where 를 그대로 적용한다 — 리포지토리는 정책을 갖지 않고
+    받기만 한다(has_profile 을 걸지 말지는 VectorSearcher 가 정한다).
+    """
+    result = chroma_repo.search_company("기업", n_results=10, where={"has_profile": True})
+    metas = result["metadatas"][0]
+    assert len(metas) > 0
+    assert all(m["has_profile"] is True for m in metas)
+
+
+def test_search_company_merges_where_and_corp_codes(chroma_repo):
+    """where 와 corp_codes 를 함께 주면 교집합이어야 한다 — 한쪽이 조용히
+    덮이면 선필터가 무력화된다. 삼성전자(프로필 보유)와 삼성전자판매(stub)를
+    함께 넘기면 삼성전자만 남는다(2026-08-19 실측).
+    """
+    result = chroma_repo.search_company(
+        "기업", n_results=10, corp_codes=["00126380", "00252074"],
+        where={"has_profile": True},
+    )
+    assert result["ids"][0] == ["co_00126380"]

@@ -23,7 +23,7 @@ import pytest
 from pydantic import BaseModel
 
 from pipeline.normalizer.resolver import Resolution
-from search.dto.search_hit import SearchHit
+from search.dto.search_hit import SearchHit, SearchRelation
 from search.dto.search_query import SearchQuery
 from search.dto.search_request import SearchRequest
 from search.dto.search_result import SearchResult
@@ -37,6 +37,16 @@ _SAMSUNG = Resolution(
 )
 
 
+
+def _relation(edge_type: str = "SUPPLIES_TO") -> SearchRelation:
+    """SearchRelation은 edge_id를 포함해 필드가 전부 필수다(설계서 Rule 7) —
+    테스트가 부분 dict를 넘길 수 없으므로 한 곳에서 만든다."""
+    return SearchRelation(
+        edge_id="5:abc:0", edge_type=edge_type,
+        source="세메스", source_id="00164742", source_entity_type="Company",
+        target="삼성전자", target_id="00126380", target_entity_type="Company",
+    )
+
 def _build(*, request: SearchRequest, mode: SearchMode,
            resolved_entities: list[Resolution], hits: list[SearchHit],
            used_semantic_fallback: bool) -> SearchResult:
@@ -46,14 +56,13 @@ def _build(*, request: SearchRequest, mode: SearchMode,
         mode=mode,
         today=_TODAY,
         resolved_entities=resolved_entities,
-        entity_types=request.entity_types,
         edge_types=request.edge_types,
         top_k=request.top_k,
         include_evidence=request.include_evidence,
-        filters=request.filters,
     )
     return SearchResult(
         query=query.raw_query,
+        mode=query.mode,
         hits=hits,
         total=len(hits),
         took_ms=10,
@@ -67,7 +76,7 @@ def test_simple_name_query():
     req = SearchRequest(query="삼성전자")
     hit = SearchHit(
         entity_type=EntityType.COMPANY, entity_id=_SAMSUNG.corp_code,
-        name=_SAMSUNG.corp_name, score=1.0, sources=["postgres"],
+        name=_SAMSUNG.corp_name, source_score=1.0, sources=["postgres"],
     )
     result = _build(
         request=req, mode=SearchMode.NAME,
@@ -79,17 +88,22 @@ def test_simple_name_query():
 
 
 def test_relationship_query_with_time_ordering():
-    """2. "삼성전자 최근 투자 기업" — HYBRID(관계+시간 정렬), GraphSearcher 경로."""
+    """2. "삼성전자 최근 투자 기업" — RELATIONSHIP, GraphSearcher 경로.
+
+    ★설계서 6-6절 초안은 HYBRID(관계+시간 정렬)로 적었으나, 확정된 분기 규칙은
+      edge_types 유무로만 갈라 HYBRID를 생성하지 않는다. 실측(2026-08-19):
+      QueryRouter가 OWNS_STAKE_IN을 잡아 mode=RELATIONSHIP, sources=["neo4j"].
+    """
     req = SearchRequest(query="삼성전자 최근 투자 기업", edge_types=["OWNS_STAKE_IN"])
     hit = SearchHit(
         entity_type=EntityType.COMPANY, entity_id="00164742",
-        name="세메스", score=0.8, sources=["neo4j"],
+        name="세메스", source_score=0.8, sources=["neo4j"],
         freshness={"status": "current", "reason": "180일 경과"},
         verdict="supported",
-        relations=[{"edge_type": "OWNS_STAKE_IN", "source": "삼성전자"}],
+        relations=[_relation("OWNS_STAKE_IN")],
     )
     result = _build(
-        request=req, mode=SearchMode.HYBRID,
+        request=req, mode=SearchMode.RELATIONSHIP,
         resolved_entities=[_SAMSUNG], hits=[hit],
         used_semantic_fallback=False,
     )
@@ -103,7 +117,7 @@ def test_semantic_query_without_entity_resolution():
     req = SearchRequest(query="HBM을 만드는 기업")
     hit = SearchHit(
         entity_type=EntityType.COMPANY, entity_id="00164742",
-        name="한미반도체", score=0.73, sources=["chroma"],
+        name="한미반도체", source_score=0.73, sources=["chroma"],
     )
     result = _build(
         request=req, mode=SearchMode.SEMANTIC,
@@ -119,7 +133,7 @@ def test_relationship_query_supplies_to():
     req = SearchRequest(query="삼성전자에 납품하는 기업", edge_types=["SUPPLIES_TO"])
     hit = SearchHit(
         entity_type=EntityType.COMPANY, entity_id="00164742",
-        name="세메스", score=0.87, sources=["neo4j"],
+        name="세메스", source_score=0.87, sources=["neo4j"],
         freshness={"status": "current"}, verdict="supported",
         evidence=[{"evidence_id": "ev_599ae4f46bf15b7c", "snippet": "세메스는 삼성전자에..."}],
     )
@@ -132,21 +146,28 @@ def test_relationship_query_supplies_to():
     assert result.used_semantic_fallback is False
 
 
-def test_semantic_query_no_named_entity():
-    """5. "최근 소송 관련 기업" — 기업명 없음, EntityResolver 실패 → evidence 의미 검색으로 보강."""
+def test_anchorless_relationship_query():
+    """5. "최근 소송 관련 기업" — 기업명이 해소되지 않는 anchor 없는 관계 질의.
+
+    ★초안은 SEMANTIC + sources=["neo4j","chroma"]로 적었는데, 이는 "결과가 없으면
+      의미검색으로 폴백"하던 정책의 잔재다. 그 정책은 철회됐다 — 관계 질의에
+      의미검색을 섞으면 없는 관계를 있는 것처럼 보여준다. edge_types가 있으면
+      GraphSearcher만 돌고 결과가 0건이어도 VectorSearcher를 부르지 않는다.
+      실측(2026-08-19): mode=RELATIONSHIP, resolved_entities=[], sources=["neo4j"].
+    """
     req = SearchRequest(query="최근 소송 관련 기업", edge_types=["SUES"])
     hit = SearchHit(
         entity_type=EntityType.COMPANY, entity_id="00126380",
-        name="삼성전자", score=0.6, sources=["neo4j", "chroma"],
+        name="삼성전자", source_score=0.6, sources=["neo4j"],
         verdict="supported",
     )
     result = _build(
-        request=req, mode=SearchMode.SEMANTIC,
+        request=req, mode=SearchMode.RELATIONSHIP,
         resolved_entities=[], hits=[hit],
-        used_semantic_fallback=True,
+        used_semantic_fallback=False,
     )
-    assert set(result.hits[0].sources) == {"neo4j", "chroma"}
-    assert result.used_semantic_fallback is True
+    assert result.hits[0].sources == ["neo4j"]
+    assert result.used_semantic_fallback is False
 
 
 @pytest.mark.parametrize("query,edge_types", [
@@ -161,9 +182,9 @@ def test_no_field_loss_from_request_to_query(query, edge_types):
     req = SearchRequest(query=query, edge_types=edge_types, top_k=7, include_evidence=False)
     q = SearchQuery(
         raw_query=req.query, normalized_query=req.query.strip(),
-        mode=SearchMode.HYBRID, today=_TODAY,
-        entity_types=req.entity_types, edge_types=req.edge_types,
-        top_k=req.top_k, include_evidence=req.include_evidence, filters=req.filters,
+        mode=SearchMode.RELATIONSHIP, today=_TODAY,
+        edge_types=req.edge_types,
+        top_k=req.top_k, include_evidence=req.include_evidence,
     )
     assert q.raw_query == req.query
     assert q.edge_types == req.edge_types

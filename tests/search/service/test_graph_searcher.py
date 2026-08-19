@@ -215,7 +215,7 @@ def test_anchored_search_skips_unknown_label_without_crashing(monkeypatch):
 
 
 def test_relation_info_carries_entity_metadata(monkeypatch):
-    """SearchHit.relations 딕셔너리에 상대측 id/type이 그대로 노출되는가."""
+    """SearchHit.relations(SearchRelation)에 상대측 id/type이 그대로 노출되는가."""
     relation = _make_relation(
         "세메스", "삼성전자", "SUPPLIES_TO",
         source_id="9999999", source_entity_type="Company",
@@ -227,10 +227,10 @@ def test_relation_info_carries_entity_metadata(monkeypatch):
     hits = GraphSearcher().search([resolution], ["SUPPLIES_TO"], Direction.INCOMING)
 
     info = hits[0].relations[0]
-    assert info["source_id"] == "9999999"
-    assert info["source_entity_type"] == "Company"
-    assert info["target_id"] == "00126380"
-    assert info["target_entity_type"] == "Company"
+    assert info.source_id == "9999999"
+    assert info.source_entity_type == "Company"
+    assert info.target_id == "00126380"
+    assert info.target_entity_type == "Company"
 
 
 # ── anchor 없는 검색 — source 5 + target 5(§8, Task6) ─────────────────────
@@ -298,9 +298,9 @@ def test_supplies_to_query_direction_incoming(entity_resolver, query_router, gra
 
     assert len(hits) > 0
     for hit in hits:
-        assert hit.relations[0]["direction"] == "incoming"
-        assert hit.relations[0]["target_id"] == "00126380"
-        assert hit.entity_id == hit.relations[0]["source_id"]
+        assert hit.relations[0].direction == "incoming"
+        assert hit.relations[0].target_id == "00126380"
+        assert hit.entity_id == hit.relations[0].source_id
         assert hit.entity_type == EntityType.COMPANY
         assert hit.sources == ["neo4j"]
         assert hit.freshness is not None
@@ -321,15 +321,22 @@ def test_investment_query_direction_none_returns_both_sides(entity_resolver, que
     hits = graph_searcher.search([resolution], routing.edge_types, routing.direction, top_k=20)
 
     assert len(hits) > 0
-    directions = {hit.relations[0].get("direction") for hit in hits}
+    directions = {hit.relations[0].direction for hit in hits}
     assert directions == {"incoming", "outgoing"}
 
 
 def test_investment_query_reports_person_counterparty_correctly(entity_resolver, graph_searcher):
-    """OWNS_STAKE_IN에는 Person(이재용) 상대가 실제로 존재한다(2026-08-09 실측) —
-    Task6 이전엔 COMPANY로 오분류됐던 케이스. 이제 PERSON으로 정확히 표현된다."""
+    """OWNS_STAKE_IN에는 Person(이재용) 상대가 실제로 존재한다 —
+    Task6 이전엔 COMPANY로 오분류됐던 케이스. 이제 PERSON으로 정확히 표현된다.
+
+    ★top_k를 걸지 않는다. 전에는 top_k=20이었는데 2026-08-09 실측 당시엔 이재용이
+      상위 20 안에 들었다. 이후 OWNS_STAKE_IN 관계가 늘면서(스킬드AI·미스트랄AI·
+      주타코어·그록·앤트로픽 등) 30/49위로 밀려 테스트가 깨졌다. 이 테스트가
+      확인하려는 건 **순위가 아니라 상대 엔티티의 타입 분류**이므로, 순위에
+      의존하지 않게 전체(하드캡 100)를 받는다.
+    """
     resolution = entity_resolver.resolve("삼성전자")
-    hits = graph_searcher.search([resolution], ["OWNS_STAKE_IN"], None, top_k=20)
+    hits = graph_searcher.search([resolution], ["OWNS_STAKE_IN"], None)
     person_hits = [h for h in hits if h.name == "이재용"]
     assert len(person_hits) == 1
     assert person_hits[0].entity_type == EntityType.PERSON
@@ -347,6 +354,7 @@ def test_lawsuit_query_without_resolved_entity(entity_resolver, query_router, gr
 
     assert 0 < len(hits) <= 10
     for hit in hits:
-        # anchor가 없어 방향을 판별할 기준이 없다 — relations에 direction 키 자체가 없다(§5·§7).
-        assert "direction" not in hit.relations[0]
+        # anchor가 없어 방향을 판별할 기준이 없다 — direction은 null이다(§5·§7).
+        #   ★지어내지 않는다. 타입이 생기면서 「키가 없다」가 「값이 null이다」로 바뀌었다.
+        assert hit.relations[0].direction is None
         assert hit.entity_type in set(EntityType)

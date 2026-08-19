@@ -82,30 +82,6 @@ def test_resolve_candidates_unknown_english_name_not_supported(postgres_repo):
     assert results == []
 
 
-def test_find_by_corp_code_existing(postgres_repo):
-    row = postgres_repo.find_by_corp_code("00126380")
-    assert row is not None
-    assert row["name"] == "삼성전자"
-    assert row["stock_code"] == "005930"
-    assert "반도체" in row["sector"]
-
-
-def test_find_by_corp_code_not_found(postgres_repo):
-    assert postgres_repo.find_by_corp_code("99999999") is None
-
-
-def test_find_corp_codes_by_sector(postgres_repo):
-    """구조화 필터 — corp_code 선필터링(ChromaDB where 절에 넘길 목록)."""
-    corp_codes = postgres_repo.find_corp_codes_by_sector(["반도체"])
-    assert "00126380" in corp_codes  # 삼성전자
-    assert len(corp_codes) >= 30  # 실측: 35개
-
-
-def test_find_corp_codes_by_sector_no_match(postgres_repo):
-    corp_codes = postgres_repo.find_corp_codes_by_sector(["존재하지않는섹터ZZZ"])
-    assert corp_codes == []
-
-
 def test_best_candidate_match_returns_top_scoring_candidate(postgres_repo):
     result = postgres_repo.best_candidate_match(["삼성전자에", "삼성전자", "납품하는"])
     assert result is not None

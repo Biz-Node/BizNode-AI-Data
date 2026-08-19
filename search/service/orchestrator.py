@@ -63,7 +63,7 @@ def _hit_from_resolution(resolution: Resolution) -> SearchHit:
         entity_type=EntityType.COMPANY,
         entity_id=resolution.corp_code,
         name=resolution.corp_name,
-        score=resolution.score,
+        source_score=resolution.score,
         sources=["postgres"],
     )
 
@@ -93,19 +93,39 @@ class SearchOrchestrator:
         normalized_query = _normalize_for_routing(request.query)
         routing = self._query_router.route(normalized_query)
 
-        if routing.edge_types:
-            anchor = self._anchor_extractor.extract(request.query)
-            resolve_query = anchor if anchor is not None else request.query
+        # 요청이 엣지를 명시하면 그 값이 이긴다(D3) — 챗봇 탐색 프로파일이
+        # 「생산 차질 → SUPPLIES_TO/DEPENDS_ON」처럼 엣지를 직접 지정하는데,
+        # QueryRouter 키워드 추론에 밀리면 프로파일이 무력해진다.
+        edge_types = request.edge_types or routing.edge_types
+
+        # AnchorExtractor는 분기와 무관하게 먼저 돈다 — 확신이 없으면 None을 주고
+        # 원문이 그대로 내려간다. 전에는 edge_types가 있는 분기에서만 불러서,
+        # "삼성전자 관련 뉴스"처럼 관계 키워드 없이 기업명이 문장에 파묻힌 질의가
+        # 원문 전체로 resolve()에 넘어가 해소에 실패하고 SEMANTIC으로 빠졌다
+        # (현황서 §5-2). 대가는 NAME/SEMANTIC 분기의 Postgres 왕복 1회 증가다.
+        anchor = self._anchor_extractor.extract(request.query)
+        resolve_query = anchor if anchor is not None else request.query
+
+        # 워크스페이스는 **랭킹 문맥**이다(2026-08-20 정책 변경). 후보를 지우는 데
+        # 쓰지 않는다 — GraphSearcher에는 「후보를 넉넉히 뽑아라」는 신호로,
+        # ResultRanker에는 「이 기준으로 줄 세워라」는 문맥으로 넘어간다.
+        workspace_keys = request.workspace_keys
+
+        if edge_types:
             resolved_entities = self._entity_resolver.resolve_candidates(resolve_query)
             graph_hits = self._graph_searcher.search(
-                resolved_entities, routing.edge_types, routing.direction,
-                top_k=request.top_k,
+                resolved_entities, edge_types, routing.direction,
+                top_k=request.top_k, workspace_keys=workspace_keys,
             )
-            hits = self._result_ranker.rank(graph_hits, [], top_k=request.top_k)
+            hits = self._result_ranker.rank(graph_hits, [], top_k=request.top_k,
+                                            workspace_keys=workspace_keys)
             mode = SearchMode.RELATIONSHIP
             used_semantic_fallback = False
         else:
-            resolution = self._entity_resolver.resolve(request.query)
+            # ★워크스페이스 밖이라고 해서 이름 해소 결과를 버리지 않는다
+            #   (2026-08-20 정책 변경) — 「삼성전자」를 물었으면 워크스페이스에
+            #   없어도 삼성전자가 답이다. 워크스페이스는 순서를 정할 뿐이다.
+            resolution = self._entity_resolver.resolve(resolve_query)
             if resolution is not None:
                 resolved_entities = [resolution]
                 hits = [_hit_from_resolution(resolution)]
@@ -115,7 +135,8 @@ class SearchOrchestrator:
                 resolved_entities = []
                 vector_hits = self._vector_searcher.search(
                     request.query, top_k=request.top_k)
-                hits = self._result_ranker.rank([], vector_hits, top_k=request.top_k)
+                hits = self._result_ranker.rank([], vector_hits, top_k=request.top_k,
+                                                workspace_keys=workspace_keys)
                 mode = SearchMode.SEMANTIC
                 used_semantic_fallback = True
 
@@ -125,16 +146,25 @@ class SearchOrchestrator:
             mode=mode,
             today=effective_today,
             resolved_entities=resolved_entities,
-            entity_types=request.entity_types,
-            edge_types=routing.edge_types,
+            workspace_keys=workspace_keys,
+            edge_types=edge_types,
             direction=routing.direction,
             top_k=request.top_k,
             include_evidence=request.include_evidence,
-            filters=request.filters,
         )
+        # rank는 최종 순서가 정해진 뒤에 붙인다 — NAME 분기는 ResultRanker를
+        # 거치지 않으므로 여기서 채워야 모든 분기가 같은 계약을 지킨다.
+        # include_evidence=False면 여기서 비운다 — 전에는 값과 무관하게 항상
+        # 채워 나갔다(GraphSearcher가 relation.props에서 무조건 옮김).
+        for position, hit in enumerate(hits, 1):
+            hit.rank = position
+            if not request.include_evidence:
+                hit.evidence = []
+
         took_ms = int((time.monotonic() - start) * 1000)
         result = SearchResult(
             query=request.query,
+            mode=mode,
             hits=hits,
             total=len(hits),
             took_ms=took_ms,

@@ -30,13 +30,23 @@ class ChromaRepository:
     def search_company(
         self, query_text: str, *, n_results: int = 10,
         corp_codes: Optional[list[str]] = None,
+        where: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """company 컬렉션 의미 검색. corp_codes가 주어지면 PostgreSQL이 먼저
         좁힌 후보로만 범위를 제한한다(기술설계서 §10-4 선필터 조합 패턴).
+
+        `where`는 호출자가 준 metadata 조건을 그대로 받는다 — **여기에 정책을
+        두지 않는다.** 어떤 모집단을 볼지는 Searcher가 정한다(예: VectorSearcher의
+        `has_profile` 한정). 둘 다 주어지면 `$and`로 **교집합**을 만든다 — 한쪽이
+        다른 쪽을 덮으면 선필터가 조용히 무력화된다.
         """
-        where = {"corp_code": {"$in": corp_codes}} if corp_codes else None
+        clauses = [c for c in (
+            {"corp_code": {"$in": corp_codes}} if corp_codes else None,
+            where or None,
+        ) if c]
+        merged = clauses[0] if len(clauses) == 1 else ({"$and": clauses} if clauses else None)
         return self._store.query(
-            COMPANY_COLLECTION, query_text, n_results=n_results, where=where
+            COMPANY_COLLECTION, query_text, n_results=n_results, where=merged
         )
 
     def search_evidence(

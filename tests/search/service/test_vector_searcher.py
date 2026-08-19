@@ -99,7 +99,7 @@ def test_search_converts_chroma_result_to_search_hit():
     assert hit.entity_type == EntityType.COMPANY
     assert hit.entity_id == "00126380"
     assert hit.name == "삼성전자"
-    assert hit.score == _score_from_l2_distance(0.8)
+    assert hit.source_score == _score_from_l2_distance(0.8)
     assert hit.sources == ["chroma"]
     assert hit.freshness is None
     assert hit.verdict is None
@@ -150,7 +150,7 @@ def test_search_preserves_low_score_without_cutoff():
     hits = VectorSearcher(fake_repo).search("전혀 무관한 질의")
 
     assert len(hits) == 1
-    assert hits[0].score == _score_from_l2_distance(3.9)
+    assert hits[0].source_score == _score_from_l2_distance(3.9)
 
 
 def test_search_passes_normalized_query_and_default_top_k():
@@ -160,7 +160,7 @@ def test_search_passes_normalized_query_and_default_top_k():
     VectorSearcher(fake_repo).search("HBM을 만드는 기업")
 
     fake_repo.search_company.assert_called_once_with(
-        "HBM을 만드는 기업", n_results=10,
+        "HBM을 만드는 기업", n_results=10, where={"has_profile": True},
     )
 
 
@@ -182,23 +182,23 @@ def test_search_caps_top_k_at_hard_limit():
     assert fake_repo.search_company.call_args.kwargs["n_results"] == 50
 
 
-# ── entity_id 소스 간 일치(patch, 2026-08-15) — 실제 Docker Neo4j·ChromaDB, mock 없음
+# ── 모집단 한정의 귀결(A6, 2026-08-19) — 실제 Docker Neo4j·ChromaDB, mock 없음
 
-def test_stub_company_entity_id_matches_graph_searcher(entity_resolver, graph_searcher, vector_searcher):
-    """corp_code 없는 stub 기업(BOE)이 GraphSearcher·VectorSearcher 양쪽에서 같은
-    entity_id로 나오는지 확인한다 — LX세미콘 -> BOE(SUPPLIES_TO) 실제 겹치는 사례
-    (2026-08-15 실측). 다르면 다운스트림(Task7 ResultRanker)에서 같은 기업이 별개
-    엔티티로 분리된다."""
+def test_stub_company_is_excluded_from_vector_results(entity_resolver, graph_searcher,
+                                                      vector_searcher):
+    """프로필 없는 stub 기업(BOE)은 GraphSearcher에는 나오지만 VectorSearcher에는
+    나오지 않는다 — has_profile 모집단 한정의 직접적 귀결이다.
+
+    ★전에는 같은 데이터로 "양쪽 entity_id가 boe로 일치한다"를 확인했다(2026-08-15).
+      모집단을 좁힌 뒤로는 VectorSearcher가 stub을 애초에 반환하지 않아 그 비교가
+      성립하지 않는다. entity_id 폴백 규칙 자체는 위의 _entity_id 단위 테스트가
+      계속 지킨다 — 여기서는 **한정이 실제로 걸리는지**를 real 데이터로 확인한다.
+    """
     resolution = entity_resolver.resolve("LX세미콘")
     graph_hits = graph_searcher.search([resolution], ["SUPPLIES_TO"], None, top_k=50)
-    boe_graph_hits = [h for h in graph_hits if h.name == "BOE"]
-    assert len(boe_graph_hits) == 1
+    assert [h for h in graph_hits if h.name == "BOE"], "전제: 그래프엔 BOE가 있다"
 
-    vector_hits = vector_searcher.search("BOE")
-    boe_vector_hits = [h for h in vector_hits if h.name == "BOE"]
-    assert len(boe_vector_hits) == 1
-
-    assert boe_vector_hits[0].entity_id == boe_graph_hits[0].entity_id == "boe"
+    assert [h for h in vector_searcher.search("BOE") if h.name == "BOE"] == []
 
 
 # ── §6-6 "HBM을 만드는 기업" 재현 — 실제 Docker ChromaDB, mock 없음 ─────────
@@ -211,7 +211,7 @@ def test_hbm_query_returns_results(vector_searcher):
         assert hit.entity_type == EntityType.COMPANY
         assert hit.sources == ["chroma"]
         assert hit.entity_id
-        assert 0.0 <= hit.score <= 1.0
+        assert 0.0 <= hit.source_score <= 1.0
         assert hit.freshness is None
         assert hit.verdict is None
         assert hit.relations is None
@@ -221,3 +221,33 @@ def test_search_default_top_k_returns_at_most_ten(vector_searcher):
     hits = vector_searcher.search("반도체를 만드는 기업")
 
     assert 0 < len(hits) <= 10
+
+
+def test_search_restricts_population_to_companies_with_profile():
+    """A6 실측(2026-08-19) — company 컬렉션 2,430건 중 프로필 보유는 64건뿐이고
+    나머지는 이름뿐인 30자 안팎 문서라, 의미검색이 이름 글자열 매칭기로 퇴화했다
+    ("HBM을 만드는 기업" → HMM·HDC·BMW 가 상위). 점수 컷오프로는 못 거른다 —
+    stub 인 "삼성전자 평택캠퍼스"가 0.6744 로 프로필 827자를 가진 삼성전자
+    본체(0.6346)보다 높다. 모집단 자체를 좁힌다.
+
+    ★정책은 VectorSearcher 가 갖는다 — ChromaRepository 는 where 를 받기만 하고,
+      EntityResolver·GraphSearcher 는 이 필터의 영향을 받지 않는다.
+    """
+    fake_repo = MagicMock()
+    fake_repo.search_company.return_value = _chroma_result([], [], [])
+
+    VectorSearcher(fake_repo).search("HBM을 만드는 기업")
+
+    assert fake_repo.search_company.call_args.kwargs["where"] == {"has_profile": True}
+
+
+def test_workspace_is_not_a_prefilter_here():
+    """★의미검색 모집단을 워크스페이스로 좁히지 않는다(2026-08-20 정책 변경).
+
+    좁히면 워크스페이스 밖의 관련 기업이 후보에서 사라진다. 관련도는 랭킹에서
+    따진다. `has_profile` 한정은 남는데, 그건 워크스페이스가 아니라 **색인 품질**
+    문제다(A6 실측).
+    """
+    import inspect
+
+    assert "workspace_keys" not in inspect.signature(VectorSearcher.search).parameters

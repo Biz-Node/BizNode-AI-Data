@@ -1,8 +1,12 @@
 """PostgresRepository — Search Layer의 PostgreSQL 접근 계층.
 
-기업 후보 조회(이름/종목코드 exact + pg_trgm fuzzy 다중 후보)와 구조화 필터
-(sector 기반 corp_code 선필터링)를 담당한다. 검색 orchestration·랭킹·결과
-조합은 하지 않는다(기술설계서 §7, Task 2 지침 7절).
+기업 후보 조회(이름/종목코드 exact + pg_trgm fuzzy 다중 후보)를 담당한다.
+검색 orchestration·랭킹·결과 조합은 하지 않는다(기술설계서 §7, Task 2 지침 7절).
+
+★`companies` 표를 읽던 find_by_corp_code()/find_corp_codes_by_sector()는
+  제거했다 — `companies`는 ERD 정리 때 삭제된 표이고(후속: company_attributes),
+  프로덕션 호출처가 0곳이었다. sector 선필터를 쓰던 SearchRequest.filters도
+  계약에서 함께 뺐다.
 
 pipeline/normalizer/resolver.py의 resolve()는 재사용하지 않는다 — 내부적으로
 후보를 이미 1건으로 축약하는 구조(_exact_index의 sorted(...)[0], _fuzzy의
@@ -40,7 +44,7 @@ class PostgresRepository:
         아니라 빈 리스트다.
 
         영문 회사명("Samsung Electronics") 매칭은 지원하지 않는다 —
-        corp_code_master/companies 스키마에 영문명 컬럼이 없다.
+        corp_code_master 스키마에 영문명 컬럼이 없다.
         """
         if not query or not query.strip():
             return []
@@ -89,35 +93,6 @@ class PostgresRepository:
                         )
 
         return list(candidates.values())[:limit]
-
-    def find_by_corp_code(self, corp_code: str) -> Optional[dict]:
-        """companies(시드 기업, 구조화 데이터)에서 단건 상세 조회."""
-        with postgres_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT corp_code, name, stock_code, market, sector, etf_list, "
-                "induty, is_seed FROM companies WHERE corp_code = %s",
-                (corp_code,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            columns = [desc.name for desc in cur.description]
-            return dict(zip(columns, row))
-
-    def find_corp_codes_by_sector(self, sectors: list[str]) -> list[str]:
-        """sector(JSONB 배열) 중 하나라도 일치하는 companies의 corp_code 목록.
-
-        ChromaRepository.search_company()의 where 절에 넘길 선필터 결과다
-        (기술설계서 §10-4: PostgreSQL 선필터 → ChromaDB id 필터).
-        """
-        if not sectors:
-            return []
-        with postgres_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT corp_code FROM companies WHERE sector ?| %s",
-                (list(sectors),),
-            )
-            return [row[0] for row in cur.fetchall()]
 
     def best_candidate_match(self, candidates: list[str]) -> Optional[tuple[str, float]]:
         """후보 문자열 목록 중 corp_code_master와 가장 유사한 1건을 고른다

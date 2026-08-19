@@ -3,16 +3,26 @@
 import pytest
 from pydantic import ValidationError
 
-from search.dto.search_hit import SearchHit
+from search.dto.search_hit import SearchHit, SearchRelation
 from search.model.enums import EntityType
 
+
+
+def _relation(edge_type: str = "SUPPLIES_TO") -> SearchRelation:
+    """SearchRelation은 edge_id를 포함해 필드가 전부 필수다(설계서 Rule 7) —
+    테스트가 부분 dict를 넘길 수 없으므로 한 곳에서 만든다."""
+    return SearchRelation(
+        edge_id="5:abc:0", edge_type=edge_type,
+        source="세메스", source_id="00164742", source_entity_type="Company",
+        target="삼성전자", target_id="00126380", target_entity_type="Company",
+    )
 
 def _minimal_kwargs(**overrides):
     kwargs = dict(
         entity_type=EntityType.COMPANY,
         entity_id="00126380",
         name="삼성전자",
-        score=0.87,
+        source_score=0.87,
         sources=["neo4j"],
     )
     kwargs.update(overrides)
@@ -23,7 +33,7 @@ def test_minimal_valid_hit_defaults_evidence_to_empty_list():
     hit = SearchHit(**_minimal_kwargs())
     assert hit.entity_type == EntityType.COMPANY
     assert hit.entity_id == "00126380"
-    assert hit.score == 0.87
+    assert hit.source_score == 0.87
     assert hit.sources == ["neo4j"]
     assert hit.evidence == []
     assert hit.freshness is None
@@ -37,13 +47,15 @@ def test_full_hit_with_optional_fields():
         sources=["neo4j", "chroma"],
         freshness={"status": "current", "reason": "180일 경과"},
         verdict="supported",
-        relations=[{"edge_type": "SUPPLIES_TO", "target": "삼성전자"}],
+        relations=[_relation()],
         evidence=[{"evidence_id": "ev_599ae4f46bf15b7c", "snippet": "..."}],
         kind="기업",
     ))
     assert hit.freshness == {"status": "current", "reason": "180일 경과"}
     assert hit.verdict == "supported"
-    assert hit.relations == [{"edge_type": "SUPPLIES_TO", "target": "삼성전자"}]
+    assert hit.relations[0].edge_type == "SUPPLIES_TO"
+    assert hit.relations[0].target == "삼성전자"
+    assert hit.relations[0].edge_id == "5:abc:0"
     assert len(hit.evidence) == 1
     assert hit.kind == "기업"
 

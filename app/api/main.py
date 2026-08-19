@@ -39,6 +39,7 @@ from fastapi.responses import HTMLResponse
 
 from app.api import examples as ex
 from app.core.config import CHROMA_HOST, CHROMA_PORT
+from app.services.retrieve_service import RetrieveService
 from app.services import (
     company_service,
     insight_service,
@@ -90,6 +91,12 @@ app = FastAPI(
     ],
 )
 
+# ★프로세스당 하나. 안에서 SearchOrchestrator 를 들고 있어(커넥션·캐시) 요청마다
+#   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
+#   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
+_retrieve_service = RetrieveService()
+
+
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
 app.add_middleware(
     CORSMiddleware,
@@ -105,7 +112,9 @@ app.add_middleware(
 #   스텁인데 진짜로 나갔다. 갈아끼울 때 여기서 지우면 헤더가 사라진다.
 #   ★`/retrieve` 를 한 번 빠뜨렸다 — 여러 줄에 걸쳐 `ex.*` 를 넣고 있어서
 #     `return ex.` 로 훑을 때 안 걸렸다. 헤더가 아니라 **본문을 봐야 한다.**
-_STUB = ("/news", "/retrieve")
+#   ★2026-08-20 `/retrieve` 가 실물이 되어 여기서 뺐다. 헤더가 사라지는 것이
+#     완료 신호다.
+_STUB = ("/news",)
 
 
 @app.middleware("http")
@@ -469,21 +478,24 @@ def workspace_insights(body: WorkspaceInsightRequest) -> list[InsightCard]:
 # ★추론 담당은 이 HTTP 를 거치지 않고 `app/services/` 를 그대로 import 한다
 #   (같은 레포·같은 프로세스). 이 라우트는 **백엔드가 볼 모양**이다.
 @app.post("/retrieve", response_model=RetrieveResponse, tags=["챗봇"],
-          summary="챗봇이 쓸 사실과 근거  (스텁)")
-def retrieve(body: AskRequest) -> RetrieveResponse:
+          summary="챗봇이 쓸 사실과 근거")
+async def retrieve(body: AskRequest) -> RetrieveResponse:
     """챗봇이 인용할 **사실과 근거만** 돌려준다. **답변 문장은 만들지 않는다** —
     생성은 추론 담당 몫이다. 경계를 섞으면 「누가 지어냈나」를 못 가린다.
 
     `evidence[].evidence_id` 를 반드시 붙인다. 화면이 답과 근거를 나란히 놓는다.
+
+    - `workspace_keys` 를 주면 **그 범위 안에서만** 찾는다. 관계는 **양끝이 모두**
+      그 안에 있어야 한다 — 챗봇은 사용자의 워크스페이스 안에서 존재하는 기능이다.
+    - `evidence[].missing=true` 는 **id 는 있는데 원문을 못 찾은 것**이다. 지우지
+      않고 알린다 — 지우면 「근거가 없는 관계」로 읽힌다. **인용하면 안 된다.**
+    - `propagation[].stated` 로 **보도와 계산을 가른다.** 섞어 말하면 추론을
+      사실로 파는 것이 된다.
     """
-    return RetrieveResponse(
-        question=body.question,
-        companies=[ex.HYNIX],
-        events=ex.EVENTS_OF,
-        relations=[ex.REL_SUPPLY],
-        propagation=ex.PROPAGATION,
-        evidence=[ex.EVIDENCE_SUPPLY],
-    )
+    # ★이 라우트는 **어댑터다.** 로직은 RetrieveService 에 있다 — 추론 담당은
+    #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
+    #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
+    return await _retrieve_service.retrieve_async(body)
 
 
 @app.get("/health", tags=["운영"], summary="상태 확인")

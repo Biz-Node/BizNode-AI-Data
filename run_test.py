@@ -7,27 +7,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from search.dto.search_request import SearchRequest
-from search.repository.chroma_repository import ChromaRepository
-from search.repository.postgres_repository import PostgresRepository
-from search.service.anchor_extractor import AnchorExtractor
-from search.service.entity_resolver import EntityResolver
-from search.service.graph_searcher import GraphSearcher
-from search.service.orchestrator import SearchOrchestrator
-from search.service.query_router import QueryRouter
-from search.service.result_ranker import ResultRanker
-from search.service.vector_searcher import VectorSearcher
+from search.service.factory import build_orchestrator
 
 
 def main():
-    # 2. 오케스트레이터 및 의존성 초기화
-    orch = SearchOrchestrator(
-        entity_resolver=EntityResolver(PostgresRepository()),
-        query_router=QueryRouter(),
-        graph_searcher=GraphSearcher(),
-        vector_searcher=VectorSearcher(ChromaRepository()),
-        result_ranker=ResultRanker(),
-        anchor_extractor=AnchorExtractor(PostgresRepository()),
-    )
+    # 2. 오케스트레이터 — 조립은 search/service/factory.py 한 곳에만 있다
+    orch = build_orchestrator()
 
     # 3. 검색 실행 — SearchOrchestrator.search()는 동기 함수라 await 없이 호출한다
     query, result = orch.search(SearchRequest(query="삼성전자에 납품하는 기업"))
@@ -35,7 +20,9 @@ def main():
     print(f"mode: {query.mode.value}")
     print(f"총 건수: {result.total}")
     for hit in result.hits:
-        print(hit.name, hit.entity_id, round(hit.score, 4), hit.sources)
+        # ★`score`가 아니라 `source_score`다 — 점수 하나에 뜻이 셋 섞여 있어
+        #   이름으로 갈랐다(D2). 최종 순위는 `rank`, RRF 값은 `rrf_score`.
+        print(hit.rank, hit.name, hit.entity_id, round(hit.source_score, 4), hit.sources)
 
 
 if __name__ == "__main__":

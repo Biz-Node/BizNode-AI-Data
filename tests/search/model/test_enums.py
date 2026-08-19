@@ -17,10 +17,11 @@ def test_entity_type_is_str_enum():
     assert isinstance(EntityType.COMPANY, str)
 
 
-def test_search_mode_has_four_modes():
-    assert {m.value for m in SearchMode} == {
-        "NAME", "RELATIONSHIP", "SEMANTIC", "HYBRID",
-    }
+def test_search_mode_has_three_modes():
+    """분기 규칙(edge_types 유무)이 만들 수 있는 모드 전부. HYBRID는 어떤 경로로도
+    생성되지 않아 제거했다(A4, 2026-08-19) — 계약에 죽은 값을 남기면 백엔드가
+    처리해야 할 모드로 오해한다."""
+    assert {m.value for m in SearchMode} == {"NAME", "RELATIONSHIP", "SEMANTIC"}
 
 
 def test_direction_has_two_values():

@@ -14,7 +14,7 @@ from datetime import date
 from typing import Optional
 
 from pipeline.normalizer.resolver import Resolution
-from search.model.enums import Direction, EntityType, SearchMode
+from search.model.enums import Direction, SearchMode
 
 # SearchRequest의 top_k 기본값과 맞춘다(search_request.py 참고, 잠정값).
 _DEFAULT_TOP_K = 10
@@ -27,9 +27,9 @@ class SearchQuery:
     mode: SearchMode
     today: date
     resolved_entities: list[Resolution] = field(default_factory=list)
-    entity_types: Optional[list[EntityType]] = None
+    # 요청에서 그대로 내려온 검색 범위. Searcher까지 유실 없이 전달돼야 한다.
+    workspace_keys: list[str] = field(default_factory=list)
     edge_types: Optional[list[str]] = None
     direction: Optional[Direction] = None
     top_k: int = _DEFAULT_TOP_K
     include_evidence: bool = True
-    filters: Optional[dict] = None

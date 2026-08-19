@@ -10,13 +10,13 @@ from pydantic import ValidationError
 
 from search.dto.search_hit import SearchHit
 from search.dto.search_result import SearchResult
-from search.model.enums import EntityType
+from search.model.enums import EntityType, SearchMode
 
 
 def _hit(**overrides):
     kwargs = dict(
         entity_type=EntityType.COMPANY, entity_id="00126380",
-        name="삼성전자", score=0.9, sources=["neo4j"],
+        name="삼성전자", source_score=0.9, sources=["neo4j"],
     )
     kwargs.update(overrides)
     return SearchHit(**kwargs)
@@ -24,7 +24,7 @@ def _hit(**overrides):
 
 def test_minimal_valid_result_defaults_warnings_to_empty_list():
     result = SearchResult(
-        query="삼성전자", hits=[_hit()], total=1, took_ms=42,
+        query="삼성전자", mode=SearchMode.NAME, hits=[_hit()], total=1, took_ms=42,
         cache_hit=False, used_semantic_fallback=False,
     )
     assert result.total == 1
@@ -35,7 +35,7 @@ def test_minimal_valid_result_defaults_warnings_to_empty_list():
 def test_used_semantic_fallback_true():
     """의미 검색 결과가 fallback으로 쓰였을 때 True로 설정 가능해야 한다."""
     result = SearchResult(
-        query="HBM을 만드는 기업", hits=[], total=0, took_ms=120,
+        query="HBM을 만드는 기업", mode=SearchMode.SEMANTIC, hits=[], total=0, took_ms=120,
         cache_hit=False, used_semantic_fallback=True,
     )
     assert result.used_semantic_fallback is True
@@ -43,7 +43,8 @@ def test_used_semantic_fallback_true():
 
 def test_used_semantic_fallback_false():
     result = SearchResult(
-        query="삼성전자에 납품하는 기업", hits=[_hit()], total=1, took_ms=55,
+        query="삼성전자에 납품하는 기업", mode=SearchMode.RELATIONSHIP, hits=[_hit()],
+        total=1, took_ms=55,
         cache_hit=False, used_semantic_fallback=False,
     )
     assert result.used_semantic_fallback is False
@@ -63,8 +64,8 @@ def test_missing_required_field_is_rejected():
 
 def test_result_carries_warnings():
     result = SearchResult(
-        query="삼성전자", hits=[], total=0, took_ms=1, cache_hit=False,
-        used_semantic_fallback=False,
+        query="삼성전자", mode=SearchMode.NAME, hits=[], total=0, took_ms=1,
+        cache_hit=False, used_semantic_fallback=False,
         warnings=["58%가 갱신주기를 넘겨 재확인 필요"],
     )
     assert result.warnings == ["58%가 갱신주기를 넘겨 재확인 필요"]

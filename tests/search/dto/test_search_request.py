@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from search.dto.search_request import SearchRequest
-from search.model.enums import EntityType
 
 
 def test_minimal_valid_request():
@@ -15,25 +14,19 @@ def test_minimal_valid_request():
     assert req.query == "삼성전자"
     assert req.top_k > 0
     assert req.include_evidence is True
-    assert req.entity_types is None
     assert req.edge_types is None
-    assert req.filters is None
 
 
 def test_full_valid_request():
     req = SearchRequest(
         query="삼성전자에 납품하는 기업",
-        entity_types=[EntityType.COMPANY],
         edge_types=["SUPPLIES_TO"],
         top_k=5,
         include_evidence=False,
-        filters={"sector": ["반도체"]},
     )
-    assert req.entity_types == [EntityType.COMPANY]
     assert req.edge_types == ["SUPPLIES_TO"]
     assert req.top_k == 5
     assert req.include_evidence is False
-    assert req.filters == {"sector": ["반도체"]}
 
 
 def test_missing_query_is_rejected():
@@ -74,4 +67,27 @@ def test_top_k_over_max_is_rejected():
 
 def test_invalid_entity_type_is_rejected():
     with pytest.raises(ValidationError):
-        SearchRequest(query="삼성전자", entity_types=["NotAnEntityType"])
+        SearchRequest(query="삼성전자", entity_types=["Company"])
+
+
+# ── 계약에서 뺀 필드(D3, 2026-08-19) ─────────────────────────────────────────
+
+def test_entity_types_is_rejected():
+    """Company 외 엔티티는 pg_trgm·Neo4j·벡터 인덱스가 존재하지 않아 지원할 방법이
+    없다. 담기기만 하고 아무 Searcher도 읽지 않는 필드를 계약에 남기면 백엔드가
+    보낸 값이 조용히 무시된다 — 계약에서 뺀다."""
+    with pytest.raises(ValidationError):
+        SearchRequest(query="삼성전자", entity_types=["Company"])
+
+
+def test_filters_is_rejected():
+    """sector 2단계 조합(설계 §6)은 구현되지 않았고, 그 선필터가 읽던 companies
+    표도 삭제됐다. 필요해지면 그때 되살린다."""
+    with pytest.raises(ValidationError):
+        SearchRequest(query="삼성전자", filters={"sector": ["반도체"]})
+
+
+def test_unknown_field_is_rejected():
+    """오타나 폐기된 필드가 조용히 무시되지 않게 한다."""
+    with pytest.raises(ValidationError):
+        SearchRequest(query="삼성전자", top_kk=5)

@@ -85,6 +85,11 @@ class Relation:
     source_entity_type: str
     target_id: str
     target_entity_type: str
+    # 엣지 자체의 유일한 id(Neo4j elementId). `RetrieveResponse.relations` 의
+    # `Relation.edge_id` 가 필수라 여기서 실어 보낸다. ★`evidence_id` 로 대신할 수
+    # 없다 — 한 근거가 여러 엣지를 뒷받침해 유일하지 않다(엣지 11,060 : 근거 9,228).
+    # 기본값을 둔 이유는 이 dataclass 를 직접 만드는 테스트를 깨지 않기 위해서다.
+    edge_id: str = ""
 
     @property
     def verdict(self) -> str:
@@ -118,12 +123,19 @@ class Relation:
                 f"  ({self.freshness.reason}{corr}{vd})")
 
 
+# ★워크스페이스로 **거르지 않는다**(2026-08-20 정책 변경). 한때 양끝이 모두
+#   워크스페이스 안이어야 통과시켰는데, 그러면 「삼성전자 → SK하이닉스」처럼
+#   워크스페이스 밖 상대와의 관계가 후보에서 통째로 사라지고, corp_code 를 갖지
+#   않는 Event·Person·Organization·Product 끝은 **하나도 남지 않는다**(실측: 삼성전자
+#   관계 상위 10건 중 5건이 비-Company 끝이었다).
+#   워크스페이스는 필터가 아니라 **랭킹 문맥**이다 — 순서를 정하는 데 쓰고,
+#   후보를 지우는 데 쓰지 않는다. 계산은 ResultRanker 가 한다.
 _QUERY = """
 MATCH (a)-[r]->(b)
 WHERE ($name IS NULL OR a.norm_name = $name OR b.norm_name = $name)
   AND ($types IS NULL OR type(r) IN $types)
 RETURN coalesce(a.name, '?') AS source, coalesce(b.name, '?') AS target,
-       type(r) AS edge_type, properties(r) AS props,
+       type(r) AS edge_type, properties(r) AS props, elementId(r) AS edge_id,
        coalesce(a.corp_code, a.person_key, a.norm_name, a.event_id, a.name) AS source_id,
        labels(a)[0] AS source_entity_type,
        coalesce(b.corp_code, b.person_key, b.norm_name, b.event_id, b.name) AS target_id,
@@ -140,7 +152,8 @@ def _to_relation(row: dict, today: Optional[date]) -> Relation:
         corroboration=int(p.get("corroboration") or 1),
         freshness=assess(p, today=today), props=p,
         source_id=row["source_id"], source_entity_type=row["source_entity_type"],
-        target_id=row["target_id"], target_entity_type=row["target_entity_type"])
+        target_id=row["target_id"], target_entity_type=row["target_entity_type"],
+        edge_id=row["edge_id"])
 
 
 def relations_of(
@@ -161,6 +174,10 @@ def relations_of(
     · `hide_verdicts` 기본값은 근거 검증에서 「근거없음·근거부족」이 난 것 제외.
       검사가 지우지 않고 표시만 하므로 **여기서 걸러야 화면에 안 나간다.**
       검토 화면에서 의심분까지 보려면 `hide_verdicts=()`로 부른다.
+    · ★`limit`은 **점수순으로 자르는 파이썬 슬라이스**다. Cypher에는 LIMIT이 없어
+      조회량은 `limit`과 무관하다 — 넉넉히 가져와도 DB 작업량은 같다. 워크스페이스
+      랭킹처럼 점수 외의 기준으로 다시 줄 세울 계획이면 여기서 미리 자르면 안 된다
+      (자르는 순간 랭커가 볼 수 없는 후보가 생긴다).
     """
     types = list(edge_types) if edge_types else None
     with neo4j_session() as session:

@@ -28,10 +28,8 @@ def test_minimal_construction_defaults_resolved_entities_to_empty_list():
         today=date(2026, 8, 8),
     )
     assert q.resolved_entities == []
-    assert q.entity_types is None
     assert q.edge_types is None
     assert q.direction is None
-    assert q.filters is None
 
 
 def test_direction_accepts_incoming_and_outgoing():

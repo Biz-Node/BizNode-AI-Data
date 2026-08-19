@@ -10,12 +10,19 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from search.dto.search_hit import SearchHit
+from search.model.enums import SearchMode
 
 
 class SearchResult(BaseModel):
     query: str = Field(
         ...,
         description="사용자가 요청했던 원문 검색어"
+    )
+    mode: SearchMode = Field(
+        ...,
+        description="어느 경로로 답했는가 — NAME(이름 해소 1건) / RELATIONSHIP(그래프 "
+                    "관계) / SEMANTIC(의미검색). SEMANTIC 결과는 프로필 문서를 가진 "
+                    "기업 안에서만 고른 것이라 다른 둘과 같은 무게로 말하면 안 된다"
     )
     hits: list[SearchHit] = Field(
         ...,
