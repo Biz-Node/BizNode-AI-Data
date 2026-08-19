@@ -174,3 +174,52 @@ def search_relations(company_names: list[str], *, per_query: int = 20,
 
     print(f"    질의 {total_queries}회 → 고유 기사 {len(articles)}건")
     return articles
+
+
+# ══════════════════════════════════════════════════════════════════
+#  증분 갱신 — 아는 기업의 새 기사만
+# ══════════════════════════════════════════════════════════════════
+#
+# ★`search_relations` 와 목적이 다르다.
+#
+#     search_relations   기업명 × 관계 키워드 → 관계 기사만. 추출용
+#     search_latest      기업명만 최신순 → 어제 이후 새 기사. 피드용
+#
+# ★날짜 필터가 없는 게 여기서는 문제가 아니다. 최신순으로 받다가 **이미 아는
+#   URL 을 만나면 그 기업은 거기서 끝**이다. 그게 증분이다.
+#
+# ★따라잡을 수 있는 폭은 질의당 1,000건(`_MAX_START`)이 정한다.
+#   실측(2026-08-18): 삼성전자·SK하이닉스는 하루 100건이 넘어 1,000건이 열흘치다.
+#   2~3주 방치하면 구멍이 난다 — 그때는 구글 뉴스 RSS 로 그 기간만 메워야 한다.
+
+
+def search_latest(names: list[str], known_urls: set[str], *,
+                  per_company: int = 100, max_per_company: int = 1000
+                  ) -> tuple[list[Article], list[str]]:
+    """기업마다 최신순으로 새 기사만. `(새 기사, 못 따라잡은 기업)` 을 준다.
+
+    아는 URL 을 만나면 그 기업은 멈춘다. `max_per_company` 까지 받았는데도
+    아는 URL 을 못 만났으면 **그 사이가 비었다는 뜻**이라 이름을 돌려준다.
+    """
+    fresh: list[Article] = []
+    gaps: list[str] = []
+    seen: set[str] = set()
+
+    for name in names:
+        got = 0
+        caught_up = False
+        for article in search(name, limit=max_per_company, sort="date"):
+            got += 1
+            if article.url in known_urls:
+                caught_up = True          # 여기부터는 이미 있는 것
+                break
+            if article.url not in seen:
+                seen.add(article.url)
+                fresh.append(article)
+            if got >= per_company:
+                # 상한까지 받았는데 아는 게 안 나왔다 — 더 파야 할 수도 있다.
+                # `per_company` 는 평상시 예산이고, 못 따라잡았으면 아래에서 표시한다.
+                break
+        if not caught_up and got >= per_company:
+            gaps.append(name)
+    return fresh, gaps

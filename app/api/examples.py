@@ -22,7 +22,7 @@
   정상 응답만 주면 프론트가 정상 경우만 만들고, 진짜 데이터를 붙이는 날
   화면이 깨진다. 그래서 아래를 일부러 넣어 뒀다:
 
-      엔비디아     detail_level=relations_only · 재무도 시세도 없음
+      엔비디아     detail_level=none · 재무도 시세도 없음
       비상장사     listed=false — 시장 블록이 통째로 null
       심텍 PER     적자라 null
       고영        워크스페이스에서 **섬**이 되는 기업
@@ -226,11 +226,11 @@ SUGGESTIONS = [
     Suggestion(key="asml", name="ASML", reason="shared_customer",
                reason_text="공통 고객 3곳 — SK하이닉스 · 삼성전자 · 마이크론",
                overlap=3, via=["SK하이닉스", "삼성전자", "마이크론"],
-               detail_level="relations_only"),
+               detail_level="none"),
 ]
 
 # ══════════════════════════════════════════════════════════════════
-#  기업 — full 과 relations_only
+#  기업 — full 과 none
 # ══════════════════════════════════════════════════════════════════
 
 COMPANY_FULL = CompanyDetail(
@@ -287,7 +287,7 @@ COMPANY_FULL = CompanyDetail(
 # ★해외 기업 — 관계는 많은데 재무도 시세도 공시도 없다.
 #   **이게 3,432곳 중 대다수의 모양이다.** 프론트가 이걸 오류로 처리하면 안 된다.
 COMPANY_RELATIONS_ONLY = CompanyDetail(
-    key="엔비디아", name="엔비디아", detail_level="relations_only", coverage="complete",
+    key="엔비디아", name="엔비디아", detail_level="none", coverage="complete",
     collected_at="2026-08-11", corp_code=None, stock_code=None, market=None,
     entity_kind="기업", ksic="26", ksic_label="전자부품·컴퓨터·영상·음향·통신장비",
     also_names=["NVIDIA", "엔비디아 코리아"],

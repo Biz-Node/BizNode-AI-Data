@@ -96,6 +96,7 @@
     <button data-p="company">기업 상세</button>
     <button data-p="ws">워크스페이스</button>
     <button data-p="ins">인사이트</button>
+    <button data-p="news">뉴스</button>
   </nav>
 </header>
 
@@ -161,6 +162,22 @@
       <span class="muted" id="i-stat"></span>
     </div>
     <div id="i-body"></div>
+  </section>
+  <!-- ══ 뉴스 ═══════════════════════════════════════════════ -->
+  <section class="pane" id="p-news">
+    <div class="row">
+      <label class="chk">주제
+        <select id="ncat" style="font:inherit;padding:6px;border-radius:6px;border:1px solid var(--line)">
+          <option value="">전체</option><option>공급망</option><option>지분</option>
+          <option>규제</option><option>사건</option>
+        </select></label>
+      <label class="chk"><input type="checkbox" id="nrisk"> 위험만</label>
+      <label class="chk"><input type="checkbox" id="nws"> 내 워크스페이스
+        <input type="text" id="nkeys" value="00126380 01095722" style="min-width:190px"></label>
+      <button class="go" id="n-go">불러오기</button>
+      <span class="muted" id="n-stat"></span>
+    </div>
+    <div id="n-body"></div>
   </section>
 </main>
 
@@ -798,6 +815,47 @@ async function loadIns() {
   } catch (e) { $('#i-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 }
 $('#i-go').onclick = loadIns;
+
+// ══════════════════════════════════════════════════════════════════
+//  뉴스 — 축 셋을 겹쳐 쓴다
+// ══════════════════════════════════════════════════════════════════
+const NCOLOR = { 공급망: 'var(--trade)', 지분: 'var(--own)',
+                 규제: 'var(--org)', 사건: 'var(--event)' };
+
+async function loadNews() {
+  const p = new URLSearchParams({ limit: '30' });
+  if ($('#ncat').value) p.set('category', $('#ncat').value);
+  if ($('#nrisk').checked) p.set('risk_only', 'true');
+  if ($('#nws').checked)
+    $('#nkeys').value.split(/\s+/).filter(Boolean).forEach(k => p.append('workspace_keys', k));
+  $('#n-stat').textContent = '…';
+  try {
+    const { data: d, ms, stub } = await api('/news?' + p);
+    $('#n-stat').innerHTML = stamp(ms, stub, `<b>${num(d.total)}</b>건 중 ${d.items.length}건`);
+    $('#n-body').innerHTML = `<div class="card"><h3>GET /news
+      <span class="c">${esc('?' + p)}</span></h3>
+      ${d.items.length ? `<table>${d.items.map(x => `<tr>
+        <td style="white-space:nowrap;vertical-align:top">
+          <span class="muted" style="font-size:12px">${esc(x.published_at)}</span></td>
+        <td><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>
+          ${x.is_risk ? '<span class="tag risk">위험</span>' : ''}
+          <div style="margin-top:3px">
+            ${(x.categories || []).map(cg => `<span class="tag"
+              style="color:${NCOLOR[cg] || 'var(--dim)'};border-color:${NCOLOR[cg] || 'var(--line)'}">${esc(cg)}</span>`).join('')}
+            ${(x.companies || []).map(co => `<span class="tag" data-goto="${esc(co.key)}"
+              style="cursor:pointer">${esc(co.name)}</span>`).join('')}
+            <span class="muted" style="font-size:11px">${dash(x.press)}</span>
+          </div></td></tr>`).join('')}</table>`
+        : empty('조건에 맞는 기사가 없습니다')}
+      <div class="hint"><b>본문은 응답에 없습니다</b>(저작권). 제목을 누르면 언론사 원문으로 갑니다.
+        갈래는 <b>여러 개가 정상</b>입니다 — 「공정위, 납품단가 담합 제재」는 공급망이면서 규제입니다.</div>
+    </div>`;
+    $('#n-body').querySelectorAll('[data-goto]').forEach(el => el.onclick = () => {
+      $('#ck').value = el.dataset.goto; go('company'); loadCompany();
+    });
+  } catch (e) { $('#n-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('#n-go').onclick = loadNews;
 
 doSearch();
 </script>

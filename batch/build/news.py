@@ -21,7 +21,8 @@ from pipeline.importer.news_loader import build_news_document
 from pipeline.importer.event_er import resolve_events
 from pipeline.importer.person_er import resolve_persons
 from pipeline.importer.staging import stage_document
-from pipeline.news.collector import collect_and_screen
+from pipeline.extractors.news.crawler import enrich_bodies
+from pipeline.news.collector import collect_and_screen, pending_articles
 from pipeline.news.extractor import extract_relations
 from pipeline.normalizer.product_registry import prompt_block as product_prompt_block
 from pipeline.normalizer import resolver
@@ -40,6 +41,13 @@ def main() -> int:
     parser.add_argument("--naver-seeds", type=int, default=0,
                         help="네이버 검색 대상 시드 수(0=전체). 호출량 통제용")
     parser.add_argument("--no-crawl", action="store_true", help="본문 크롤링 보강 생략")
+    # ★기본이 PG 다. 수집은 `batch.build.news_feed` 가 매일 하고, 여기는 그 결과를
+    #   이어받는다. 전에는 RSS 를 다시 받아서 **수집 배치가 저장한 기사를 못 봤다**
+    #   (실측 2026-08-18: 미처리 6,403건). `--collect` 를 주면 옛 동작이다.
+    parser.add_argument("--collect", action="store_true",
+                        help="PG 를 읽지 않고 RSS·네이버를 새로 수집한다(옛 동작)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="추출하지 않고 **대상 수와 예상 비용만** 찍는다")
     parser.add_argument("--track", choices=["relation", "risk", "both"], default="relation",
                         help="relation=기업 간 관계 / risk=사건·리스크 / both=둘 다. "
                              "검색 키워드·규칙 필터·라우터 프롬프트가 트랙별로 달라진다")
@@ -58,12 +66,33 @@ def main() -> int:
     total_edges = total_invalid = total_unmapped = 0
 
     with postgres_connection() as conn:
-        screened = collect_and_screen(
-            conn, limit_router=args.router_limit,
-            use_naver=args.naver, seed_names=seed_names,
-            crawl_bodies=not args.no_crawl, track=args.track,
-        )
+        if args.collect:
+            screened = collect_and_screen(
+                conn, limit_router=args.router_limit,
+                use_naver=args.naver, seed_names=seed_names,
+                crawl_bodies=not args.no_crawl, track=args.track,
+            )
+        else:
+            # 이미 모아 둔 것을 이어받는다 — 수집과 추출을 잇는 자리
+            print("[1/5] PG 미처리 기사 읽기")
+            screened = pending_articles(conn, limit=args.limit)
+            print(f"  → {len(screened)}건")
+            if screened and not args.no_crawl:
+                # 본문은 저장하지 않으므로(방법서 §8) 추출 직전에 다시 받는다
+                print(f"\n[2/5] 본문 크롤링 ({len(screened)}건)")
+                ok, bad = enrich_bodies([s.article for s in screened])
+                print(f"  → 확보 {ok}건, 실패 {bad}건")
+                # 본문을 못 구하면 추출할 게 없다. 돈만 쓰고 빈손이 된다
+                screened = [s for s in screened if s.article.body]
+                print(f"  → 본문 있는 {len(screened)}건만 진행")
+
         targets = screened[: args.limit]
+
+        if args.dry_run:
+            # 라우터는 이미 통과한 것만 읽어 오므로 여기서는 추출 비용만 든다
+            print(f"\n--dry-run — 추출 대상 {len(targets)}건 "
+                  f"· 예상 {len(targets) * 14.7:,.0f}원")
+            return 0
 
         print(f"\n[4/5] 관계 추출 ({len(targets)}건 기사, 상위 모델)")
         # 이미 쓰는 제품명을 프롬프트에 붙인다 — 표기가 갈려 노드가 쪼개지는 걸 막는다
