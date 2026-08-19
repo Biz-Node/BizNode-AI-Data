@@ -1,299 +1,1151 @@
--- BizNode PostgreSQL 스키마 (개발계획서 §6)
--- 전부 멱등(IF NOT EXISTS) — 수동 재실행 안전
-
--- ─────────────────────────────────────────────────────────────
--- 전 종목 마스터 (Tier 1 — 전 종목 검색 지원)
--- corpCode.xml 전량 적재. 관계가 없어도 검색은 되게 한다.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS corp_code_master (
-    corp_code   CHAR(8) PRIMARY KEY,
-    corp_name   TEXT NOT NULL,
-    stock_code  VARCHAR(6),
-    market      TEXT,
-    modify_date DATE
-);
-
--- ★ER 블로킹 인덱스: 표기가 닮은 후보를 DB가 축소해준다.
---   사용 예) SELECT corp_code, corp_name, similarity(corp_name, '삼성전자')
---            FROM corp_code_master WHERE corp_name % '삼성전자' ORDER BY 3 DESC LIMIT 20;
-CREATE INDEX IF NOT EXISTS idx_corp_name_trgm
-    ON corp_code_master USING GIN (corp_name gin_trgm_ops);
-
-CREATE INDEX IF NOT EXISTS idx_corp_stock_code
-    ON corp_code_master (stock_code) WHERE stock_code IS NOT NULL;
-
--- ─────────────────────────────────────────────────────────────
--- 시드 기업 상세 (기업개황 API + 시드 JSON 병합)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS companies (
-    corp_code  CHAR(8) PRIMARY KEY REFERENCES corp_code_master(corp_code),
-    name       TEXT NOT NULL,
-    stock_code VARCHAR(6),
-    market     TEXT,
-    sector     JSONB,                    -- ["반도체","로봇"]
-    etf_list   JSONB,                    -- ["KODEX 반도체", ...]
-    ceo_nm     TEXT,
-    induty     TEXT,                     -- 업종
-    est_dt     DATE,                     -- 설립일
-    is_seed    BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- 섹터·ETF 필터를 인덱스로 처리 (JSONB containment: sector @> '"반도체"')
-CREATE INDEX IF NOT EXISTS idx_companies_sector   ON companies USING GIN (sector);
-CREATE INDEX IF NOT EXISTS idx_companies_etf_list ON companies USING GIN (etf_list);
-CREATE INDEX IF NOT EXISTS idx_companies_name_trgm
-    ON companies USING GIN (name gin_trgm_ops);
-
--- ─────────────────────────────────────────────────────────────
--- 재무 (RDB 전용 시계열 — 개발계획서 §6-2)
---   Neo4j Company 노드엔 표시용 최근 스냅샷(매출·시총)만 두고,
---   전체 연도·분기 시계열은 여기에만 둔다. 이중 저장 아님.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS financials (
-    corp_code         CHAR(8) NOT NULL,
-    bsns_year         SMALLINT NOT NULL,
-    reprt_code        VARCHAR(5) NOT NULL,   -- 11011=사업, 11012=반기 ...
-    fs_div            VARCHAR(3),            -- CFS(연결)/OFS(별도) — 수치 기준 명시
-    revenue           BIGINT,                -- 매출액
-    operating_profit  BIGINT,                -- 영업이익
-    net_profit        BIGINT,                -- 당기순이익
-    total_assets      BIGINT,                -- 자산총계
-    total_liabilities BIGINT,                -- 부채총계 (부채비율 지표)
-    total_equity      BIGINT,                -- 자본총계
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (corp_code, bsns_year, reprt_code)
-);
--- 기존 테이블 대비 컬럼 보강(멱등)
-ALTER TABLE financials ADD COLUMN IF NOT EXISTS fs_div VARCHAR(3);
-ALTER TABLE financials ADD COLUMN IF NOT EXISTS total_liabilities BIGINT;
--- 규모 확대 시 bsns_year 기준 파티셔닝 검토
-
--- ─────────────────────────────────────────────────────────────
--- 공시 원문 메타 (전문은 파일 스토리지 — "저장은 전부, 임베딩은 선별")
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS documents (
-    rcept_no   CHAR(14) PRIMARY KEY,
-    corp_code  CHAR(8),
-    doc_type   TEXT,                      -- 공급계약 / 합병 / 소송 / 사업보고서 ...
-    title      TEXT,
-    rcept_dt   DATE,
-    raw_path   TEXT,                      -- data/documents/{rcept_no}/...
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_documents_corp ON documents (corp_code, rcept_dt DESC);
-CREATE INDEX IF NOT EXISTS idx_documents_type ON documents (doc_type);
-
--- ─────────────────────────────────────────────────────────────
--- 기업 프로파일 (Vector 청크의 원본 — RDB가 소유, 갱신 시 Vector 동기)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS company_profiles (
-    corp_code  CHAR(8) NOT NULL,
-    version    INT NOT NULL,
-    text       TEXT NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (corp_code, version)
-);
-
--- ─────────────────────────────────────────────────────────────
--- 배치 실행 로그 (corp_code 매칭 실패율 모니터링 — 방법서 13장)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ingest_runs (
-    id            BIGSERIAL PRIMARY KEY,
-    run_type      TEXT NOT NULL,          -- path_a / path_b / path_c
-    started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    finished_at   TIMESTAMPTZ,
-    total_records INT DEFAULT 0,
-    failed_records INT DEFAULT 0,
-    unresolved_entities INT DEFAULT 0,    -- corp_code 매칭 실패 건수
-    notes         JSONB
-);
-
--- ─────────────────────────────────────────────────────────────
--- 주주 요약 (방법서 10장 [2] "개인 주주 폭발 방지 정책")
+-- BizNode PostgreSQL 스키마
 --
--- 개인 주주·기관투자자는 Person/Company 노드로 만들지 않고 요약해서 보관한다.
--- 이 테이블이 없으면 개발 중 "이건 어디 넣지?" → Neo4j 노드화 → Person 폭발.
--- companies가 아닌 별도 테이블인 이유: 지분 요약은 공시 주기마다 바뀌는 시점
--- 데이터라, 정적 마스터인 companies에 섞으면 이력이 덮어쓰기로 소멸한다
--- (financials를 companies에서 분리한 것과 같은 이유).
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS shareholder_summaries (
-    corp_code                 CHAR(8) NOT NULL,
-    base_date                 DATE NOT NULL,      -- 공시 기준일(결산일)
-    major_shareholder_summary JSONB,              -- 개인 주주 요약 (노드화 제외분)
-    institutional_holders     JSONB,              -- 연기금·공모펀드 등 기관 요약
-    minority_shareholder_stats JSONB,             -- 소액주주 통계 (선택)
-    source_doc                TEXT,               -- 근거 rcept_no
-    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (corp_code, base_date)
-);
-CREATE INDEX IF NOT EXISTS idx_shareholder_summaries_corp
-    ON shareholder_summaries (corp_code, base_date DESC);
-
--- ─────────────────────────────────────────────────────────────
--- Vector 청크 레지스트리 (방법서 5장 · 10장 [6] 갱신 흐름)
+-- ★손으로 고치지 마세요. **실제 DB에서 뽑아낸 것**입니다.
+--   전에는 손으로 관리했는데 실제 스키마와 어긋났습니다 — 이미 없앤 `companies`
+--   표를 만들면서, 실제로 쓰는 표 14개(company_attributes·name_verdicts·
+--   purged_edges …)와 뷰 market_metrics 는 빠져 있었습니다.
 --
--- "RDBMS 갱신 시 Vector도 동시 갱신"을 실행하려면 무엇이 ChromaDB에 있는지
--- RDB가 알아야 한다. 이 표가 없으면 (a)프로파일 갱신 시 지울 대상 특정 불가
--- (b)엣지 evidence_id의 실존 검증 불가 (c)모델 교체 시 재임베딩 대상 특정 불가.
--- chunk_id는 ChromaDB의 id와 동일 값 = Neo4j 엣지의 evidence_id.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS vector_chunks (
-    chunk_id        TEXT PRIMARY KEY,             -- = ChromaDB id (= evidence_id)
-    chunk_type      TEXT NOT NULL,                -- evidence | profile | event
-    collection      TEXT NOT NULL,                -- chroma 컬렉션명
-    owner_key       TEXT NOT NULL,                -- edge_id | corp_code | event_id
-    corp_code       CHAR(8),                      -- 조회 편의 (기업 단위 일괄 삭제)
-    source_doc      TEXT,                         -- rcept_no 등 원문 FK
-    embedding_model TEXT NOT NULL,                -- 모델 교체 시 재임베딩 대상 특정
-    content_hash    TEXT,                         -- 내용 무변경 시 재임베딩 skip
-    version         INT NOT NULL DEFAULT 1,
-    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-    embedded_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_vector_chunks_owner
-    ON vector_chunks (chunk_type, owner_key);
-CREATE INDEX IF NOT EXISTS idx_vector_chunks_corp
-    ON vector_chunks (corp_code) WHERE corp_code IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_vector_chunks_model
-    ON vector_chunks (embedding_model) WHERE is_active;
-
--- ─────────────────────────────────────────────────────────────
--- 엣지 스테이징 (파서 → [여기] → Neo4j)
+-- 출처   infra/share/postgres.sql.gz 덤프 (PostgreSQL 16)
+-- 검증   빈 DB에 이 파일을 돌려 실DB와 테이블·뷰·컬럼·인덱스·제약이 모두
+--        일치함을 확인했습니다.
 --
--- 파서 산출물을 Neo4j 직행시키지 않고 한 번 받아두는 착지대.
---  (1) 재적재: Neo4j를 비우고 다시 넣을 때 DART 재호출 불필요 (호출 한도 방어)
---  (2) 품질 점검: 노드-엣지 매트릭스 위반 건을 남겨 파서 정확도 추적
---  (3) P2 대조: 뉴스에서 나온 관계가 DART에 있는지 SQL로 비교
--- origin은 엣지 속성 source_type(dart/news)과 같은 의미다. 노드 타입 컬럼과
--- 이름이 겹치지 않도록 origin으로 부른다.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS staged_edges (
-    id               BIGSERIAL PRIMARY KEY,
-    run_id           BIGINT REFERENCES ingest_runs(id),
-    src_node_type    TEXT NOT NULL,               -- Company | Person | Product ...
-    src_key          TEXT NOT NULL,               -- corp_code 또는 정규화 명칭
-    tgt_node_type    TEXT NOT NULL,
-    tgt_key          TEXT NOT NULL,
-    edge_type        TEXT NOT NULL,               -- OWNS_STAKE_IN | SUPPLIES_TO ...
-    subtype          TEXT,
-    properties       JSONB NOT NULL,              -- 표준 메타 전체(시점·근거·신뢰)
-    origin           TEXT NOT NULL,               -- dart | news
-    source_doc       TEXT,                        -- rcept_no
-    validated        BOOLEAN,                     -- 매트릭스 검증 통과 여부
-    validation_error TEXT,                        -- 위반 사유
-    loaded_at        TIMESTAMPTZ,                 -- NULL이면 Neo4j 미적재
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_staged_edges_pending
-    ON staged_edges (edge_type) WHERE loaded_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_staged_edges_invalid
-    ON staged_edges (edge_type) WHERE validated IS FALSE;
-CREATE INDEX IF NOT EXISTS idx_staged_edges_src ON staged_edges (src_key);
-CREATE INDEX IF NOT EXISTS idx_staged_edges_tgt ON staged_edges (tgt_key);
-CREATE INDEX IF NOT EXISTS idx_staged_edges_run ON staged_edges (run_id);
+-- ── 다시 뽑는 법 ────────────────────────────────────────────────
+--   docker exec biznode-postgres pg_dump -U biznode -d biznode \
+--     --schema-only --no-owner --no-privileges \
+--     > infra/postgres/init/02_schema.sql
+--
+--   ★스키마를 바꿨으면 반드시 다시 뽑으세요. 안 하면 또 어긋납니다.
+--     덤프가 없는 새 클론에서는 이 파일이 **DB를 세우는 유일한 길**입니다
+--     (infra/share/ 는 124MB라 .gitignore 에 있습니다).
+--
+-- ── 언제 실행되나 ──────────────────────────────────────────────
+--   컨테이너가 **데이터 디렉터리가 비었을 때만** 실행합니다.
+--   ★이미 표가 있는 DB에 돌리면 에러가 납니다 — 덮어쓰지 않는 게 맞습니다.
+--     데이터까지 필요하면 `bash infra/share_all.sh load` 로 덤프를 복원하세요.
+--
+--   확장(pg_trgm)은 01_extensions.sql 과 겹치지만 둘 다 IF NOT EXISTS 라
+--   무해하고, 이 파일 하나만으로도 스키마가 서도록 남겨 둡니다.
 
--- ─────────────────────────────────────────────────────────────
--- 뉴스 기사 (P2) — 본문은 저장하지 않는다(저작권·방법서 §8).
---   수집 메타 + 필터 판정 결과만 보관하고, 근거는 evidence 스니펫으로.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS news_articles (
-    url            TEXT PRIMARY KEY,
-    title          TEXT NOT NULL,
-    press          TEXT,
-    published_at   TIMESTAMPTZ,
-    source_channel TEXT,                    -- rss | bigkinds | naver
-    title_hash     TEXT,                    -- 제목 정규화 해시(통신사 전재 dedup)
-    body_length    INT,                     -- 확보한 본문 길이(품질 지표)
-    -- 필터 판정 (2단 게이트)
-    rule_passed    BOOLEAN,                 -- 1차 규칙 필터
-    llm_relevant   BOOLEAN,                 -- 2차 제로샷 라우터
-    matched_corps  JSONB,                   -- 언급된 시드 corp_code 목록
-    -- 처리 상태
-    extracted_at   TIMESTAMPTZ,             -- 관계 추출 완료 시각
-    collected_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_news_title_hash ON news_articles (title_hash);
-CREATE INDEX IF NOT EXISTS idx_news_pending
-    ON news_articles (collected_at) WHERE extracted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_news_corps ON news_articles USING GIN (matched_corps);
+-- Dumped from database version 16.14
+-- Dumped by pg_dump version 16.14
 
--- ─────────────────────────────────────────────────────────────
--- 미매핑 관계 표현 (P2) — 12종 어디에도 못 넣고 버린 OTHER를 쌓는다.
---   버린 것을 세어 두면 "무엇을 놓치고 있는지"가 데이터로 드러난다.
---   seen_count가 높은 표현부터 normalizer/relations.py 렉시콘에 추가하면 된다.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS unmapped_relations (
-    expression   TEXT PRIMARY KEY,        -- LLM이 남긴 원문 관계 표현
-    source_name  TEXT,                    -- 관계 주체(예시 1건)
-    target_name  TEXT,                    -- 관계 대상(예시 1건)
-    evidence     TEXT,                    -- 근거 문장(예시 1건)
-    source_doc   TEXT,                    -- 출처 URL/접수번호(예시 1건)
-    seen_count   INT NOT NULL DEFAULT 1,  -- 누적 관측 횟수 ← 렉시콘 추가 우선순위
-    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_unmapped_freq ON unmapped_relations (seen_count DESC);
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
 
--- ─────────────────────────────────────────────────────────────
--- 주가·시가총액 (일별 시세) — DART 아님. data.go.kr 금융위 API 또는 pykrx.
---   주가 API는 stock_code(종목코드) 기준이라 companies.stock_code로 조인한다.
---   Company 노드의 market_cap_snapshot은 여기 최신 행에서 가져온다.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS market_data (
-    stock_code    VARCHAR(6) NOT NULL,
-    trade_date    DATE NOT NULL,
-    close_price   BIGINT,                  -- 종가
-    market_cap    BIGINT,                  -- 시가총액
-    volume        BIGINT,                  -- 거래량
-    trade_value   BIGINT,                  -- 거래대금
-    listed_shares BIGINT,                  -- 상장주식수
-    source        TEXT,                    -- data.go.kr | pykrx
-    PRIMARY KEY (stock_code, trade_date)
-);
-CREATE INDEX IF NOT EXISTS idx_market_data_recent
-    ON market_data (stock_code, trade_date DESC);
+--
+-- Name: pg_trgm; Type: EXTENSION; Schema: -; Owner: -
+--
 
--- ─────────────────────────────────────────────────────────────
--- 사업 개요·현황 (사업보고서 「II. 사업의 내용」 서술 — 경로 C, Sprint 3)
---   원문은 여기, 요약은 ChromaDB profile 컬렉션에 임베딩.
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS business_overview (
-    corp_code     CHAR(8) NOT NULL,
-    bsns_year     SMALLINT NOT NULL,
-    overview_text TEXT,                    -- II-1 사업의 개요
-    products_text TEXT,                    -- II-2 주요 제품 및 서비스
-    source_doc    CHAR(14),                -- 사업보고서 rcept_no
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (corp_code, bsns_year)
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pg_trgm; Type: COMMENT; Schema: -; Owner: 
+--
+
+COMMENT ON EXTENSION pg_trgm IS 'text similarity measurement and index searching based on trigrams';
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: business_overview; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.business_overview (
+    corp_code character(8) NOT NULL,
+    bsns_year smallint NOT NULL,
+    overview_text text,
+    products_text text,
+    source_doc character(14),
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
--- ─────────────────────────────────────────────────────────────
--- 사업부문별 매출 (사업보고서 II-4 — 정량, 기업상세 매출구성 차트용)
--- ─────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS business_segments (
-    corp_code     CHAR(8) NOT NULL,
-    bsns_year     SMALLINT NOT NULL,
-    segment_name  TEXT NOT NULL,           -- 반도체(DS)/DX 등 사업부문
-    revenue       BIGINT,
-    revenue_ratio NUMERIC(5,2),            -- 부문 매출 비중(%)
-    source_doc    CHAR(14),
-    -- ★신뢰 표시 — 값을 지우지 않고 「믿을 수 있는가」를 따로 둔다.
-    --   사업보고서의 품목별 매출 표는 단위(원/천원/백만원)가 표 밖 캡션에 있어
-    --   추출이 자주 틀린다. 실측(2026-08-01): 56개사 중 39개사의 금액이 1,000배
-    --   또는 100만배 어긋나 있었다. 전사 매출과 대조해 배수를 역산·교정했지만
-    --   8개사는 어떤 배수로도 안 맞아 판단을 보류했다.
-    --   비중도 따로 본다 — 합계가 100%에서 크게 벗어나면(수출/내수 중복 등)
-    --   금액은 맞는데 비중만 틀린 경우가 있다.
-    --   화면에서는 false인 값을 **감추고 나머지만** 보여준다.
-    revenue_trusted BOOLEAN NOT NULL DEFAULT TRUE,
-    ratio_trusted   BOOLEAN NOT NULL DEFAULT TRUE,
-    trust_reason    TEXT,                  -- 왜 못 믿는지 (사람이 읽는 설명)
-    PRIMARY KEY (corp_code, bsns_year, segment_name)
+
+--
+-- Name: business_segments; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.business_segments (
+    corp_code character(8) NOT NULL,
+    bsns_year smallint NOT NULL,
+    segment_name text NOT NULL,
+    revenue bigint,
+    revenue_ratio numeric(5,2),
+    source_doc character(14),
+    revenue_trusted boolean DEFAULT true NOT NULL,
+    ratio_trusted boolean DEFAULT true NOT NULL,
+    trust_reason text
 );
-ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
-    revenue_trusted BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
-    ratio_trusted   BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE business_segments ADD COLUMN IF NOT EXISTS
-    trust_reason    TEXT;
+
+
+--
+-- Name: company_aliases; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.company_aliases (
+    alias_key text NOT NULL,
+    canonical_key text NOT NULL,
+    canon_name text,
+    block_key text,
+    source text NOT NULL,
+    note text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: company_attributes; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.company_attributes (
+    node_key text NOT NULL,
+    corp_code character(8),
+    name text NOT NULL,
+    norm_name text,
+    induty text,
+    ceo_nm text,
+    est_dt date,
+    name_en text,
+    sector_label text,
+    sector jsonb,
+    etf_list jsonb,
+    is_seed boolean DEFAULT false NOT NULL,
+    vehicle_type text,
+    resolution_note text,
+    revenue_snapshot bigint,
+    revenue_year smallint,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: company_profiles; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.company_profiles (
+    corp_code character(8) NOT NULL,
+    version integer NOT NULL,
+    text text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: corp_code_master; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.corp_code_master (
+    corp_code character(8) NOT NULL,
+    corp_name text NOT NULL,
+    stock_code character varying(6),
+    market text,
+    modify_date date
+);
+
+
+--
+-- Name: corp_code_verdicts; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.corp_code_verdicts (
+    node_key text NOT NULL,
+    name text NOT NULL,
+    verdict text NOT NULL,
+    corp_code character(8),
+    why text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL,
+    deg integer
+);
+
+
+--
+-- Name: documents; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.documents (
+    rcept_no character(14) NOT NULL,
+    corp_code character(8),
+    doc_type text,
+    title text,
+    rcept_dt date,
+    raw_path text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: edge_audits; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.edge_audits (
+    id bigint NOT NULL,
+    src_name text,
+    edge_type text NOT NULL,
+    tgt_name text,
+    evidence_id text,
+    source_doc text,
+    trail jsonb NOT NULL,
+    moved_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: edge_audits_id_seq; Type: SEQUENCE; Schema: public; Owner: biznode
+--
+
+CREATE SEQUENCE public.edge_audits_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: edge_audits_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: biznode
+--
+
+ALTER SEQUENCE public.edge_audits_id_seq OWNED BY public.edge_audits.id;
+
+
+--
+-- Name: edge_subtypes; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.edge_subtypes (
+    edge_type text NOT NULL,
+    subtype text NOT NULL,
+    seen_count integer DEFAULT 1 NOT NULL,
+    first_seen timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: event_merge_verdicts; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.event_merge_verdicts (
+    id_a text NOT NULL,
+    id_b text NOT NULL,
+    verdict text NOT NULL,
+    reason text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: extraction_runs; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.extraction_runs (
+    corp_code character(8) NOT NULL,
+    company_name text NOT NULL,
+    run_at timestamp with time zone DEFAULT now() NOT NULL,
+    years smallint,
+    month_split boolean DEFAULT false,
+    extract_limit integer,
+    collected integer,
+    rule_passed integer,
+    url_resolved integer,
+    body_ok integer,
+    router_passed integer,
+    extracted integer,
+    edges integer,
+    cost_krw integer,
+    note text
+);
+
+
+--
+-- Name: financials; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.financials (
+    corp_code character(8) NOT NULL,
+    bsns_year smallint NOT NULL,
+    reprt_code character varying(5) NOT NULL,
+    revenue bigint,
+    operating_profit bigint,
+    net_profit bigint,
+    total_assets bigint,
+    total_equity bigint,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    fs_div character varying(3),
+    total_liabilities bigint
+);
+
+
+--
+-- Name: listed_shares; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.listed_shares (
+    corp_code character(8) NOT NULL,
+    stock_code character varying(6),
+    listed bigint NOT NULL,
+    issued bigint,
+    treasury bigint,
+    bsns_year smallint,
+    reprt_code character varying(5),
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    suspect boolean DEFAULT false NOT NULL,
+    suspect_why text
+);
+
+
+--
+-- Name: market_data; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.market_data (
+    stock_code character varying(6) NOT NULL,
+    trade_date date NOT NULL,
+    close_price bigint,
+    market_cap bigint,
+    volume bigint,
+    trade_value bigint,
+    listed_shares bigint,
+    source text,
+    open_price bigint,
+    high_price bigint,
+    low_price bigint,
+    change_pct numeric(8,2)
+);
+
+
+--
+-- Name: market_metrics; Type: VIEW; Schema: public; Owner: biznode
+--
+
+CREATE VIEW public.market_metrics AS
+ WITH latest_fin AS (
+         SELECT DISTINCT ON (financials.corp_code) financials.corp_code,
+            financials.bsns_year,
+            financials.fs_div,
+            financials.revenue,
+            financials.net_profit,
+            financials.total_equity
+           FROM public.financials
+          ORDER BY financials.corp_code, financials.bsns_year DESC
+        )
+ SELECT s.corp_code,
+    m.stock_code,
+    m.trade_date,
+    m.close_price,
+    m.change_pct,
+    m.volume,
+    m.trade_value,
+    s.listed AS listed_shares,
+    ((m.close_price)::numeric * (s.listed)::numeric) AS market_cap,
+    f.bsns_year AS fin_year,
+    f.fs_div,
+        CASE
+            WHEN (f.net_profit > 0) THEN round((((m.close_price)::numeric * (s.listed)::numeric) / (f.net_profit)::numeric), 2)
+            ELSE NULL::numeric
+        END AS per,
+        CASE
+            WHEN (f.total_equity > 0) THEN round((((m.close_price)::numeric * (s.listed)::numeric) / (f.total_equity)::numeric), 2)
+            ELSE NULL::numeric
+        END AS pbr,
+        CASE
+            WHEN (f.revenue > 0) THEN round((((m.close_price)::numeric * (s.listed)::numeric) / (f.revenue)::numeric), 2)
+            ELSE NULL::numeric
+        END AS psr
+   FROM ((public.market_data m
+     JOIN public.listed_shares s ON ((((s.stock_code)::text = (m.stock_code)::text) AND (NOT s.suspect))))
+     LEFT JOIN latest_fin f ON ((f.corp_code = s.corp_code)));
+
+
+--
+-- Name: name_merge_verdicts; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.name_merge_verdicts (
+    key_a text NOT NULL,
+    key_b text NOT NULL,
+    same boolean NOT NULL,
+    reason text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: name_verdicts; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.name_verdicts (
+    name text NOT NULL,
+    kind text DEFAULT 'entity'::text NOT NULL,
+    is_proper boolean NOT NULL,
+    reason text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: news_articles; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.news_articles (
+    url text NOT NULL,
+    title text NOT NULL,
+    press text,
+    published_at timestamp with time zone,
+    source_channel text,
+    title_hash text,
+    body_length integer,
+    rule_passed boolean,
+    llm_relevant boolean,
+    matched_corps jsonb,
+    extracted_at timestamp with time zone,
+    collected_at timestamp with time zone DEFAULT now() NOT NULL,
+    topics jsonb
+);
+
+
+--
+-- Name: person_merge_verdicts; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.person_merge_verdicts (
+    key_a text NOT NULL,
+    key_b text NOT NULL,
+    same boolean NOT NULL,
+    reason text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: product_names; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.product_names (
+    norm_key text NOT NULL,
+    display text NOT NULL,
+    seen_count integer DEFAULT 1 NOT NULL,
+    last_seen timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: purged_edges; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.purged_edges (
+    id bigint NOT NULL,
+    purged_at timestamp with time zone DEFAULT now() NOT NULL,
+    src_name text,
+    edge_type text,
+    tgt_name text,
+    subtype text,
+    source_type text,
+    source_doc text,
+    evidence_id text,
+    stage1 text,
+    verdict text,
+    verdict_why text
+);
+
+
+--
+-- Name: purged_edges_id_seq; Type: SEQUENCE; Schema: public; Owner: biznode
+--
+
+CREATE SEQUENCE public.purged_edges_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: purged_edges_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: biznode
+--
+
+ALTER SEQUENCE public.purged_edges_id_seq OWNED BY public.purged_edges.id;
+
+
+--
+-- Name: purged_nodes; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.purged_nodes (
+    id bigint NOT NULL,
+    purged_at timestamp with time zone DEFAULT now() NOT NULL,
+    label text NOT NULL,
+    node_key text,
+    name text,
+    reason text,
+    props jsonb
+);
+
+
+--
+-- Name: purged_nodes_id_seq; Type: SEQUENCE; Schema: public; Owner: biznode
+--
+
+CREATE SEQUENCE public.purged_nodes_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: purged_nodes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: biznode
+--
+
+ALTER SEQUENCE public.purged_nodes_id_seq OWNED BY public.purged_nodes.id;
+
+
+--
+-- Name: staged_edges; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.staged_edges (
+    id bigint NOT NULL,
+    run_id bigint,
+    src_node_type text NOT NULL,
+    src_key text NOT NULL,
+    tgt_node_type text NOT NULL,
+    tgt_key text NOT NULL,
+    edge_type text NOT NULL,
+    subtype text,
+    properties jsonb NOT NULL,
+    origin text NOT NULL,
+    source_doc text,
+    validated boolean,
+    validation_error text,
+    loaded_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: staged_edges_id_seq; Type: SEQUENCE; Schema: public; Owner: biznode
+--
+
+CREATE SEQUENCE public.staged_edges_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: staged_edges_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: biznode
+--
+
+ALTER SEQUENCE public.staged_edges_id_seq OWNED BY public.staged_edges.id;
+
+
+--
+-- Name: unmapped_relations; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.unmapped_relations (
+    expression text NOT NULL,
+    source_name text,
+    target_name text,
+    evidence text,
+    source_doc text,
+    seen_count integer DEFAULT 1 NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vector_chunks; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.vector_chunks (
+    chunk_id text NOT NULL,
+    chunk_type text NOT NULL,
+    collection text NOT NULL,
+    owner_key text NOT NULL,
+    corp_code character(8),
+    source_doc text,
+    embedding_model text NOT NULL,
+    content_hash text,
+    version integer DEFAULT 1 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    embedded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: edge_audits id; Type: DEFAULT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.edge_audits ALTER COLUMN id SET DEFAULT nextval('public.edge_audits_id_seq'::regclass);
+
+
+--
+-- Name: purged_edges id; Type: DEFAULT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.purged_edges ALTER COLUMN id SET DEFAULT nextval('public.purged_edges_id_seq'::regclass);
+
+
+--
+-- Name: purged_nodes id; Type: DEFAULT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.purged_nodes ALTER COLUMN id SET DEFAULT nextval('public.purged_nodes_id_seq'::regclass);
+
+
+--
+-- Name: staged_edges id; Type: DEFAULT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.staged_edges ALTER COLUMN id SET DEFAULT nextval('public.staged_edges_id_seq'::regclass);
+
+
+--
+-- Data for Name: business_overview; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: business_segments; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: company_aliases; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: company_attributes; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: company_profiles; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: corp_code_master; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: corp_code_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: documents; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: edge_audits; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: edge_subtypes; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: event_merge_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: extraction_runs; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: financials; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: listed_shares; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: market_data; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: name_merge_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: name_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: news_articles; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: person_merge_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: product_names; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: purged_edges; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: purged_nodes; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: staged_edges; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: unmapped_relations; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Data for Name: vector_chunks; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
+-- Name: edge_audits_id_seq; Type: SEQUENCE SET; Schema: public; Owner: biznode
+--
+
+
+--
+-- Name: purged_edges_id_seq; Type: SEQUENCE SET; Schema: public; Owner: biznode
+--
+
+
+--
+-- Name: purged_nodes_id_seq; Type: SEQUENCE SET; Schema: public; Owner: biznode
+--
+
+
+--
+-- Name: staged_edges_id_seq; Type: SEQUENCE SET; Schema: public; Owner: biznode
+--
+
+
+--
+-- Name: business_overview business_overview_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.business_overview
+    ADD CONSTRAINT business_overview_pkey PRIMARY KEY (corp_code, bsns_year);
+
+
+--
+-- Name: business_segments business_segments_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.business_segments
+    ADD CONSTRAINT business_segments_pkey PRIMARY KEY (corp_code, bsns_year, segment_name);
+
+
+--
+-- Name: company_aliases company_aliases_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.company_aliases
+    ADD CONSTRAINT company_aliases_pkey PRIMARY KEY (alias_key);
+
+
+--
+-- Name: company_attributes company_attributes_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.company_attributes
+    ADD CONSTRAINT company_attributes_pkey PRIMARY KEY (node_key);
+
+
+--
+-- Name: company_profiles company_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.company_profiles
+    ADD CONSTRAINT company_profiles_pkey PRIMARY KEY (corp_code, version);
+
+
+--
+-- Name: corp_code_master corp_code_master_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.corp_code_master
+    ADD CONSTRAINT corp_code_master_pkey PRIMARY KEY (corp_code);
+
+
+--
+-- Name: corp_code_verdicts corp_code_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.corp_code_verdicts
+    ADD CONSTRAINT corp_code_verdicts_pkey PRIMARY KEY (node_key);
+
+
+--
+-- Name: documents documents_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_pkey PRIMARY KEY (rcept_no);
+
+
+--
+-- Name: edge_audits edge_audits_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.edge_audits
+    ADD CONSTRAINT edge_audits_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: edge_subtypes edge_subtypes_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.edge_subtypes
+    ADD CONSTRAINT edge_subtypes_pkey PRIMARY KEY (edge_type, subtype);
+
+
+--
+-- Name: event_merge_verdicts event_merge_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.event_merge_verdicts
+    ADD CONSTRAINT event_merge_verdicts_pkey PRIMARY KEY (id_a, id_b);
+
+
+--
+-- Name: extraction_runs extraction_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.extraction_runs
+    ADD CONSTRAINT extraction_runs_pkey PRIMARY KEY (corp_code, run_at);
+
+
+--
+-- Name: financials financials_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.financials
+    ADD CONSTRAINT financials_pkey PRIMARY KEY (corp_code, bsns_year, reprt_code);
+
+
+--
+-- Name: listed_shares listed_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.listed_shares
+    ADD CONSTRAINT listed_shares_pkey PRIMARY KEY (corp_code);
+
+
+--
+-- Name: market_data market_data_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.market_data
+    ADD CONSTRAINT market_data_pkey PRIMARY KEY (stock_code, trade_date);
+
+
+--
+-- Name: name_merge_verdicts name_merge_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.name_merge_verdicts
+    ADD CONSTRAINT name_merge_verdicts_pkey PRIMARY KEY (key_a, key_b);
+
+
+--
+-- Name: name_verdicts name_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.name_verdicts
+    ADD CONSTRAINT name_verdicts_pkey PRIMARY KEY (name, kind);
+
+
+--
+-- Name: news_articles news_articles_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.news_articles
+    ADD CONSTRAINT news_articles_pkey PRIMARY KEY (url);
+
+
+--
+-- Name: person_merge_verdicts person_merge_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.person_merge_verdicts
+    ADD CONSTRAINT person_merge_verdicts_pkey PRIMARY KEY (key_a, key_b);
+
+
+--
+-- Name: product_names product_names_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.product_names
+    ADD CONSTRAINT product_names_pkey PRIMARY KEY (norm_key);
+
+
+--
+-- Name: purged_edges purged_edges_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.purged_edges
+    ADD CONSTRAINT purged_edges_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: purged_nodes purged_nodes_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.purged_nodes
+    ADD CONSTRAINT purged_nodes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: staged_edges staged_edges_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.staged_edges
+    ADD CONSTRAINT staged_edges_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: unmapped_relations unmapped_relations_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.unmapped_relations
+    ADD CONSTRAINT unmapped_relations_pkey PRIMARY KEY (expression);
+
+
+--
+-- Name: vector_chunks vector_chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.vector_chunks
+    ADD CONSTRAINT vector_chunks_pkey PRIMARY KEY (chunk_id);
+
+
+--
+-- Name: company_aliases_block; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX company_aliases_block ON public.company_aliases USING btree (block_key);
+
+
+--
+-- Name: idx_company_attributes_corp; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_company_attributes_corp ON public.company_attributes USING btree (corp_code) WHERE (corp_code IS NOT NULL);
+
+
+--
+-- Name: idx_corp_name_trgm; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_corp_name_trgm ON public.corp_code_master USING gin (corp_name public.gin_trgm_ops);
+
+
+--
+-- Name: idx_corp_stock_code; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_corp_stock_code ON public.corp_code_master USING btree (stock_code) WHERE (stock_code IS NOT NULL);
+
+
+--
+-- Name: idx_documents_corp; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_documents_corp ON public.documents USING btree (corp_code, rcept_dt DESC);
+
+
+--
+-- Name: idx_documents_type; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_documents_type ON public.documents USING btree (doc_type);
+
+
+--
+-- Name: idx_edge_audits_ev; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_edge_audits_ev ON public.edge_audits USING btree (evidence_id) WHERE (evidence_id IS NOT NULL);
+
+
+--
+-- Name: idx_edge_audits_type; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_edge_audits_type ON public.edge_audits USING btree (edge_type);
+
+
+--
+-- Name: idx_extraction_runs_corp; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_extraction_runs_corp ON public.extraction_runs USING btree (corp_code);
+
+
+--
+-- Name: idx_listed_shares_stock; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_listed_shares_stock ON public.listed_shares USING btree (stock_code);
+
+
+--
+-- Name: idx_market_data_recent; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_market_data_recent ON public.market_data USING btree (stock_code, trade_date DESC);
+
+
+--
+-- Name: idx_news_corps; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_news_corps ON public.news_articles USING gin (matched_corps);
+
+
+--
+-- Name: idx_news_pending; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_news_pending ON public.news_articles USING btree (collected_at) WHERE (extracted_at IS NULL);
+
+
+--
+-- Name: idx_news_title_hash; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_news_title_hash ON public.news_articles USING btree (title_hash);
+
+
+--
+-- Name: idx_staged_edges_invalid; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_staged_edges_invalid ON public.staged_edges USING btree (edge_type) WHERE (validated IS FALSE);
+
+
+--
+-- Name: idx_staged_edges_pending; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_staged_edges_pending ON public.staged_edges USING btree (edge_type) WHERE (loaded_at IS NULL);
+
+
+--
+-- Name: idx_staged_edges_run; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_staged_edges_run ON public.staged_edges USING btree (run_id);
+
+
+--
+-- Name: idx_staged_edges_src; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_staged_edges_src ON public.staged_edges USING btree (src_key);
+
+
+--
+-- Name: idx_staged_edges_tgt; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_staged_edges_tgt ON public.staged_edges USING btree (tgt_key);
+
+
+--
+-- Name: idx_unmapped_freq; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_unmapped_freq ON public.unmapped_relations USING btree (seen_count DESC);
+
+
+--
+-- Name: idx_vector_chunks_corp; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_vector_chunks_corp ON public.vector_chunks USING btree (corp_code) WHERE (corp_code IS NOT NULL);
+
+
+--
+-- Name: idx_vector_chunks_model; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_vector_chunks_model ON public.vector_chunks USING btree (embedding_model) WHERE is_active;
+
+
+--
+-- Name: idx_vector_chunks_owner; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX idx_vector_chunks_owner ON public.vector_chunks USING btree (chunk_type, owner_key);
+
+
+--
+-- Name: ix_news_corps; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX ix_news_corps ON public.news_articles USING gin (matched_corps);
+
+
+--
+-- Name: ix_news_published; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX ix_news_published ON public.news_articles USING btree (published_at DESC);
+
+
+--
+-- Name: ix_news_topics; Type: INDEX; Schema: public; Owner: biznode
+--
+
+CREATE INDEX ix_news_topics ON public.news_articles USING gin (topics);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+
