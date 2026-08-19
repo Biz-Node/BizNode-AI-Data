@@ -74,6 +74,49 @@ def _allocate_by_channel(items: list, budget: int) -> list:
     return out
 
 
+_PENDING_SQL = """
+SELECT url, title, press, published_at, source_channel, title_hash, matched_corps
+FROM news_articles
+WHERE rule_passed
+  AND extracted_at IS NULL
+  AND (llm_relevant IS NULL OR llm_relevant)
+ORDER BY published_at DESC NULLS LAST
+LIMIT %s
+"""
+
+
+def pending_articles(conn, limit: int = 300) -> list[ScreenedArticle]:
+    """**이미 모아 둔 기사 중 아직 추출 안 한 것.**
+
+    ★수집과 추출을 잇는 자리다. 전에는 추출 배치가 RSS 를 **다시 받았다**.
+      RSS 는 최근 것만 뱉으니, 수집 배치가 어제 저장한 기사를 추출 배치가
+      오늘 돌면 **못 찾고 지나갔다** — 실측(2026-08-18): 규칙을 통과했는데
+      추출이 안 된 기사가 6,403건 쌓여 있었다. `idx_news_pending` 인덱스는
+      만들어져 있는데 읽는 코드가 없었다.
+
+    ★`llm_relevant IS FALSE` 는 뺀다. 이미 「관계 기사가 아니다」로 판정된 것이라
+      다시 볼 이유가 없다(6,403건 중 4,610건이 여기 해당한다).
+
+    ★본문은 여기서 안 채운다. 저장하지 않으므로(방법서 §8) 추출 직전에
+      다시 크롤링해야 한다 — 부르는 쪽이 `enrich_bodies` 를 돌린다.
+    """
+    import json
+
+    with conn.cursor() as cur:
+        cur.execute(_PENDING_SQL, (limit,))
+        rows = cur.fetchall()
+
+    out: list[ScreenedArticle] = []
+    for url, title, press, at, channel, _thash, corps in rows:
+        codes = corps if isinstance(corps, list) else json.loads(corps or "[]")
+        # `title_hash` 는 Article 이 제목에서 계산하는 property 라 넣지 않는다 —
+        # 제목이 같으면 같은 값이 나온다.
+        art = Article(url=url, title=title or "", body="", press=press or "",
+                      published_at=at, source_channel=channel or "rss")
+        out.append(ScreenedArticle(art, codes, [], "PG 미처리분"))
+    return out
+
+
 def collect_and_screen(conn, *, limit_router: Optional[int] = None,
                        use_naver: bool = False, seed_names: Optional[list[str]] = None,
                        crawl_bodies: bool = True,
