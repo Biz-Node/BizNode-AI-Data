@@ -47,13 +47,29 @@ from pydantic import BaseModel, Field
 
 
 class DetailLevel(str, Enum):
-    """이 기업에 대해 **얼마나 아는가.** `relations_only` 가 정상이다 —
-    3,432곳 중 재무 477 · 시세 417 · 공시 64.
+    """이 기업을 **얼마나 수집했는가.** `none` 이 정상입니다 — 3,432곳 중
+    2,952곳이 여기 해당하고, 외국 기업도 여기 옵니다.
+
+        full      64곳     사업보고서까지 다 돌았다 — 상세 페이지가 꽉 찬다
+        partial  416곳     숫자까지 있다 (재무·시세) — 공시·개요·사업부문이 없다
+        none   2,952곳     **수집을 위한 작업을 하지 않았다.** 다른 기업을
+                           수집하다 관계로 딸려온 노드다
+
+    **`full` 과 `partial` 은 상세 페이지를 엽니다.** `partial` 도 재무 3개년·
+    주가·시총·제품·관계·사건이 나와서 볼 만합니다. 없는 블록은 `blocks` 를
+    보고 안 그리면 됩니다.
+
+    ★`none` 이라고 **빈 노드가 아닙니다.** 관계·사건·뉴스는 있습니다
+      (엔비디아: 관계 59 · 블록 7/11). 좌 패널 요약은 그려야 하고,
+      상세 페이지만 「아직 수집하지 않았습니다」로 막으면 됩니다.
+
+    ★「비상장이라서」로 설명하면 안 됩니다 — 국내 상장사도 섞여 있습니다
+      (현대차·현대중공업이 별칭 노드로 갈라져 여기 있습니다).
     """
 
-    full = "full"                      # 재무·공시·사업부문까지 (시드 64곳)
-    relations_only = "relations_only"   # 관계와 기본 정보만 (해외·비상장 다수)
-    none = "none"                      # 이름만 아는 노드
+    full = "full"
+    partial = "partial"
+    none = "none"
 
 
 # `partial` 은 구글 차단이나 상한에 걸려 중간에 멈춘 것이다. 화면이
@@ -151,7 +167,8 @@ class SearchHit(BaseModel):
     ksic_label: Optional[str] = Field(
         None, description="**화면에 쓸 업종 이름.** 코드는 사용자가 못 읽는다",
         examples=["전자부품·컴퓨터·영상·음향·통신장비"])
-    detail_level: DetailLevel = DetailLevel.relations_only
+    # 명부에만 있는 회사(`in_graph=false`)는 등급이 없다 — `null` 이 정상이다
+    detail_level: Optional[DetailLevel] = DetailLevel.none
     matched_on: Literal["name", "alias", "corp_code"] = Field(
         "name", description="무엇으로 걸렸나. `alias` 면 옛 표기로 찾아진 것")
     degree: int = Field(0, description="관계 수. 같은 이름이 여럿일 때 **정렬 기준**")
@@ -699,6 +716,14 @@ class GraphResponse(BaseModel):
                     "이어 주므로 줄어든다. 담은 기업끼리 직접 연결이 없는지는 엣지의 "
                     "양 끝이 모두 담은 기업인 것을 세어 알 수 있다")
     truncated: bool = Field(False, description="`max_nodes` 에 걸려 잘렸나")
+    # ★없는 키를 **조용히 버리지 않는다.** 검색이 DART 명부까지 보여 주므로
+    #   아직 수집 안 한 회사가 담겨 올 수 있다. 말없이 빼면 화면이 「담았는데
+    #   왜 안 보이지」를 설명할 수 없다.
+    unknown_keys: list[str] = Field(
+        default_factory=list,
+        description="**그래프에 없어서 못 그린 키.** 화면은 「아직 수집하지 않아 "
+                    "그래프에 없습니다」로 알린다",
+        examples=[["01622599"]])
     # ★참조 기업은 **두 축에서 각각 상위 5곳만** 보낸다. 후보가 몇 곳이었는지를
     #   알려 주지 않으면 화면은 그게 전부인 줄 안다 — 실측: 반도체 워크스페이스의
     #   참조 후보가 **337곳**인데 10곳만 나간다.
@@ -733,18 +758,32 @@ class RiskEvent(BaseModel):
 class NewsFeedItem(NewsItem):
     """뉴스/이슈 화면의 한 줄 — 기사에 **어느 기업·어떤 사건이 걸렸는지**까지."""
 
-    companies: list[RelationEndpoint] = Field(default_factory=list)
+    companies: list[RelationEndpoint] = Field(
+        default_factory=list,
+        description="이 기사에 언급된 **우리가 아는 기업.** 이름을 못 찾는 키는 뺀다")
     event: Optional[RelationEndpoint] = None
-    category: Optional[str] = Field(None, description="공급망 · 지분 · 규제 · 사건",
-                                    examples=["규제"])
-    is_risk: bool = False
+    # 한 기사가 여러 갈래에 걸리는 게 정상이다 — 「공정위, 납품단가 담합 제재」는
+    # 공급망이면서 규제다. 하나로 고르면 화면이 절반을 놓친다.
+    categories: list[str] = Field(
+        default_factory=list, description="공급망 · 지분 · 규제 · 사건 (**여러 개 가능**)",
+        examples=[["공급망", "규제"]])
+    is_risk: bool = Field(False, description="사건 갈래에 걸렸나")
 
 
-# 서로 배타적인지 겹쳐 쓸 수 있는지 알 수 없다.
 class NewsFeedResponse(BaseModel):
-    """필터가 **세 축**이다. 한 줄에 몰면 「위험만」과 「내 워크스페이스」가"""
+    """뉴스/이슈 화면. 필터가 **세 축**이고 겹쳐 쓸 수 있다.
 
-    total: int = 0
+        축 1  category        전체 · 공급망 · 지분 · 규제 · 사건
+        축 2  workspace_keys  전체 · 내 워크스페이스
+        축 3  정렬             최신순
+
+    한 줄에 몰면 「위험만」과 「내 워크스페이스」가 배타적인지 겹칠 수 있는지
+    알 수 없어서 갈라 두었다.
+
+    본문은 없다 — 제목·언론사·발행일·링크까지다. 원문은 언론사 링크로 간다.
+    """
+
+    total: int = Field(0, description="필터를 통과한 **전체 수**. 화면은 「2,387건 중 20건」")
     items: list[NewsFeedItem] = Field(default_factory=list)
 
 
@@ -907,7 +946,7 @@ class Suggestion(BaseModel):
     via: list[str] = Field(default_factory=list, description="무엇을 통해 겹치나",
                            examples=[["삼성전자", "SK하이닉스", "마이크론", "엔비디아"]])
     in_graph: bool = True
-    detail_level: DetailLevel = DetailLevel.relations_only
+    detail_level: DetailLevel = DetailLevel.none
     ksic_label: Optional[str] = None
 
 

@@ -43,8 +43,23 @@ case "${1:-}" in
     mkdir -p "$OUT"
 
     echo "■ [1/3] PostgreSQL — 기사 메타 · 재무 · 공시"
-    docker exec biznode-postgres pg_dump -U biznode -d biznode --clean --if-exists \
-      | gzip > "$OUT/postgres.sql.gz"
+    # ★임시 파일에 받고 **성공했을 때만** 자리를 바꾼다.
+    #   전에는 `pg_dump | gzip > 파일` 이라, docker 가 꺼져 pg_dump 가 실패해도
+    #   gzip 이 빈 파일을 먼저 만들어 **멀쩡한 덤프를 20바이트로 덮어썼다**
+    #   (2026-08-19 실측: 6.7MB → 20B). 파이프는 앞이 죽어도 뒤가 돈다.
+    if ! docker exec biznode-postgres pg_dump -U biznode -d biznode --clean --if-exists \
+         | gzip > "$OUT/postgres.sql.gz.tmp"; then
+      rm -f "$OUT/postgres.sql.gz.tmp"
+      echo "  ✗ pg_dump 실패 — 기존 덤프를 그대로 둡니다" >&2
+      exit 1
+    fi
+    # 빈 gzip 은 20바이트다. 크기로 한 번 더 거른다.
+    if [ "$(wc -c < "$OUT/postgres.sql.gz.tmp")" -lt 1000 ]; then
+      rm -f "$OUT/postgres.sql.gz.tmp"
+      echo "  ✗ 덤프가 비었습니다 — 기존 덤프를 그대로 둡니다" >&2
+      exit 1
+    fi
+    mv "$OUT/postgres.sql.gz.tmp" "$OUT/postgres.sql.gz"
 
     echo "■ [2/3] ChromaDB — 근거 문장 · 기업 카드"
     #   실행 중 복사해도 되지만 안전하게 멈췄다 켠다

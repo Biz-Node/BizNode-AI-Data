@@ -89,15 +89,20 @@ def _tier(q: str, name: str, names: list[str]) -> tuple[int, str]:
     return 3, "alias"
 
 
-def _detail_level(row: dict, has_attr: bool) -> str:
-    """이 기업에 대해 얼마나 아는가.
+def _detail_level(row: dict, has_fin: bool) -> str:
+    """이 기업에 대해 얼마나 아는가. **상세와 같은 기준으로 판정한다.**
 
-    ★`full` 은 시드 64곳뿐이다 — 재무·공시·사업부문까지 있는 경우.
-      나머지는 관계는 있어도 숫자가 없는 게 **정상**이다.
+    ★검색 결과에는 `blocks` 가 없다. 사용자가 목록에서 「볼 게 있나」를 판단할
+      단서가 이 값뿐이라, 「재무·시세는 있음」(416곳)을 「관계만」으로 뭉개면
+      HD현대중공업 같은 곳이 실제보다 빈약해 보인다.
+
+        full             사업개요까지 (시드 64곳) — 상세 페이지가 꽉 찬다
+        partial          재무나 시세가 있다 (416곳)
+        none   그 외 — 외국 기업이 여기 온다. 정상이다
     """
     if row.get("is_stub") is False:
         return "full"
-    return "relations_only" if has_attr else "none"
+    return "partial" if has_fin else "none"
 
 
 def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[str, Any]:
@@ -106,7 +111,7 @@ def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[st
     반환 `hits[]` 의 각 항목:
         key           이후 모든 조회에 쓰는 키
         in_graph      **false 면 DART 명부에만 있는 회사** — 자료가 없다
-        detail_level  full / relations_only / none
+        detail_level  full / partial / none · 명부 결과는 null
         ksic_label    업종 이름. 코드(`ksic`)도 함께 준다
     """
     q = (q or "").strip()
@@ -118,14 +123,19 @@ def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[st
     with neo4j_session() as s:
         rows = [dict(r) for r in s.run(_GRAPH, q=q)]
 
-    # 상세 정보가 PG 에 있는지 — `detail_level` 판정에 쓴다
+    # ★`partial` 을 가르려면 **재무·시세 보유 여부**를 봐야 한다.
+    #   전에는 `company_attributes`(대표·설립일)를 읽고 있었는데, 그건
+    #   「이름 말고 뭐라도 있나」지 「숫자가 있나」가 아니다.
     keys = [r["corp_code"] or r["norm_name"] for r in rows]
-    attrs: set[str] = set()
-    if keys:
+    corps = [r["corp_code"] for r in rows if r["corp_code"]]
+    has_num: set[str] = set()
+    if corps:
         with postgres_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT node_key FROM company_attributes WHERE node_key = ANY(%s)",
-                        (keys,))
-            attrs = {k.strip() for (k,) in cur.fetchall()}
+            cur.execute("""SELECT corp_code FROM financials WHERE corp_code = ANY(%s)
+                           UNION
+                           SELECT corp_code FROM market_metrics WHERE corp_code = ANY(%s)""",
+                        (corps, corps))
+            has_num = {k.strip() for (k,) in cur.fetchall()}
 
     hits: list[dict[str, Any]] = []
     for r in rows:
@@ -141,7 +151,7 @@ def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[st
             "stock_code": r["stock_code"],
             "ksic": r["ksic"],
             "ksic_label": label_of(r["ksic"]) if r["ksic"] else None,
-            "detail_level": _detail_level(r, key in attrs),
+            "detail_level": _detail_level(r, key in has_num),
             "matched_on": matched,
             "degree": r["degree"] or 0,
             "_tier": tier,
@@ -169,7 +179,8 @@ def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[st
                     "stock_code": sc or None,
                     "ksic": None,
                     "ksic_label": None,
-                    "detail_level": "none",
+                    # 명부에만 있는 회사는 등급이 없다. `in_graph=false` 가 말해 준다
+                    "detail_level": None,
                     "matched_on": "name",
                     "degree": 0,
                     "_tier": tier,

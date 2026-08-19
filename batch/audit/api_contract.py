@@ -112,6 +112,17 @@ def check_schema_examples(problems: list[str]) -> None:
     from app.core.database import neo4j_session
 
     src = Path("app/api/schemas.py").read_text(encoding="utf-8")
+    # ★`unknown_keys` 의 예시는 **일부러 없는 키**다. 「그래프에 없어서 못 그린
+    #   키」를 보여 주는 필드라, 실재하면 오히려 예시가 틀린 것이다.
+    keep, skip = [], False
+    for line in src.splitlines():
+        if "unknown_keys" in line:
+            skip = True
+        if not skip:
+            keep.append(line)
+        if skip and line.rstrip().endswith(")"):
+            skip = False
+    src = chr(10).join(keep)
     keys = sorted(set(re.findall(r'"(\d{8})"', src)))
     print(f"\n■ schemas.py 예시 키 {len(keys)}개 — /docs 의 Try it out 기본값")
     with neo4j_session() as s:
