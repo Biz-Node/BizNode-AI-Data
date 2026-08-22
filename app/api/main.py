@@ -40,6 +40,7 @@ from fastapi.responses import HTMLResponse
 from app.api import examples as ex
 from app.core.config import CHROMA_HOST, CHROMA_PORT
 from app.services.retrieve_service import RetrieveService
+from app.services.answer_service import AnswerService
 from app.services import (
     company_service,
     insight_service,
@@ -49,7 +50,7 @@ from app.services import (
     workspace_service,
 )
 from app.api.schemas import (
-    AskRequest, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
+    AskRequest, AskResponse, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
     Filing, GraphResponse, InsightCard, MarketResponse, NewsFeedResponse, NewsItem,
     OwnershipResponse, ProductItem, Propagation, Relation, RelationDetail,
     RetrieveResponse, RiskEvent, SearchResponse, Suggestion, TrendingItem,
@@ -96,6 +97,7 @@ app = FastAPI(
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
 _retrieve_service = RetrieveService()
+_answer_service = AnswerService(_retrieve_service)
 
 
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
@@ -506,6 +508,21 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
     return await _retrieve_service.retrieve_async(body)
+
+
+@app.post("/ask", response_model=AskResponse, tags=["챗봇"],
+          summary="챗봇 답변 생성")
+async def ask(body: AskRequest) -> AskResponse:
+    """질문 하나 → LLM 이 쓴 답변 + 화이트리스트를 통과한 근거.
+
+    `/retrieve` 가 만든 재료 밖의 것은 인용할 수 없다 — `sources` 에 실리는
+    `evidence_id` 는 전부 서버가 재료 안에서 확인한 것이다.
+
+    - `failed=true` 면 `answer` 는 고정 안내 문구다. `sources` 는 그래도 원본
+      근거를 담고 있다 — 답을 못 썼어도 근거는 보여줄 수 있다.
+    - `missing=true` 였던 근거는 `sources` 에 오지 않는다.
+    """
+    return await _answer_service.ask_async(body)
 
 
 @app.get("/health", tags=["운영"], summary="상태 확인")
