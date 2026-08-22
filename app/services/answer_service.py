@@ -72,6 +72,13 @@ def _fact_lines(retrieved: RetrieveResponse) -> str:
     return "\n".join(lines) if lines else "(찾은 사실 없음)"
 
 
+def _neutralize_delimiters(text: str) -> str:
+    """`<`/`>` 를 그대로 두면 근거 원문 속 `</evidence>` 가 델리미터를 조기에
+    닫아버릴 수 있다(설계서 §13-2). 보기엔 비슷하지만 태그로는 안 먹히는
+    문자로 바꿔 델리미터 무결성을 지킨다."""
+    return text.replace("<", "‹").replace(">", "›")
+
+
 def _evidence_block(retrieved: RetrieveResponse) -> str:
     blocks = []
     for evidence in retrieved.evidence:
@@ -79,7 +86,8 @@ def _evidence_block(retrieved: RetrieveResponse) -> str:
             continue
         blocks.append(
             f'<evidence id="{evidence.evidence_id}" source_type="{evidence.source_type}" '
-            f'published_at="{evidence.published_at}">\n{evidence.text}\n</evidence>')
+            f'published_at="{evidence.published_at or ""}">\n'
+            f'{_neutralize_delimiters(evidence.text)}\n</evidence>')
     return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
 
 
@@ -115,7 +123,7 @@ def _sources_from(evidence_ids: list[str], retrieved: RetrieveResponse) -> list[
     """
     by_id = {e.evidence_id: e for e in retrieved.evidence}
     out: list[Source] = []
-    for eid in evidence_ids:
+    for eid in dict.fromkeys(evidence_ids):  # 순서를 지키며 중복 id 제거
         evidence = by_id.get(eid)
         if evidence is None or evidence.missing:
             continue
@@ -145,7 +153,11 @@ class AnswerService:
             return AskResponse(answer=_SAFE_MESSAGE,
                                sources=_fallback_sources(retrieved), failed=True)
 
-        sources = _sources_from(result["evidence_ids"], retrieved)
+        if not result["answer"].strip():  # 빈 답변도 실패로 취급한다(설계서 §13-5)
+            return AskResponse(answer=_SAFE_MESSAGE,
+                               sources=_fallback_sources(retrieved), failed=True)
+
+        sources = _sources_from(result.get("evidence_ids", []), retrieved)
         return AskResponse(answer=result["answer"], sources=sources, failed=False)
 
     async def ask_async(self, request: AskRequest) -> AskResponse:
