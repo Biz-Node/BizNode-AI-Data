@@ -903,6 +903,30 @@ class RetrieveResponse(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  답변 (Answer Layer)
+# ══════════════════════════════════════════════════════════════════
+
+
+class Source(BaseModel):
+    """LLM 이 인용한 근거 한 건 — 화이트리스트를 통과한 것만 여기 온다."""
+
+    evidence_id: str = Field(examples=["ev_684dc0c435ca1676"])
+    edge_id: Optional[str] = Field(None, description="근거가 관계에서 왔을 때만")
+    text: str
+    source_doc: str
+    source_type: Literal["dart", "news"] = "news"
+    published_at: Optional[str] = Field(None, examples=["2026-03-23"])
+
+
+class AskResponse(BaseModel):
+    """`/ask` 응답. `failed=True` 면 `answer` 는 고정 문구다 — 성공과 구별한다."""
+
+    answer: str
+    sources: list[Source] = Field(default_factory=list)
+    failed: bool = False
+
+
+# ══════════════════════════════════════════════════════════════════
 #  요청 바디 — POST 로 받는 것
 # ══════════════════════════════════════════════════════════════════
 
