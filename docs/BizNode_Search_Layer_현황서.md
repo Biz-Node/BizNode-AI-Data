@@ -420,7 +420,7 @@ uvicorn app.api.main:app --reload    # /docs 에서 POST /retrieve Try it out
 .venv-wsl/bin/python -m pytest tests/search/eval -q          # 평가셋만 (약 16초)
 .venv-wsl/bin/python -m pytest tests/search/eval -q -rA      # 케이스별 판정까지
 .venv-wsl/bin/python -m tests.search.eval.report \
-    -o BizNode_Search_Layer_평가셋.md                        # 결과 문서 다시 만들기
+    -o docs/BizNode_Search_Layer_평가셋.md                   # 결과 문서 다시 만들기
 ```
 
 **기업명을 못 박는 케이스와 구조 조건만 보는 케이스를 가릅니다**(`EvalCase.kind`).

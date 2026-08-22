@@ -1,7 +1,8 @@
-"""평가셋을 전부 실행해 현황 문서(`BizNode_Search_Layer_평가셋.md`)를 만든다.
+"""평가셋을 전부 실행해 현황 문서(`docs/BizNode_Search_Layer_평가셋.md`)를 만든다.
 
-    .venv-wsl/bin/python -m tests.search.eval.report            # 표준출력으로
-    .venv-wsl/bin/python -m tests.search.eval.report -o 파일명   # 파일로
+    .venv-wsl/bin/python -m tests.search.eval.report   # 표준출력으로
+    .venv-wsl/bin/python -m tests.search.eval.report \
+        -o docs/BizNode_Search_Layer_평가셋.md         # 문서 갱신
 
 관측값(`현재 실제 결과`)은 여기서 직접 검색을 돌려 얻고, PASS/FAIL은 **pytest를
 그대로 한 번 더 돌려** 그 판정을 옮긴다 — 판정 로직을 두 벌 두면 문서와 테스트가
@@ -106,7 +107,8 @@ def build(runs, outcomes: dict[str, str], today: str) -> str:
     add("")
     add("> **이 파일은 생성물입니다.** 손으로 고치지 말고 아래로 다시 만드세요.")
     add("> ```bash")
-    add("> .venv-wsl/bin/python -m tests.search.eval.report -o BizNode_Search_Layer_평가셋.md")
+    add("> .venv-wsl/bin/python -m tests.search.eval.report \\")
+    add(">     -o docs/BizNode_Search_Layer_평가셋.md")
     add("> ```")
     add("")
     add(f"마지막 실행 **{today}** · 케이스 **{len(CASES)}개**")
