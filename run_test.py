@@ -15,7 +15,7 @@ def main():
     orch = build_orchestrator()
 
     # 3. 검색 실행 — SearchOrchestrator.search()는 동기 함수라 await 없이 호출한다
-    query, result = orch.search(SearchRequest(query="삼성전자에 납품하는 기업"))
+    query, result = orch.search(SearchRequest(query="삼성전자가 납품하는 기업"))
 
     print(f"mode: {query.mode.value}")
     print(f"총 건수: {result.total}")

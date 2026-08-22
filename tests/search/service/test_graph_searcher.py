@@ -23,7 +23,9 @@ from pipeline.normalizer.resolver import Resolution
 from search.model.enums import Direction, EntityType
 from search.service import graph_searcher as gs_module
 from search.service.graph_searcher import (
+    _WORKSPACE_FETCH_CEILING,
     GraphSearcher,
+    _fetch_limit,
     _primary_resolution,
     _relation_direction,
     _resolve_anchorless_fetch_limit,
@@ -141,6 +143,65 @@ def test_limit_respects_hard_cap_even_with_large_top_k(monkeypatch):
     GraphSearcher().search([resolution], ["SUPPLIES_TO"], top_k=99999)
 
     assert mock_relations_of.call_args.kwargs["limit"] == 100
+
+
+# ── 방향 필터가 걸릴 때는 미리 자르지 않는다 (2026-08-22) ──────────────
+#
+# 「삼성전자가 납품하는 기업」이 51건 중 2건만 냈다. relations_of(limit=...)는
+# **양방향을 섞어 점수순으로 자르는 파이썬 슬라이스**인데(graph_service.py:192),
+# 방향 필터는 그 뒤 파이썬에서 걸린다. 그래서 얻는 양이 `top_k × 그 방향의
+# 비율`로 깎인다 — 삼성전자 SUPPLIES_TO 는 out 51 : in 151 이라 top_k=10 이
+# 2건이 됐다. 워크스페이스 랭킹에 대해 이미 같은 논리를 적어 둔 자리가
+# graph_searcher.py 위쪽 주석이다(「자르는 순간 랭커가 볼 수 없는 후보가 생긴다」).
+# top_k 최종 절단은 ResultRanker 가 한다(result_ranker.py:164).
+
+def test_fetch_limit_widens_when_direction_filter_is_active():
+    """방향이 지정되면 top_k 로 미리 자르지 않는다 — 워크스페이스와 같은 천장."""
+    assert _fetch_limit(10, None, Direction.OUTGOING) == _WORKSPACE_FETCH_CEILING
+    assert _fetch_limit(10, None, Direction.INCOMING) == _WORKSPACE_FETCH_CEILING
+
+
+def test_fetch_limit_unchanged_when_no_direction():
+    """방향이 없으면 지금까지대로 top_k 를 그대로 쓴다."""
+    assert _fetch_limit(10, None, None) == 10
+    assert _fetch_limit(None, None, None) == 100
+    assert _fetch_limit(9999, None, None) == 100
+
+
+def test_anchored_search_fetches_wide_when_direction_given(monkeypatch):
+    """계약 확인 — 방향이 있으면 relations_of 에 넓은 limit 이 간다."""
+    mock_relations_of = MagicMock(return_value=[])
+    monkeypatch.setattr(gs_module, "relations_of", mock_relations_of)
+    resolution = Resolution("00126380", "삼성전자", "005930", "exact", 1.0)
+
+    GraphSearcher().search([resolution], ["SUPPLIES_TO"], Direction.OUTGOING, top_k=10)
+
+    assert mock_relations_of.call_args.kwargs["limit"] == _WORKSPACE_FETCH_CEILING
+
+
+def test_anchored_search_direction_filter_is_not_starved_by_top_k(monkeypatch):
+    """소수파 방향이 다수파에 밀려 굶지 않는가.
+
+    점수순으로 INCOMING 이 앞을 다 채우고 OUTGOING 이 뒤에 몰린 배치를 준다.
+    미리 자르면 OUTGOING 이 거의 안 남는다."""
+    relations = (
+        [_make_relation(f"공급사{i}", "삼성전자") for i in range(30)]
+        + [_make_relation("삼성전자", f"고객사{i}") for i in range(20)]
+    )
+
+    def fake_relations_of(*, norm_name, edge_types, limit):
+        # 진짜 relations_of 처럼 limit 으로 **미리** 자른다 — 이걸 흉내내지
+        # 않으면 mock 이 limit 을 무시해 테스트가 변별력을 잃는다.
+        return relations[:limit] if limit else relations
+
+    monkeypatch.setattr(gs_module, "relations_of", fake_relations_of)
+    resolution = Resolution("00126380", "삼성전자", "005930", "exact", 1.0)
+
+    hits = GraphSearcher().search([resolution], ["SUPPLIES_TO"], Direction.OUTGOING, top_k=10)
+
+    # 상위 10건만 받았다면 전부 INCOMING 이라 0건이 된다.
+    assert len(hits) == 20
+    assert {h.relations[0].direction for h in hits} == {"outgoing"}
 
 
 def test_anchorless_fetch_uses_floor_not_bare_top_k(monkeypatch):
@@ -304,6 +365,28 @@ def test_supplies_to_query_direction_incoming(entity_resolver, query_router, gra
         assert hit.entity_type == EntityType.COMPANY
         assert hit.sources == ["neo4j"]
         assert hit.freshness is not None
+
+
+def test_supplies_to_query_direction_outgoing(entity_resolver, query_router, graph_searcher):
+    """"삼성전자가 납품하는 기업" — direction=OUTGOING (2026-08-22 회귀).
+
+    실측(2026-08-22): 삼성전자 SUPPLIES_TO 는 outgoing 51 : incoming 151 이다.
+    점수순 상위 10건이 incoming 8 + outgoing 2 라, 미리 자르면 「구글·AMD」
+    두 건만 남았다. top_k 는 ResultRanker 가 마지막에 적용하므로 GraphSearcher
+    는 소수파 방향을 굶기지 않아야 한다."""
+    resolution = entity_resolver.resolve("삼성전자")
+    routing = query_router.route("삼성전자가납품하는기업")
+    assert routing.edge_types == ["SUPPLIES_TO"]
+    assert routing.direction == Direction.OUTGOING
+
+    hits = graph_searcher.search([resolution], routing.edge_types, routing.direction, top_k=10)
+
+    # 잘라 놓고 거르면 2건이었다. 방향을 거른 뒤 자르면 훨씬 많이 남는다.
+    assert len(hits) > 10
+    for hit in hits:
+        assert hit.relations[0].direction == "outgoing"
+        assert hit.relations[0].source_id == "00126380"
+        assert hit.entity_id == hit.relations[0].target_id
 
 
 def test_investment_query_direction_none_returns_both_sides(entity_resolver, query_router, graph_searcher):

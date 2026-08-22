@@ -4,7 +4,7 @@
 > 설계 근거·아키텍처는 [설계서](BizNode_Search_Layer_설계.md)를 보세요.
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
-마지막 갱신 **2026-08-22** · 테스트 **306개 전부 PASS**
+마지막 갱신 **2026-08-22** · 테스트 **311개 전부 PASS**
 
 ---
 
@@ -34,7 +34,7 @@ LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
 | EntityResolver | ✅ | `search/service/entity_resolver.py` | 19 |
 | QueryRouter | ✅ | `search/service/query_router.py` | 21 |
 | AnchorExtractor (Kiwi 조사 분리) | ✅ | `search/service/anchor_extractor.py` | 26 |
-| GraphSearcher | ✅ | `search/service/graph_searcher.py` | 28 |
+| GraphSearcher | ✅ | `search/service/graph_searcher.py` | 33 |
 | VectorSearcher | ✅ | `search/service/vector_searcher.py` | 23 |
 | **ResultRanker** (워크스페이스 랭킹) | ✅ | `search/service/result_ranker.py` | 25 |
 | SearchOrchestrator | ✅ | `search/service/orchestrator.py` | 44 |
@@ -204,6 +204,9 @@ Kiwi 도입 전 `best_candidate_match()` 도 같은 답을 냈습니다 — **�
 | `company_aliases` 3글자 이하 별칭 중 Kiwi 가 일반명사로 읽는 것 | 523개 중 **215개** | 2026-08-22 |
 | Kiwi 로드 / tokenize | 1.3초(프로세스당 1회) / **0.14ms** (질의당) | 2026-08-22 |
 | `similarity('NAVER','네이버')` | **0.000** (트라이그램은 한글↔영문을 못 잇는다) | 2026-08-22 |
+| 삼성전자 `SUPPLIES_TO` 방향 비 | outgoing **51** : incoming **151** (전체 관계 1,169) | 2026-08-22 |
+| └ 「삼성전자가 납품하는 기업」 결과 수 | **2건 → 10건** (top_k 를 채움) | 2026-08-22 |
+| └ 방향 지정 질의 6종 전부 | 2~8건 → **10건** · 지연 무변화(60~85ms) | 2026-08-22 |
 
 ---
 
@@ -296,6 +299,7 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-22 | **방향 필터가 걸릴 때 미리 자르지 않도록 `_fetch_limit` 수정** | `relations_of(limit=)` 는 양방향을 섞어 점수순으로 자르는 파이썬 슬라이스인데 방향 필터가 그 뒤에 걸려, 얻는 양이 `top_k × 그 방향의 비율` 로 깎였다. 「삼성전자가 납품하는 기업」이 51건 중 2건만 났다 |
 | 2026-08-22 | **Dockerfile 수정** — `search/` COPY 추가 · `COPY data/` 삭제 | 운영 이미지가 **빌드조차 실패**했다(`"/data": not found` — data/ 는 .gitignore 에 있다). 고쳐도 `search/` 가 없어 `POST /retrieve` 가 `ModuleNotFoundError` 로 죽었다. 둘 다 컨테이너 기동 + `/retrieve` 200 으로 검증 |
 | 2026-08-22 | `best_candidate_match()` **삭제** | `match_candidates()` 로 대체돼 프로덕션 참조가 0곳이 됐다. 옛 테스트 3개의 의도는 새 API 테스트로 옮겼다 |
 | 2026-08-22 | **AnchorExtractor 에 Kiwi 형태소 분석기 도입** | 문자열 휴리스틱이 조사 잔여물 「일이」를 실존 법인으로 오인했다 (§4-1). anchor 정확도 22.0%→97.2% |
@@ -325,8 +329,8 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 `monkeypatch` 를 씁니다.
 
 ```text
-306개
-├─ tests/search/     Search Layer         261
+311개
+├─ tests/search/     Search Layer         266
 └─ tests/services/    graph_service ·      45
                       RetrieveService · API
 ```

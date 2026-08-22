@@ -64,9 +64,26 @@ def _resolve_limit(top_k: Optional[int]) -> int:
     return min(top_k, _HARD_LIMIT)
 
 
-def _fetch_limit(top_k: Optional[int], workspace_keys: Optional[list[str]]) -> int:
-    """워크스페이스가 있으면 넉넉히, 없으면 지금까지대로."""
-    if workspace_keys:
+def _fetch_limit(
+    top_k: Optional[int],
+    workspace_keys: Optional[list[str]],
+    direction: Optional[Direction] = None,
+) -> int:
+    """워크스페이스나 방향 필터가 있으면 넉넉히, 없으면 지금까지대로.
+
+    ★방향이 있을 때 미리 자르면 안 되는 이유는 워크스페이스와 똑같다
+      (2026-08-22). `relations_of(limit=...)`는 **양방향을 섞어 점수순으로
+      자르는 파이썬 슬라이스**인데 방향 필터는 그 뒤 파이썬에서 걸린다
+      (_search_anchored). 그래서 얻는 양이 `top_k × 그 방향의 비율`로 깎인다.
+
+          실측(2026-08-22) 삼성전자 SUPPLIES_TO — outgoing 51 : incoming 151
+          「삼성전자가 납품하는 기업」(direction=OUTGOING, top_k=10)
+            점수순 상위 10건 = incoming 8 + outgoing 2  →  **2건만 남았다**
+
+      Cypher에 LIMIT이 없어 조회량은 어차피 같다 — 넉넉히 받아도 DB는 더
+      일하지 않는다. 최종 top_k 절단은 ResultRanker가 한다(result_ranker.py).
+    """
+    if workspace_keys or direction is not None:
         return _WORKSPACE_FETCH_CEILING
     return _resolve_limit(top_k)
 
@@ -170,7 +187,7 @@ class GraphSearcher:
         direction: Optional[Direction], top_k: Optional[int],
         workspace_keys: Optional[list[str]] = None,
     ) -> list[SearchHit]:
-        limit = _fetch_limit(top_k, workspace_keys)
+        limit = _fetch_limit(top_k, workspace_keys, direction)
         relations = relations_of(norm_name=anchor_norm_name, edge_types=edge_types,
                                  limit=limit)
 
