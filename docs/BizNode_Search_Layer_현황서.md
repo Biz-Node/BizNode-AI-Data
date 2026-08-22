@@ -4,7 +4,7 @@
 > 설계 근거·아키텍처는 [설계서](BizNode_Search_Layer_설계.md)를 보세요.
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
-마지막 갱신 **2026-08-22** · 테스트 **341개** (339 PASS · 2 xfail = 알려진 결함 §4-6·§4-5)
+마지막 갱신 **2026-08-22** · 테스트 **365개** (363 PASS · 2 xfail = 알려진 결함 §4-6·§4-5)
 
 ---
 
@@ -15,7 +15,7 @@
 그래프 · 연동 API ── 21개 라우트 중 20개 실동작 (스텁 1개: /news)
 검색 엔진 ───────── 완료
 챗봇 재료 (/retrieve) ─ 완료          ← 2026-08-20 스텁 해제
-LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
+LLM 답변 (/ask) ──── 완료          ← 2026-08-22 신설
 ```
 
 **현재 상태 한 줄** — 질문을 받아 재료를 만들어 주는 데까지 **끝났습니다.**
@@ -45,7 +45,7 @@ LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
 | 대표 질의 스모크 | ✅ | `tests/search/test_example_queries.py` | 11 |
 | **회귀 평가셋** (20 케이스) | ✅ | `tests/search/eval/` · [평가셋 문서](BizNode_Search_Layer_평가셋.md) | 30 |
 | CacheService / RedisRepository | 🔴 없음 | — | — |
-| `POST /ask` (LLM 답변) | 🔴 없음 | — | — |
+| `POST /ask` (LLM 답변) | ✅ | `app/services/answer_service.py` | 24 |
 | Agent Tool 연동 | 🔴 없음 | — | — |
 
 §4-1 의 AnchorExtractor 결함은 **2026-08-22 해소했습니다.**
@@ -266,46 +266,13 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 순서 | 작업 | 내용 |
 |---|---|---|
-| 1 | **LLM 답변 계층** | `POST /ask` · 프롬프트 인젝션 방어 · **근거 id whitelist 검증** · 답변 품질 평가셋 |
-| 2 | N+1 실측 | 기업 5곳 기준 `events_of`×5 + `relations_of`×5 + `event_impact`×3 이 실제로 얼마나 드는지. 그 뒤에 배치 최적화 여부 결정 |
-| 3 | 단계별 timeout | 실측 뒤에 정한다. **근거 없는 숫자를 새로 만들지 않는다** |
-| 4 | 워크스페이스 랭킹 품질 | 대표 질문으로 「원하는 것이 상위에 오는가」 측정 |
-| 5 | CacheService + RedisRepository | Redis 컨테이너·의존성은 이미 준비됨. 트래픽이 없으면 효용을 못 잰다 |
-| 6 | Agent Tool 연동 | |
-| 7 | anchor 에 조사가 붙는 11곳 | §4-4. `extract()` 계약 변경이 걸려 별도 판단 |
-| 8 | **별칭 anchor 를 EntityResolver 가 못 받는다** | §4-6. 7번과 같은 지점(`extract()` 계약)이라 함께 정합니다 |
-
-### 1번(LLM 답변 계층) 인계 사항
-
-**LLM 이 돌려줄 모양** — `pipeline/llm.ask_json()` 의 스키마로 강제합니다.
-
-```json
-{ "answer": "...", "evidence_ids": ["ev_...", "ev_..."] }
-```
-
-**서버가 반드시 검증합니다.**
-
-```text
-LLM 이 준 evidence_id
-      ↓
-RetrieveResponse.evidence 에 있던 것인가?
-      ├─ 예   → 허용
-      └─ 아니오 → 제거하거나 실패 처리     ★없는 id 는 지어낸 것이다
-```
-
-**지켜야 할 규약 여섯.**
-
-```text
-whitelist 검증   위 흐름. 통과한 것만 사용자에게 보이는 source 가 된다
-missing=true     인용 금지 (단, 응답 데이터에서 지우지는 않는다)
-stated           보도(true)와 계산(false)을 갈라 말한다
-freshness        stale 을 현재형으로 말하지 않는다 → 「2024-06 에 그렇게 보도됨」
-evidence         항상 「인용할 데이터」로 취급. 시스템 지시문과 섞지 않는다
-LLM 호출          pipeline/llm.ask_json() 재사용 — 창구를 새로 만들지 않는다
-                 ★fallback 은 「안전한 쪽」으로. 실패를 통과와 구별한다
-```
-
-source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_Layer_설계.md) 에 있습니다.
+| 1 | N+1 실측 | 기업 5곳 기준 `events_of`×5 + `relations_of`×5 + `event_impact`×3 이 실제로 얼마나 드는지. 그 뒤에 배치 최적화 여부 결정 |
+| 2 | 단계별 timeout | 실측 뒤에 정한다. **근거 없는 숫자를 새로 만들지 않는다** |
+| 3 | 워크스페이스 랭킹 품질 | 대표 질문으로 「원하는 것이 상위에 오는가」 측정 |
+| 4 | CacheService + RedisRepository | Redis 컨테이너·의존성은 이미 준비됨. 트래픽이 없으면 효용을 못 잰다 |
+| 5 | Agent Tool 연동 | |
+| 6 | anchor 에 조사가 붙는 11곳 | §4-4. `extract()` 계약 변경이 걸려 별도 판단 |
+| 7 | **별칭 anchor 를 EntityResolver 가 못 받는다** | §4-6. 6번과 같은 지점(`extract()` 계약)이라 함께 정합니다 |
 
 ---
 
@@ -325,6 +292,7 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-22 | **`POST /ask` 신설** (`AnswerService`) | 재료(`RetrieveResponse`)를 받아 LLM 으로 답변을 쓰고, `evidence_id` 화이트리스트로 검증한다. 인젝션 방어는 구조적 방어만(설계서 §13-2), 실패 시 200+고정문구로 실패를 성공과 구별한다(§13-3) |
 | 2026-08-22 | **Search Layer 회귀 평가셋 20 케이스 신설** (`tests/search/eval/`) | 검색 분기(mode·direction·anchor·router·graph·엔티티 타입·ranking·negative)를 한 번에 훑는 것이 없었다. 결과는 [평가셋 문서](BizNode_Search_Layer_평가셋.md) — 18 PASS · 2 FAIL(알려진 결함 §4-5·§4-6) |
 | 2026-08-22 | **방향 필터가 걸릴 때 미리 자르지 않도록 `_fetch_limit` 수정** | `relations_of(limit=)` 는 양방향을 섞어 점수순으로 자르는 파이썬 슬라이스인데 방향 필터가 그 뒤에 걸려, 얻는 양이 `top_k × 그 방향의 비율` 로 깎였다. 「삼성전자가 납품하는 기업」이 51건 중 2건만 났다 |
 | 2026-08-22 | **Dockerfile 수정** — `search/` COPY 추가 · `COPY data/` 삭제 | 운영 이미지가 **빌드조차 실패**했다(`"/data": not found` — data/ 는 .gitignore 에 있다). 고쳐도 `search/` 가 없어 `POST /retrieve` 가 `ModuleNotFoundError` 로 죽었다. 둘 다 컨테이너 기동 + `/retrieve` 200 으로 검증 |
