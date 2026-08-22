@@ -4,7 +4,7 @@
 > 설계 근거·아키텍처는 [설계서](BizNode_Search_Layer_설계.md)를 보세요.
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
-마지막 갱신 **2026-08-22** · 테스트 **311개 전부 PASS**
+마지막 갱신 **2026-08-22** · 테스트 **341개** (339 PASS · 2 xfail = 알려진 결함 §4-6·§4-5)
 
 ---
 
@@ -43,6 +43,7 @@ LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
 | **RetrieveService** | ✅ | `app/services/retrieve_service.py` | 21 |
 | **`POST /retrieve`** | ✅ | `app/api/main.py` | 7 |
 | 대표 질의 스모크 | ✅ | `tests/search/test_example_queries.py` | 11 |
+| **회귀 평가셋** (20 케이스) | ✅ | `tests/search/eval/` · [평가셋 문서](BizNode_Search_Layer_평가셋.md) | 30 |
 | CacheService / RedisRepository | 🔴 없음 | — | — |
 | `POST /ask` (LLM 답변) | 🔴 없음 | — | — |
 | Agent Tool 연동 | 🔴 없음 | — | — |
@@ -178,6 +179,30 @@ GET /health 가 여전히 `"stub": true` 를 하드코딩 (main.py:513)   (이�
 Kiwi 도입 전 `best_candidate_match()` 도 같은 답을 냈습니다 — **새로 생긴 문제가
 아닙니다.** 질의 의도를 봐야 갈리는 문제라 형태소 분석으로는 못 고칩니다.
 
+### 4-6. 별칭으로 잡은 anchor 를 EntityResolver 가 다시 놓친다 (2026-08-22 발견)
+
+```text
+"네이버"  →  AnchorExtractor.extract()  = '네이버'      ○  (company_aliases 2차 창구)
+          →  EntityResolver.resolve()  = None         ✗
+          →  mode = SEMANTIC (기대: NAME)
+```
+
+`AnchorExtractor` 는 `alias_exact_match()` 로 「네이버」를 찾아냅니다. 그런데 돌려주는
+것이 **별칭 문자열**이라, `SearchOrchestrator` 가 그 문자열을 그대로
+`EntityResolver.resolve()` 에 다시 넘깁니다. `resolve()` 는 `corp_code_master` 만 보고
+`similarity('NAVER','네이버')=0.000` 이라 해소에 실패합니다 — 두 컴포넌트가 **같은
+창구를 쓰지 않습니다.**
+
+의미검색 1위로 `NAVER`(00266961) 가 나오기는 하나, `mode` 가 `NAME` 이 아니라
+`SEMANTIC` 이고 `source` 도 `postgres` 가 아니라 `chroma` 입니다. 「네이버」를 물으면
+이름 해소로 답해야 합니다.
+
+**고치려면** `alias_exact_match()` 가 별칭이 아니라 corp_code(또는 `Resolution`)를
+돌려주게 하거나, `EntityResolver` 에 같은 2차 창구를 붙여야 합니다. `extract()` 의
+계약(§4-4 와 같은 지점)이 걸려 **이번 작업에서는 고치지 않고 평가셋에 표시만 했습니다**
+— `tests/search/eval` 의 `known-alias-naver` 케이스가 `xfail(strict=True)` 로
+지키고 있어, 고쳐지면 XPASS 로 뒤집혀 알려 줍니다.
+
 ---
 
 ## 5. 실측 기록
@@ -241,13 +266,14 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 순서 | 작업 | 내용 |
 |---|---|---|
-| 1 | **LLM 답변 계층** | `POST /ask` · 프롬프트 인젝션 방어 · **근거 id whitelist 검증** · 회귀 평가셋 |
+| 1 | **LLM 답변 계층** | `POST /ask` · 프롬프트 인젝션 방어 · **근거 id whitelist 검증** · 답변 품질 평가셋 |
 | 2 | N+1 실측 | 기업 5곳 기준 `events_of`×5 + `relations_of`×5 + `event_impact`×3 이 실제로 얼마나 드는지. 그 뒤에 배치 최적화 여부 결정 |
 | 3 | 단계별 timeout | 실측 뒤에 정한다. **근거 없는 숫자를 새로 만들지 않는다** |
 | 4 | 워크스페이스 랭킹 품질 | 대표 질문으로 「원하는 것이 상위에 오는가」 측정 |
 | 5 | CacheService + RedisRepository | Redis 컨테이너·의존성은 이미 준비됨. 트래픽이 없으면 효용을 못 잰다 |
 | 6 | Agent Tool 연동 | |
 | 7 | anchor 에 조사가 붙는 11곳 | §4-4. `extract()` 계약 변경이 걸려 별도 판단 |
+| 8 | **별칭 anchor 를 EntityResolver 가 못 받는다** | §4-6. 7번과 같은 지점(`extract()` 계약)이라 함께 정합니다 |
 
 ### 1번(LLM 답변 계층) 인계 사항
 
@@ -299,6 +325,7 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-22 | **Search Layer 회귀 평가셋 20 케이스 신설** (`tests/search/eval/`) | 검색 분기(mode·direction·anchor·router·graph·엔티티 타입·ranking·negative)를 한 번에 훑는 것이 없었다. 결과는 [평가셋 문서](BizNode_Search_Layer_평가셋.md) — 18 PASS · 2 FAIL(알려진 결함 §4-5·§4-6) |
 | 2026-08-22 | **방향 필터가 걸릴 때 미리 자르지 않도록 `_fetch_limit` 수정** | `relations_of(limit=)` 는 양방향을 섞어 점수순으로 자르는 파이썬 슬라이스인데 방향 필터가 그 뒤에 걸려, 얻는 양이 `top_k × 그 방향의 비율` 로 깎였다. 「삼성전자가 납품하는 기업」이 51건 중 2건만 났다 |
 | 2026-08-22 | **Dockerfile 수정** — `search/` COPY 추가 · `COPY data/` 삭제 | 운영 이미지가 **빌드조차 실패**했다(`"/data": not found` — data/ 는 .gitignore 에 있다). 고쳐도 `search/` 가 없어 `POST /retrieve` 가 `ModuleNotFoundError` 로 죽었다. 둘 다 컨테이너 기동 + `/retrieve` 200 으로 검증 |
 | 2026-08-22 | `best_candidate_match()` **삭제** | `match_candidates()` 로 대체돼 프로덕션 참조가 0곳이 됐다. 옛 테스트 3개의 의도는 새 API 테스트로 옮겼다 |
@@ -329,8 +356,9 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 `monkeypatch` 를 씁니다.
 
 ```text
-311개
-├─ tests/search/     Search Layer         266
+341개
+├─ tests/search/     Search Layer         296
+│   └─ eval/          회귀 평가셋            30   ← 20 케이스 + 심층 판정 10
 └─ tests/services/    graph_service ·      45
                       RetrieveService · API
 ```
@@ -381,3 +409,20 @@ docker restart biznode-neo4j
 .venv-wsl/bin/python run_test.py     # SearchOrchestrator 를 직접 호출해 결과 출력
 uvicorn app.api.main:app --reload    # /docs 에서 POST /retrieve Try it out
 ```
+
+### 회귀 평가셋
+
+검색 분기를 한 번에 훑습니다. 케이스는 `tests/search/eval/cases.py`, 판정은
+`tests/search/eval/test_search_eval.py`, 결과 문서는
+[평가셋](BizNode_Search_Layer_평가셋.md) 입니다.
+
+```bash
+.venv-wsl/bin/python -m pytest tests/search/eval -q          # 평가셋만 (약 16초)
+.venv-wsl/bin/python -m pytest tests/search/eval -q -rA      # 케이스별 판정까지
+.venv-wsl/bin/python -m tests.search.eval.report \
+    -o BizNode_Search_Layer_평가셋.md                        # 결과 문서 다시 만들기
+```
+
+**기업명을 못 박는 케이스와 구조 조건만 보는 케이스를 가릅니다**(`EvalCase.kind`).
+관계 점수·임베딩 유사도는 데이터가 늘면 순위가 바뀌므로, 이름 해소가 답 그 자체인
+케이스와 랭킹 정책을 증명해야 하는 케이스에서만 기업을 고정합니다.

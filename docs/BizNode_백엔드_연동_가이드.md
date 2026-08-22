@@ -20,7 +20,6 @@ docker compose up -d
 python -m uvicorn app.api.main:app --port 8100
 ```
 
-
 ```
 http://localhost:8100/docs        라우트 21개 · Try it out 으로 바로 호출
 http://localhost:8100/preview     응답이 화면에서 어떻게 보이는지
@@ -51,11 +50,11 @@ DART_KEY · OPENAI_API_KEY · NAVER_CLIENT_ID · NAVER_CLIENT_SECRET   ← 수�
 
 이게 이 연동에서 제일 중요합니다.
 
-| | AI-Data (이 API) | 백엔드 |
-|---|---|---|
-| 아는 것 | 노드 키, 관계, 근거, 온톨로지 | 사용자, 세션, 워크스페이스 소유권 |
-| 모르는 것 | **누가 로그인했는지 모릅니다** | Cypher, 엣지 12종, 근거 검증, 신선도 |
-| 저장 | 그래프·재무·시세·기사 | 계정 · 워크스페이스 · 보관함 · 알림 구독 |
+|           | AI-Data (이 API)               | 백엔드                                   |
+| --------- | ------------------------------ | ---------------------------------------- |
+| 아는 것   | 노드 키, 관계, 근거, 온톨로지  | 사용자, 세션, 워크스페이스 소유권        |
+| 모르는 것 | **누가 로그인했는지 모릅니다** | Cypher, 엣지 12종, 근거 검증, 신선도     |
+| 저장      | 그래프·재무·시세·기사          | 계정 · 워크스페이스 · 보관함 · 알림 구독 |
 
 **「사용자가 어느 기업을 담아 뒀나」는 그래프가 아니라 사용자 데이터입니다.**
 백엔드 DB에 두고 이 API에는 **키 목록만** 넘기세요.
@@ -349,13 +348,13 @@ unknown   날짜 없음          0.7
 
 ## 7. 오류 처리
 
-| 상황 | 코드 | 응답 |
-|---|---|---|
-| 없는 기업 | `404` | `{"detail": "해당 키의 기업이 없습니다"}` |
-| 없는 관계 | `404` | 검증에서 제외됐거나 종료된 관계일 수 있습니다 |
-| 없는 사건 | `404` | |
-| 근거 원문을 못 꺼냄 | `503` | ChromaDB 가 안 떠 있습니다 |
-| 요청 형식 오류 | `422` | FastAPI 기본 |
+| 상황                | 코드  | 응답                                          |
+| ------------------- | ----- | --------------------------------------------- |
+| 없는 기업           | `404` | `{"detail": "해당 키의 기업이 없습니다"}`     |
+| 없는 관계           | `404` | 검증에서 제외됐거나 종료된 관계일 수 있습니다 |
+| 없는 사건           | `404` |                                               |
+| 근거 원문을 못 꺼냄 | `503` | ChromaDB 가 안 떠 있습니다                    |
+| 요청 형식 오류      | `422` | FastAPI 기본                                  |
 
 **`/relations/{edge_id}`가 `503`을 내는 이유** — 근거 없는 관계는 애초에 응답에서
 빠집니다. 그러니 `evidence: []`를 주면 「근거가 없는 관계」로 읽힙니다. 사실은
@@ -403,29 +402,29 @@ DB에서 가장 큰 노드고(LG전자 599 · SK하이닉스 494 · 중앙값 80
 
 상세는 `/docs`를 보세요. 여기는 지도입니다.
 
-| 태그 | 라우트 | 비고 |
-|---|---|---|
-| 검색 | `GET /search` | 부분 일치 · 명부 포함 |
-| 기업 | `GET /companies/{key}` | **페이지 한 방** |
-| | `GET /companies/{key}/graph` | `depth`·`max_nodes` 조절용 |
-| | `GET /companies/{key}/market` | **차트는 이것만** (상세엔 series 없음) |
-| | `GET /companies/{key}/events` | 더보기 |
-| | `GET /companies/{key}/news` | 근거가 된 기사 · 더보기 |
-| | `GET /companies/{key}/filings` | 더보기 |
-| | `GET /companies/{key}/products` | 더보기 |
-| | `GET /companies/{key}/executives` | 더보기 |
-| | `GET /companies/{key}/ownership` | 양방향 · 더보기 |
-| | `GET /companies/{key}/relations` | 더보기 |
-| 관계 | `GET /relations/{edge_id}` | **근거 원문** + 리스크 전파 |
-| | `GET /events/{event_id}/impact` | 사건이 어디까지 번지나 |
-| 워크스페이스 | `POST /workspace/graph` | 캔버스 |
-| | `POST /workspace/summary` | 노드 클릭 |
-| | `POST /workspace/suggest` | 담을 기업 추천 |
-| | `POST /workspace/changes` | 알림 |
-| 홈 | `POST /insights` | 인사이트 카드 |
-| 뉴스 | `GET /news` | 주제·워크스페이스·최신순 3축 |
-| 챗봇 | `POST /retrieve` | 재료 + 근거 |
-| 운영 | `GET /health` | |
+| 태그         | 라우트                            | 비고                                   |
+| ------------ | --------------------------------- | -------------------------------------- |
+| 검색         | `GET /search`                     | 부분 일치 · 명부 포함                  |
+| 기업         | `GET /companies/{key}`            | **페이지 한 방**                       |
+|              | `GET /companies/{key}/graph`      | `depth`·`max_nodes` 조절용             |
+|              | `GET /companies/{key}/market`     | **차트는 이것만** (상세엔 series 없음) |
+|              | `GET /companies/{key}/events`     | 더보기                                 |
+|              | `GET /companies/{key}/news`       | 근거가 된 기사 · 더보기                |
+|              | `GET /companies/{key}/filings`    | 더보기                                 |
+|              | `GET /companies/{key}/products`   | 더보기                                 |
+|              | `GET /companies/{key}/executives` | 더보기                                 |
+|              | `GET /companies/{key}/ownership`  | 양방향 · 더보기                        |
+|              | `GET /companies/{key}/relations`  | 더보기                                 |
+| 관계         | `GET /relations/{edge_id}`        | **근거 원문** + 리스크 전파            |
+|              | `GET /events/{event_id}/impact`   | 사건이 어디까지 번지나                 |
+| 워크스페이스 | `POST /workspace/graph`           | 캔버스                                 |
+|              | `POST /workspace/summary`         | 노드 클릭                              |
+|              | `POST /workspace/suggest`         | 담을 기업 추천                         |
+|              | `POST /workspace/changes`         | 알림                                   |
+| 홈           | `POST /insights`                  | 인사이트 카드                          |
+| 뉴스         | `GET /news`                       | 주제·워크스페이스·최신순 3축           |
+| 챗봇         | `POST /retrieve`                  | **스텁**                               |
+| 운영         | `GET /health`                     |                                        |
 
 **스텁은 `X-Stub: true` 헤더가 붙습니다. 헤더가 없으면 진짜입니다.**
 
@@ -434,45 +433,11 @@ DB에서 가장 큰 노드고(LG전자 599 · SK하이닉스 494 · 중앙값 80
 ## 10. 아직 안 된 것 · 결정 대기
 
 ### 스텁 하나
-### 스텁 하나
 
 ```
 /retrieve   챗봇 재료. 추론 담당이 app/services 를 직접 import 하므로
             이 HTTP 라우트는 「백엔드가 볼 모양」입니다
 ```
-/news       외부 뉴스 API 로 대체하기로 했습니다. 붙이실 API 가 정해지면 알려 주세요
-```
-
-### `/retrieve` 가 실물이 됐습니다 (2026-08-20)
-
-`X-Stub: true` 헤더가 **더 이상 붙지 않습니다.** 헤더로 분기하고 계셨다면
-확인해 주세요. **응답 계약(`RetrieveResponse`)은 바뀌지 않았습니다** — 고정값이
-실제 데이터로 바뀐 것뿐입니다.
-
-바뀐 것 둘.
-
-```
-question 이 비면 422        전에는 검증이 없어 빈 문자열이 통과했습니다
-workspace_keys 가 실동작    주시면 그 범위 안에서만 찾습니다
-```
-
-**`workspace_keys` 는 필터가 아니라 「무엇을 먼저 보여줄까」입니다.**
-
-```
-워크스페이스 안 기업끼리의 관계        가장 먼저
-워크스페이스 기업 ↔ 바깥 기업          그 다음
-워크스페이스 기업 ↔ 사건·인물·기관·제품   그 다음
-```
-
-**결과가 줄어들지 않습니다.** 워크스페이스 밖의 관련 기업도, 사건·인물·기관·제품도
-그대로 나옵니다 — 순서만 뒤로 갑니다. 「우리 워크스페이스에 없는 공급사가
-누구냐」 같은 질문이 답을 잃지 않게 하기 위해서입니다.
-
-주지 않으면 관련도 정렬이 없을 뿐 동작은 같습니다.
-
-**`evidence[].missing=true` 는 인용하면 안 됩니다** — id 는 있는데 원문을 못 찾은
-것입니다. 응답에서 지우지 않는 이유는 지우면 「근거가 없는 관계」로 읽히기
-때문입니다.
 
 ### 언제나 빈 배열인 필드 하나
 
