@@ -171,3 +171,48 @@ def test_ask_reuses_the_injected_retrieve_service(monkeypatch):
     as_module.AnswerService(stub).ask(request)
 
     stub.retrieve.assert_called_once_with(request)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Tier B — 실제 저장소 + 실제 OpenAI 로 한 바퀴 (mock 없음, 비용 발생)
+# ══════════════════════════════════════════════════════════════════════
+
+import pytest
+
+from app.core.config import OPENAI_API_KEY
+from app.services.retrieve_service import RetrieveService
+
+_needs_openai_key = pytest.mark.skipif(
+    not OPENAI_API_KEY, reason="OPENAI_API_KEY 가 없으면 실제 호출 테스트를 건너뛴다")
+
+
+def _no_hallucinated_or_missing_sources(question: str) -> None:
+    """공통 검증 — sources 의 evidence_id 가 전부 재료 안에 있고 missing 이 아니다."""
+    request = AskRequest(question=question)
+    fresh = RetrieveService().retrieve(request)
+    by_id = {e.evidence_id: e for e in fresh.evidence}
+
+    got = as_module.AnswerService().ask(request)
+
+    assert isinstance(got.answer, str) and got.answer
+    for source in got.sources:
+        evidence = by_id.get(source.evidence_id)
+        assert evidence is not None, f"환각 evidence_id: {source.evidence_id}"
+        assert evidence.missing is False, f"missing 근거를 인용함: {source.evidence_id}"
+
+
+@_needs_openai_key
+def test_real_ask_does_not_hallucinate_or_cite_missing_evidence_supply_question():
+    _no_hallucinated_or_missing_sources("삼성전자에 납품하는 기업")
+
+
+@_needs_openai_key
+def test_real_ask_does_not_hallucinate_or_cite_missing_evidence_risk_question():
+    _no_hallucinated_or_missing_sources("SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?")
+
+
+@_needs_openai_key
+def test_real_ask_returns_a_non_empty_answer_when_no_material_is_found():
+    """★재료가 없어도(엉뚱한 질문) 빈 문자열이 아니라 「모른다」류의 답을 써야 한다."""
+    got = as_module.AnswerService().ask(AskRequest(question="storminmvpsdjfk 이 뭐야"))
+    assert got.answer
