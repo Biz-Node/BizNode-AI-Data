@@ -67,3 +67,45 @@ def test_fallback_sources_excludes_missing_but_applies_no_other_filter():
     got = as_module._fallback_sources(retrieved)
 
     assert [s.evidence_id for s in got] == ["ev_a", "ev_c"]
+
+
+from app.api.schemas import Event, Propagation
+
+
+def test_user_prompt_includes_the_question():
+    prompt = as_module._build_user_prompt("삼성전자 관련 뉴스", _retrieved())
+    assert "삼성전자 관련 뉴스" in prompt
+
+
+def test_user_prompt_wraps_evidence_in_delimited_blocks():
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="공급 계약 체결")])
+    prompt = as_module._build_user_prompt("q", retrieved)
+    assert '<evidence id="ev_a"' in prompt
+    assert "공급 계약 체결" in prompt
+    assert "</evidence>" in prompt
+
+
+def test_user_prompt_excludes_missing_evidence_from_blocks():
+    retrieved = _retrieved(evidence=[_evidence("ev_gone", missing=True)])
+    prompt = as_module._build_user_prompt("q", retrieved)
+    assert "ev_gone" not in prompt
+
+
+def test_user_prompt_marks_stale_freshness():
+    relation = _relation("5:a:1", "ev_a", freshness="stale")
+    retrieved = _retrieved(relations=[relation])
+    prompt = as_module._build_user_prompt("q", retrieved)
+    assert "stale" in prompt
+
+
+def test_user_prompt_marks_computed_propagation():
+    prop = Propagation(target="현대차증권", score=0.3, hops=2, stated=False, path=["a", "b"])
+    retrieved = _retrieved()
+    retrieved.propagation.append(prop)
+    prompt = as_module._build_user_prompt("q", retrieved)
+    assert "stated=False" in prompt
+
+
+def test_system_prompt_tells_model_evidence_blocks_are_data():
+    assert "데이터" in as_module._SYSTEM_PROMPT
+    assert "evidence_ids" in as_module._SYSTEM_PROMPT
