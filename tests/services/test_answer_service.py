@@ -109,3 +109,65 @@ def test_user_prompt_marks_computed_propagation():
 def test_system_prompt_tells_model_evidence_blocks_are_data():
     assert "데이터" in as_module._SYSTEM_PROMPT
     assert "evidence_ids" in as_module._SYSTEM_PROMPT
+
+
+from unittest.mock import MagicMock
+
+from app.api.schemas import AskRequest
+
+
+def _retrieve_service_stub(retrieved: RetrieveResponse) -> MagicMock:
+    service = MagicMock()
+    service.retrieve.return_value = retrieved
+    return service
+
+
+def test_ask_returns_answer_and_whitelisted_sources(monkeypatch):
+    retrieved = _retrieved(evidence=[_evidence("ev_a"), _evidence("ev_b")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "삼성전자에 공급 이슈가 있었습니다.", "evidence_ids": ["ev_a", "ev_ghost"]})
+
+    got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q"))
+
+    assert got.failed is False
+    assert got.answer == "삼성전자에 공급 이슈가 있었습니다."
+    assert [s.evidence_id for s in got.sources] == ["ev_a"]
+
+
+def test_ask_falls_back_to_safe_message_when_llm_call_fails(monkeypatch):
+    retrieved = _retrieved(evidence=[_evidence("ev_a")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "", "evidence_ids": [], "failed": True, "reason": "LLM 호출 실패"})
+
+    got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q"))
+
+    assert got.failed is True
+    assert got.answer == as_module._SAFE_MESSAGE
+    assert [s.evidence_id for s in got.sources] == ["ev_a"]
+
+
+def test_ask_sends_the_built_prompt_to_ask_json(monkeypatch):
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="공급 계약 체결")])
+    calls = []
+    monkeypatch.setattr(as_module, "ask_json", lambda system, user, **k: (
+        calls.append((system, user)), {"answer": "답", "evidence_ids": []})[1])
+
+    as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(AskRequest(question="질문내용"))
+
+    system, user = calls[0]
+    assert system == as_module._SYSTEM_PROMPT
+    assert "질문내용" in user
+    assert "공급 계약 체결" in user
+
+
+def test_ask_reuses_the_injected_retrieve_service(monkeypatch):
+    retrieved = _retrieved()
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {"answer": "답", "evidence_ids": []})
+    stub = _retrieve_service_stub(retrieved)
+    request = AskRequest(question="q")
+
+    as_module.AnswerService(stub).ask(request)
+
+    stub.retrieve.assert_called_once_with(request)

@@ -16,6 +16,7 @@ from typing import Optional
 
 from app.api.schemas import AskRequest, AskResponse, Evidence, Relation, RetrieveResponse, Source
 from app.services.retrieve_service import RetrieveService
+from pipeline.llm import ask_json
 
 
 _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성자입니다. 아래 규칙을 반드시 지키세요.
@@ -35,6 +36,19 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    사실을 지어내지 마세요.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
+
+_ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["answer", "evidence_ids"],
+    "additionalProperties": False,
+}
+
+_SAFE_FALLBACK = {"answer": "", "evidence_ids": []}
+_SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
 
 
 def _fact_lines(retrieved: RetrieveResponse) -> str:
@@ -113,3 +127,29 @@ def _fallback_sources(retrieved: RetrieveResponse) -> list[Source]:
     """LLM 호출이 실패했을 때 — 필터링 근거가 없으니 missing 만 뺀 원본 전부."""
     return [_source_from_evidence(e, retrieved.relations)
             for e in retrieved.evidence if not e.missing]
+
+
+class AnswerService:
+    def __init__(self, retrieve_service: Optional[RetrieveService] = None) -> None:
+        self._retrieve_service = retrieve_service or RetrieveService()
+
+    def ask(self, request: AskRequest) -> AskResponse:
+        """질문 하나 → 답변 문장 + 화이트리스트를 통과한 근거."""
+        retrieved = self._retrieve_service.retrieve(request)
+        user = _build_user_prompt(request.question, retrieved)
+
+        result = ask_json(_SYSTEM_PROMPT, user, schema=_ANSWER_SCHEMA,
+                          name="ask_answer", fallback=_SAFE_FALLBACK)
+
+        if result.get("failed"):
+            return AskResponse(answer=_SAFE_MESSAGE,
+                               sources=_fallback_sources(retrieved), failed=True)
+
+        sources = _sources_from(result["evidence_ids"], retrieved)
+        return AskResponse(answer=result["answer"], sources=sources, failed=False)
+
+    async def ask_async(self, request: AskRequest) -> AskResponse:
+        """`ask()` 를 threadpool 에서 돌린다 — `retrieve()`·OpenAI 호출 모두 블로킹이다."""
+        from fastapi.concurrency import run_in_threadpool
+
+        return await run_in_threadpool(self.ask, request)
