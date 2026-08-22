@@ -4,7 +4,7 @@
 > 설계 근거·아키텍처는 [설계서](BizNode_Search_Layer_설계.md)를 보세요.
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
-마지막 갱신 **2026-08-20** · 테스트 **294개 전부 PASS**
+마지막 갱신 **2026-08-22** · 테스트 **306개 전부 PASS**
 
 ---
 
@@ -29,11 +29,11 @@ LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
 | 컴포넌트 | 상태 | 코드 | 테스트 |
 |---|---|---|---|
 | DTO · enum | ✅ | `search/dto/*.py` · `search/model/enums.py` | 34 |
-| PostgresRepository | ✅ | `search/repository/postgres_repository.py` | 12 |
+| PostgresRepository | ✅ | `search/repository/postgres_repository.py` | 16 |
 | ChromaRepository | ✅ | `search/repository/chroma_repository.py` | 11 |
 | EntityResolver | ✅ | `search/service/entity_resolver.py` | 19 |
 | QueryRouter | ✅ | `search/service/query_router.py` | 21 |
-| AnchorExtractor | ⚠️ | `search/service/anchor_extractor.py` | 18 |
+| AnchorExtractor (Kiwi 조사 분리) | ✅ | `search/service/anchor_extractor.py` | 26 |
 | GraphSearcher | ✅ | `search/service/graph_searcher.py` | 28 |
 | VectorSearcher | ✅ | `search/service/vector_searcher.py` | 23 |
 | **ResultRanker** (워크스페이스 랭킹) | ✅ | `search/service/result_ranker.py` | 25 |
@@ -47,7 +47,7 @@ LLM 답변 (/ask) ──── 없음        ★ 추론 담당 몫
 | `POST /ask` (LLM 답변) | 🔴 없음 | — | — |
 | Agent Tool 연동 | 🔴 없음 | — | — |
 
-⚠️ AnchorExtractor 는 **동작하지만 알려진 결함**이 있습니다 — §4-1.
+§4-1 의 AnchorExtractor 결함은 **2026-08-22 해소했습니다.**
 
 ### 없어진 것
 
@@ -85,20 +85,48 @@ POST /retrieve
 
 ## 4. 알려진 결함
 
-### 4-1. ★ AnchorExtractor 가 조사를 기업명으로 오인한다 — **가장 급함**
+### 4-1. ~~AnchorExtractor 가 조사를 기업명으로 오인한다~~ — **해소 (2026-08-22)**
 
 ```text
-"SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"  →  anchor = '일이'
-                                                        ↑ corp_code 01355031 「일이」로 해소
-"SK하이닉스 생산 차질"                              →  anchor = 'SK하이닉스'   ○
-"SK하이닉스에 납품하는 기업"                         →  anchor = 'SK하이닉스'   ○
+"SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"  →  'SK하이닉스'   ○
+"농심에 생산 차질을 일으킬 만한 일이 있었나?"        →  '농심'        ○
+"네이버에 생산 차질을 일으킬 만한 일이 있었나?"      →  '네이버'      ○
 ```
 
-`RetrieveResponse` 스키마에 **대표 질문으로 적혀 있는 바로 그 문장**이 재료를 **0건**
-돌려줍니다(`app/api/schemas.py`). 챗봇 품질에 직결됩니다.
+**원인 진단이 틀렸었습니다.** 전에는 `_MIN_CANDIDATE_LEN = 2` 가 2글자를 허용하는
+것이 원인이라고 적어 뒀는데, 「농심」(00108241·004370)이 **2글자 실존 상장사**라 상수를
+올리면 그쪽이 죽습니다. 진짜 원인은 둘이었습니다.
 
-원인은 어절 단위 fuzzy 매칭이 「일이」처럼 짧은 조사 잔여물을 실재하는 기업명과 매칭하는
-것입니다. `_MIN_CANDIDATE_LEN = 2` 가 2글자를 허용하고 threshold 0.50 을 넘겨 버립니다.
+```text
+(a) 조사 잔여물 「일이」가 후보로 살아남는다
+    문자열 휴리스틱이 "일이" 끝의 "이"를 떼면 1글자만 남아 절단을 포기하고
+    원본을 후보로 남겼다 → 실존 법인 「일이」(01355031)와 1.000 정확 일치
+
+(b) `ORDER BY score DESC LIMIT 1` 이 동점에서 무엇을 고를지 정의돼 있지 않다
+    「일이」1.000 과 「SK하이닉스」1.000 의 승부가 물리적 행 순서에 좌우됐다
+```
+
+**고친 방법** — Kiwi 형태소 분석기를 **필터가 아니라 「문법적으로 정확한 조사
+분리기」**로 넣었습니다. 태그로 거르지 않는 것이 핵심입니다(§5 참고: 상장사의
+62.0% 가 `NNG` 라 고유명사 태그로 거르면 그만큼이 죽습니다).
+
+```text
+문장 전체를 Kiwi 에 1회 통과 (어절 단위로 돌리면 안 된다 — §5)
+     ↓
+어절 끝에서 조사·어미로 태깅된 만큼만 **길이로** 절단
+     ↓  ← Kiwi 가 앞 음절을 먹는 오분석(10.4%)이 후보에 닿지 않는다
+  명사부 ≥2글자 → 명사부 + 원본 어절 둘 다 후보
+  명사부 ≤1글자 → 그 어절을 통째로 버린다        ★「일이」가 여기서 죽는다
+  꼬리 없음     → 원본 어절 그대로               ★Kiwi 오분석 안전망
+     ↓
+1차 corp_code_master (기존 DART 기준 그대로)
+2차 1차가 비었을 때만, Kiwi 가 NNP 로 본 후보에 한해 company_aliases
+     ↓  ← similarity('NAVER','네이버')=0.000 이라 pg_trgm 으로는 영원히 못 잇는다
+score 내림차순 → 후보 길이 내림차순
+```
+
+`best_candidate_match()`(최댓값 1건)를 `match_candidates()`(통과 후보 전부)로 늘려
+**선택 규칙을 저장소가 아니라 호출부가 정하게** 했습니다.
 
 ### 4-2. `graph_service.Relation.score` 가 1.0 을 넘는다
 
@@ -113,9 +141,42 @@ POST /retrieve
 
 ```text
 app/api/main.py 의 RiskEvent · TrendingItem import 가 미사용   (이전부터 그랬음)
+GET /health 가 여전히 `"stub": true` 를 하드코딩 (main.py:513)   (이전부터 그랬음)
 저신뢰 키워드 9종의 실데이터 정확도 미검증                      (QueryRouter)
 여러 Resolution 동시 조회 미구현                               (GraphSearcher 는 최고 1건만 씀)
 ```
+
+### 4-4. anchor 에 조사가 붙어 나오는 경우가 남았다 (2026-08-22)
+
+상장사 400곳 표본에서 **11곳(2.8%)** 이 정확히 안 나옵니다. 전부 §4-1 이전에는
+「일이」로 가던 것이라 **후퇴는 아닙니다.**
+
+```text
+9건  Kiwi 가 「에」를 조사로 못 봄 → anchor 에 조사가 붙는다
+     삼성FN리츠에 · 원익큐브에 · 동부일렉트로닉스에 · 플리토에 · 사람인에
+     남광토건에 · SK리츠에 · 동원데어리푸드에 · 이푸른에
+     ※ 이 후보들도 옳은 법인에 매칭은 된다(match_candidates 가 corp_name 을
+       맞게 돌려준다). anchor 문자열만 덜 깨끗하다.
+
+2건  과다 절단 — 사명 끝 음절이 조사로 읽힌다
+     「우리로에」→「우리」(우리/NP 로/JKB 에/JKB) · 「캔버스엔에」→「캔버스」
+```
+
+**고칠 방법이 이미 손에 있습니다** — `match_candidates()` 가 `(후보, 매칭된 법인명,
+점수)` 를 주므로 후보 대신 **매칭된 법인명**을 anchor 로 돌리면 9건이 사라집니다.
+다만 `extract()` 의 계약이 「질의의 부분 문자열」에서 「법인명」으로 바뀌므로
+호출부(orchestrator·EntityResolver) 영향을 확인하고 별도로 정합니다.
+
+### 4-5. 동음이의 사명은 원리적으로 못 가른다 (이전부터 그랬음)
+
+```text
+"이 사건의 대상 기업은?"   →  '대상'   (00121941 · 001680 대상그룹)
+"동남 지역 기업 현황"      →  '동남'   (00252764 외 7곳)
+```
+
+`corp_code_master` 에 실제로 있는 이름이라 DART 1차 경로에서 1.000 으로 잡힙니다.
+Kiwi 도입 전 `best_candidate_match()` 도 같은 답을 냈습니다 — **새로 생긴 문제가
+아닙니다.** 질의 의도를 봐야 갈리는 문제라 형태소 분석으로는 못 고칩니다.
 
 ---
 
@@ -134,6 +195,15 @@ app/api/main.py 의 RiskEvent · TrendingItem import 가 미사용   (이전부�
 | `company` 컬렉션 중 프로필 보유 | 2,430건 중 **64건** | — |
 | 리스크 파급(모트라스 파업) | 124곳 = 보도 10 + 계산 114 | — |
 | 의미검색 정확도 | 「삼성전자에 납품하는 기업」 → 실제 공급사 **0건** | — |
+| **anchor 정확도** (상장사 400곳 × 「X에 …일이 있었나?」) | **22.0% → 97.2%** | 2026-08-22 |
+| └ 그중 「일이」 오인 | **312건 → 0건** | 2026-08-22 |
+| └ 질의당 지연 | 16.4ms → **14.7ms** (후보가 줄어 오히려 빨라짐) | 2026-08-22 |
+| Kiwi 가 `NNP`/`SL`/`SN` 을 하나도 안 주는 상장사 | 3,979곳 중 **2,465곳 (62.0%)** | 2026-08-22 |
+| Kiwi 명사 토큰으로 사명 원형 복원 실패 | 3,979곳 중 **413곳 (10.4%)** | 2026-08-22 |
+| 어절에 명사류 토큰이 0개인 상장사 | 조사 문맥 **4곳(0.10%)** · 단독 **17곳(0.43%)** | 2026-08-22 |
+| `company_aliases` 3글자 이하 별칭 중 Kiwi 가 일반명사로 읽는 것 | 523개 중 **215개** | 2026-08-22 |
+| Kiwi 로드 / tokenize | 1.3초(프로세스당 1회) / **0.14ms** (질의당) | 2026-08-22 |
+| `similarity('NAVER','네이버')` | **0.000** (트라이그램은 한글↔영문을 못 잇는다) | 2026-08-22 |
 
 ---
 
@@ -152,7 +222,7 @@ app/api/main.py 의 RiskEvent · TrendingItem import 가 미사용   (이전부�
 | `_MAX_COMPANIES` | 5 | RetrieveService | 재료를 만들 기업 수 |
 | `_MAX_RELATIONS_PER_COMPANY` | 10 | RetrieveService | |
 | `_MAX_RISK_EVENTS_FOR_PROPAGATION` | 3 | RetrieveService | 파급을 계산할 사건 수 |
-| `_MIN_CANDIDATE_LEN` / `_MAX_WORDS` | 2 / 10 | AnchorExtractor | §4-1 과 관련 |
+| `_MIN_CANDIDATE_LEN` / `_MAX_WORDS` | 2 / 10 | AnchorExtractor | **2 는 올리면 안 됩니다** — 「농심」이 2글자 실존 상장사 |
 | fuzzy threshold | 0.50 | EntityResolver · AnchorExtractor | 유일하게 근거 있음 ↓ |
 
 fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이상, 노이즈 어절(「기업」→
@@ -168,15 +238,15 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 순서 | 작업 | 내용 |
 |---|---|---|
-| 1 | **AnchorExtractor 결함** | §4-1. 챗봇 대표 질문이 0건이다 |
-| 2 | **LLM 답변 계층** | `POST /ask` · 프롬프트 인젝션 방어 · **근거 id whitelist 검증** · 회귀 평가셋 |
-| 3 | N+1 실측 | 기업 5곳 기준 `events_of`×5 + `relations_of`×5 + `event_impact`×3 이 실제로 얼마나 드는지. 그 뒤에 배치 최적화 여부 결정 |
-| 4 | 단계별 timeout | 실측 뒤에 정한다. **근거 없는 숫자를 새로 만들지 않는다** |
-| 5 | 워크스페이스 랭킹 품질 | 대표 질문으로 「원하는 것이 상위에 오는가」 측정 |
-| 6 | CacheService + RedisRepository | Redis 컨테이너·의존성은 이미 준비됨. 트래픽이 없으면 효용을 못 잰다 |
-| 7 | Agent Tool 연동 | |
+| 1 | **LLM 답변 계층** | `POST /ask` · 프롬프트 인젝션 방어 · **근거 id whitelist 검증** · 회귀 평가셋 |
+| 2 | N+1 실측 | 기업 5곳 기준 `events_of`×5 + `relations_of`×5 + `event_impact`×3 이 실제로 얼마나 드는지. 그 뒤에 배치 최적화 여부 결정 |
+| 3 | 단계별 timeout | 실측 뒤에 정한다. **근거 없는 숫자를 새로 만들지 않는다** |
+| 4 | 워크스페이스 랭킹 품질 | 대표 질문으로 「원하는 것이 상위에 오는가」 측정 |
+| 5 | CacheService + RedisRepository | Redis 컨테이너·의존성은 이미 준비됨. 트래픽이 없으면 효용을 못 잰다 |
+| 6 | Agent Tool 연동 | |
+| 7 | anchor 에 조사가 붙는 11곳 | §4-4. `extract()` 계약 변경이 걸려 별도 판단 |
 
-### 2번(LLM 답변 계층) 인계 사항
+### 1번(LLM 답변 계층) 인계 사항
 
 **LLM 이 돌려줄 모양** — `pipeline/llm.ask_json()` 의 스키마로 강제합니다.
 
@@ -226,6 +296,11 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-22 | **Dockerfile 수정** — `search/` COPY 추가 · `COPY data/` 삭제 | 운영 이미지가 **빌드조차 실패**했다(`"/data": not found` — data/ 는 .gitignore 에 있다). 고쳐도 `search/` 가 없어 `POST /retrieve` 가 `ModuleNotFoundError` 로 죽었다. 둘 다 컨테이너 기동 + `/retrieve` 200 으로 검증 |
+| 2026-08-22 | `best_candidate_match()` **삭제** | `match_candidates()` 로 대체돼 프로덕션 참조가 0곳이 됐다. 옛 테스트 3개의 의도는 새 API 테스트로 옮겼다 |
+| 2026-08-22 | **AnchorExtractor 에 Kiwi 형태소 분석기 도입** | 문자열 휴리스틱이 조사 잔여물 「일이」를 실존 법인으로 오인했다 (§4-1). anchor 정확도 22.0%→97.2% |
+| 2026-08-22 | `best_candidate_match()` → **`match_candidates()`(다건)** | 1.000 동점의 승부가 물리적 행 순서에 좌우됐다 |
+| 2026-08-22 | **`alias_exact_match()` 2차 창구 신설** | `similarity('NAVER','네이버')=0.000` — pg_trgm 으로는 원리적으로 못 잇는다 |
 | 2026-08-20 | **워크스페이스를 hard filter → 랭킹 문맥으로** | 바깥 기업·사건·인물·기관·제품이 후보에서 통째로 사라졌다 |
 | 2026-08-20 | **`/retrieve` 실물화** · `X-Stub` 제거 | |
 | 2026-08-20 | **`/search/nl` 제거** · `search/api/` 삭제 | Search Layer 는 RetrieveService 를 통해서만 노출 |
@@ -250,8 +325,8 @@ source 객체의 모양과 클릭 목적지는 [설계서 §11](BizNode_Search_L
 `monkeypatch` 를 씁니다.
 
 ```text
-294개
-├─ tests/search/     Search Layer         249
+306개
+├─ tests/search/     Search Layer         261
 └─ tests/services/    graph_service ·      45
                       RetrieveService · API
 ```
@@ -271,6 +346,23 @@ uv venv .venv-wsl --python 3.10
 uv pip install --python .venv-wsl/bin/python -r requirements.txt pytest
 .venv-wsl/bin/python -m pytest tests/ -q
 ```
+
+★`kiwipiepy` 는 모델(`kiwipiepy_model`)이 함께 딸려 와 **설치 후 105MB** 를 씁니다.
+`manylinux2014_aarch64` 휠이 있어 ARM(t4g) 서버에서도 컴파일 없이 설치됩니다.
+
+### 운영 이미지 검증 (2026-08-22)
+
+```bash
+docker build -t biznode-api:test .
+docker run -d --network biznode-ai-data_default --env-file .env \
+  -e NEO4J_URI=bolt://neo4j:7687 -e POSTGRES_HOST=postgres \
+  -e CHROMA_HOST=chroma -e CHROMA_PORT=8000 -p 18100:8100 biznode-api:test
+curl -X POST localhost:18100/retrieve -H 'Content-Type: application/json' \
+  -d '{"question":"SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"}'
+```
+
+실측 — `HTTP 200 · 2.0초 · 기업 1(SK하이닉스) · 사건 69 · 관계 10 · 파급 249 · 근거 152`.
+**§4-1 수정이 운영 이미지에서도 동작합니다** (anchor 가 `SK하이닉스` 로 잡혔습니다).
 
 Docker Desktop(WSL2) 포트포워딩이 불안정하면:
 

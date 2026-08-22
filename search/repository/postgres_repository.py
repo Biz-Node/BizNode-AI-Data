@@ -94,39 +94,82 @@ class PostgresRepository:
 
         return list(candidates.values())[:limit]
 
-    def best_candidate_match(self, candidates: list[str]) -> Optional[tuple[str, float]]:
-        """후보 문자열 목록 중 corp_code_master와 가장 유사한 1건을 고른다
-        (AnchorExtractor 전용, Task 9). resolve_candidates()와 달리 다중
-        후보를 반환하지 않는다 — "이 후보들 중 실제 회사명에 제일 가까운 게
-        뭔가"라는 존재 확인 질의라 최고점 1건이면 충분하다.
+    def match_candidates(
+        self, candidates: list[str], *, threshold: float = _DEFAULT_FUZZY_THRESHOLD,
+    ) -> list[tuple[str, str, float]]:
+        """후보별로 corp_code_master 최고 매칭 1건씩 — threshold를 넘은 것만
+        `(후보, 매칭된 법인명, 점수)`로 돌려준다(§4-1, 2026-08-22).
 
-        `corp_name % ANY(candidates)`로 GIN 인덱스(idx_corp_name_trgm)를 그대로
-        타면서(Task 9 실측: Bitmap Index Scan, 후보 4~8개 기준 15~25ms) 후보
-        전체를 단일 쿼리로 처리한다. `word_similarity()`/`<%` 연산자는 이
-        컬럼 구조에서 인덱스를 타지 않아(Task 9 실측: Seq Scan, 400~800ms)
-        채택하지 않았다 — gin_trgm_ops opclass가 `%`/`%>`만 지원하고 우리가
-        필요한 방향(단어가 문장 안에 있는지)에 대응하는 `<%`는 인덱스
-        전략이 없다.
+        前 best_candidate_match()가 `ORDER BY score DESC LIMIT 1`로 전체
+        최댓값 1건만 주던 것을 대체한다(옛 API는 프로덕션 참조가 0곳이 돼
+        2026-08-22 삭제). 1.000 동점이 여럿일 때 무엇이 이길지
+        정의돼 있지 않아 물리적 행 순서에 좌우됐고, 실존 법인 「일이」
+        (01355031)가 「SK하이닉스」를 이겼다. 선택 규칙은 호출부(AnchorExtractor)
+        가 정한다 — 저장소는 "무엇이 얼마로 걸렸나"만 답한다.
+
+        후보마다 LATERAL 서브쿼리를 돌려 `corp_name %% c`가 후보별로 GIN
+        인덱스(idx_corp_name_trgm)를 그대로 타게 한다.
         """
         if not candidates:
+            return []
+        with postgres_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT c.cand, m.corp_name, m.sim
+                FROM unnest(%(candidates)s::text[]) AS c(cand)
+                CROSS JOIN LATERAL (
+                    SELECT corp_name, similarity(corp_name, c.cand) AS sim
+                    FROM corp_code_master
+                    WHERE corp_name %% c.cand
+                    ORDER BY sim DESC, corp_name
+                    LIMIT 1
+                ) AS m
+                WHERE m.sim >= %(threshold)s
+                """,
+                {"candidates": candidates, "threshold": threshold},
+            )
+            return [(cand, corp_name, float(sim)) for cand, corp_name, sim in cur.fetchall()]
+
+    def alias_exact_match(self, candidates: list[str]) -> Optional[str]:
+        """후보 중 `company_aliases`에 정확히 등록된 것 하나 — 없으면 None.
+
+        pg_trgm이 원리적으로 못 잇는 경우를 위한 2차 창구다.
+        similarity('NAVER','네이버')는 **0.000**이다 — 트라이그램은 한글과
+        영문 사이에 공유하는 3글자 조각이 없다. corp_code_master에
+        'NAVER'(00266961)로만 등록된 회사를 한글 질의로는 영원히 못 찾는다.
+
+        company_aliases에는 ('네이버','네이버','NAVER Corporation')이 있다.
+        표의 키는 normalize_company_name()으로 정규화된 형태라 같은 함수로
+        맞춰 조회한다(resolve_candidates()의 fuzzy 경로와 같은 규약).
+
+        ★이 창구는 일상어와 충돌한다 — 3글자 이하 별칭 523개 중 215개를 Kiwi가
+        일반명사로 읽는다(실측 2026-08-22: 「기타」·「대상」·「동남」·「디스코」).
+        그래서 호출부가 **Kiwi가 고유명사(NNP)로 본 후보만** 넘겨야 하고,
+        DART 1차 매칭이 비었을 때만 물어야 한다. 여러 개가 걸리면 긴 것을
+        고른다 — 짧을수록 일상어와 겹칠 확률이 높다.
+        """
+        if not candidates:
+            return None
+        by_key: dict[str, str] = {}
+        for cand in candidates:
+            key = normalize_company_name(cand)
+            if key:
+                by_key.setdefault(key, cand)
+        if not by_key:
             return None
         with postgres_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                  (SELECT c FROM unnest(%(candidates)s::text[]) AS c
-                   ORDER BY similarity(corp_name, c) DESC LIMIT 1) AS matched_candidate,
-                  (SELECT max(similarity(corp_name, c))
-                   FROM unnest(%(candidates)s::text[]) AS c) AS score
-                FROM corp_code_master
-                WHERE corp_name %% ANY(%(candidates)s::text[])
-                ORDER BY score DESC
-                LIMIT 1
+                SELECT DISTINCT k.key
+                FROM unnest(%(keys)s::text[]) AS k(key)
+                WHERE EXISTS (
+                    SELECT 1 FROM company_aliases a
+                    WHERE a.alias_key = k.key OR a.canonical_key = k.key
+                )
                 """,
-                {"candidates": candidates},
+                {"keys": list(by_key)},
             )
-            row = cur.fetchone()
-            if row is None or row[0] is None:
-                return None
-            matched_candidate, score = row
-            return (matched_candidate, float(score))
+            hits = [by_key[row[0]] for row in cur.fetchall()]
+        if not hits:
+            return None
+        return max(hits, key=len)

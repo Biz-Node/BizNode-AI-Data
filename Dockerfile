@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY pipeline/ pipeline/
 COPY batch/ batch/
+COPY search/ search/
 
 # 배치가 읽는 시드 목록·설정
 COPY data/ data/
