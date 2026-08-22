@@ -2,7 +2,6 @@
 # 기동: docker compose up -d
 # 중지: docker compose down          (데이터 유지)
 # 초기화: docker compose down -v      (볼륨까지 삭제 — 주의)
-
 services:
   # ── Graph DB ────────────────────────────────────────────────
   # APOC 필수: graph_loader의 MERGE, batch/repair/*의 노드 병합·유형 변경에서 사용

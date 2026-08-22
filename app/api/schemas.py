@@ -39,7 +39,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ══════════════════════════════════════════════════════════════════
 #  공통 — 모든 응답이 지고 다니는 것
@@ -990,9 +990,25 @@ class WorkspaceChangesResponse(BaseModel):
 
 
 class AskRequest(BaseModel):
-    question: str = Field(examples=["SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"])
-    workspace_keys: list[str] = Field(default_factory=list,
-                                      description="있으면 그 범위로 좁혀 찾는다")
+    """★`question` 이 비면 **422 다.** 전에는 검증이 없어 빈 문자열이 그대로
+    통과했는데, 그 뒤 `SearchRequest.query`(min_length=1 + 공백 검증)에서 터져
+    **500** 으로 나갔다 — 사용자 입력 오류를 서버 오류로 보고하는 셈이었다.
+    검증을 경계로 올려 두 계약을 맞춘다.
+    """
+
+    question: str = Field(min_length=1,
+                          examples=["SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"])
+    workspace_keys: list[str] = Field(
+        default_factory=list,
+        description="검색 범위. 관계는 **양끝이 모두** 이 안에 있어야 한다 — "
+                    "챗봇은 사용자의 워크스페이스 안에서 존재하는 기능이다")
+
+    @field_validator("question")
+    @classmethod
+    def _question_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be blank")
+        return value
 
 
 # 사용자가 담아 둔 기업이 조용히 사라지는 것만 막으면 된다.

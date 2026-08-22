@@ -120,6 +120,30 @@ def _evidence(props: dict, etype: str) -> list[dict]:
     for v in (props.get("evidence_id"), *(props.get("evidence_ids") or [])):
         if v and v not in ids:
             ids.append(str(v))
+    return evidence_for_ids(
+        ids,
+        fallback_source_type=props.get("source_type"),
+        fallback_source_doc=str(props.get("source_doc") or ""),
+    )
+
+
+def evidence_for_ids(
+    ids: list[str], *,
+    fallback_source_type: Optional[str] = None,
+    fallback_source_doc: str = "",
+) -> list[dict]:
+    """`evidence_id` 목록 → `Evidence` 모양 dict 목록. **한 번에 모아 조회한다.**
+
+    ★관계마다 부르면 근거 조회·언론사 조회·공시제목 조회가 관계 수만큼 반복된다.
+      챗봇 재료는 여러 기업 × 여러 관계를 한 응답에 담으므로 그 반복이 그대로
+      드러난다. 그래서 id 를 다 모아 **한 번**에 부르는 입구를 따로 둔다.
+
+    `_evidence()`가 이 함수를 부른다 — 조립 규칙이 두 곳으로 갈라지지 않게 한다.
+
+    ★못 꺼낸 근거를 **조용히 빼지 않는다.** `missing=True` 로 남긴다 —
+      빼면 「근거가 없는 관계」로 읽힌다.
+    """
+    ids = [str(i) for i in dict.fromkeys(i for i in ids if i)]
     if not ids:
         return []
 
@@ -140,7 +164,7 @@ def _evidence(props: dict, etype: str) -> list[dict]:
         e = texts.get(eid)
         if e is None:                       # 컬렉션에 없는 id — 숨기지 않고 알린다
             out.append({"evidence_id": eid, "text": "", "source_doc": "",
-                        "source_type": props.get("source_type") or "news",
+                        "source_type": fallback_source_type or "news",
                         "press": None, "published_at": None,
                         "missing": True})
             continue
@@ -148,7 +172,7 @@ def _evidence(props: dict, etype: str) -> list[dict]:
         m = _URL.search(e["text"])
         url = m.group(0).rstrip(")）」") if m else None
         rn = str(md.get("rcept_no") or "")
-        st = md.get("source_type") or props.get("source_type") or ("dart" if rn else "news")
+        st = md.get("source_type") or fallback_source_type or ("dart" if rn else "news")
         p, d = press.get(url or "", (None, None))
         at = md.get("occurred_at")
         if not d and at and int(at) > 19000000:
@@ -158,7 +182,7 @@ def _evidence(props: dict, etype: str) -> list[dict]:
             "evidence_id": eid,
             "text": e["text"],
             # ★출처는 **되짚을 수 있는 값**이어야 한다. 공시면 접수번호, 기사면 URL
-            "source_doc": rn or url or str(props.get("source_doc") or ""),
+            "source_doc": rn or url or fallback_source_doc,
             "source_type": "dart" if st.startswith("dart") else "news",
             "press": p or (titles.get(rn) if rn else None),
             "published_at": d,
