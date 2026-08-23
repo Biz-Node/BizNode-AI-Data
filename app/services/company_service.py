@@ -293,8 +293,30 @@ def events_of(key: str) -> list[dict]:
             "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
             "article_count": int(e.get("article_count") or 1),
             "timeline": tl,
-            "evidence_ids": list(e.get("evidence_ids") or []),
+            # 사건 노드가 아니라 **이 기업의 HAS_EVENT 엣지**에서 꺼낸다.
+            #
+            # 노드의 `evidence_ids` 는 그 사건에 붙은 **모든 기업의 근거 합집합**이다.
+            # 그걸 그대로 주면 챗봇이 남의 근거로 이 기업을 설명한다 —
+            # 실측(2026-08-19) 사건 「집단소송」:
+            #     파두            role=mentioned     매출 뻥튀기 의혹 주주소송
+            #     기아 조지아 법인   role=subject       美 TN비자 취업사기 합의
+            #   완전히 다른 두 소송인데 한 노드에 묶여 있어, 노드 근거를 쓰면
+            #   「파두도 TN비자 소송에 연루」로 읽힌다.
+            #
+            # 기업 2곳 이상 붙은 사건 85개 중 **71개**가 이렇게 섞일 수 있었다.
+            # `evidence_id` 가 (출처·출발노드·도착노드·유형·subtype) 해시라
+            # 엣지마다 이미 갈려 있다 — 읽는 쪽만 틀렸던 것이다.
+            "evidence_ids": _edge_evidence(h),
         })
+    return out
+
+
+def _edge_evidence(h: dict) -> list[str]:
+    """이 엣지가 가진 근거만. 순서를 지키고 중복은 뺀다."""
+    out: list[str] = []
+    for v in (h.get("evidence_id"), *(h.get("evidence_ids") or [])):
+        if v and v not in out:
+            out.append(str(v))
     return out
 
 
