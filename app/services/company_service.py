@@ -272,8 +272,42 @@ ORDER BY coalesce(h.occurred_at, e.last_seen) DESC
 """
 
 
+def _own_evidence_ids(h: dict) -> list[str]:
+    """★기업별 근거는 **엣지에 있다.** Event 노드의 `evidence_ids` 를 쓰면 안 된다.
+
+    하나의 Event 를 여러 기업이 공유하는데(실측 2026-08-23: 사건 938건 중 85건),
+    노드의 `evidence_ids` 는 그 사건에 엮인 **모든 기업의 근거 합집합**이다.
+    그걸 기업별 조회가 그대로 돌려주는 바람에 「SK하이닉스」 질의의 /ask 근거에
+    현대오토에버 노조 기사가 섞였다(ev_14df4ce056904b8b).
+
+        Event '노조 설립'  e.evidence_ids = [현대오토에버 ×2, SK하이닉스, 신세계]
+          SK하이닉스   -[HAS_EVENT {evidence_id: ev_47b007…}]->
+          현대오토에버 -[HAS_EVENT {evidence_id: ev_14df4c…}]->
+
+    `role`·`occurred_at` 은 이미 엣지에서 가져오고 있었다 — 「날짜는 사건 노드가
+    아니라 관계에 있다」(schemas.py `Event`). `evidence_ids` 만 그 원칙에서
+    빠져 있었을 뿐이다.
+
+    ★못 찾아도 노드 합집합으로 메우지 않는다. 없는 것과 남의 것은 다르다 —
+      메우면 이 사고가 그대로 되돌아온다(실측: 1,062개 HAS_EVENT 엣지 전부가
+      `evidence_id` 를 들고 있어 메울 일도 없다).
+
+    단수·복수를 둘 다 모은다 — `relation_service._evidence()`·
+    `graph_searcher._evidence_refs()` 와 같은 규약이다(실측: 복수 11건).
+    """
+    ids: list[str] = []
+    for value in (h.get("evidence_id"), *(h.get("evidence_ids") or [])):
+        if value and value not in ids:
+            ids.append(str(value))
+    return ids
+
+
 def events_of(key: str) -> list[dict]:
-    """사건 목록. `timeline` 은 **펴서** 준다 — 화면이 문자열을 쪼개게 하지 않는다."""
+    """사건 목록. `timeline` 은 **펴서** 준다 — 화면이 문자열을 쪼개게 하지 않는다.
+
+    근거는 **이 기업의 엣지 것만** 나간다(`_own_evidence_ids`). 사건 자체는
+    공유 구조 그대로 — 같은 Event 를 여러 기업이 들고 있어도 사건은 사건이다.
+    """
     with neo4j_session() as s:
         rows = [dict(r) for r in s.run(_EVENT_Q, k=key)]
     out = []
@@ -293,7 +327,7 @@ def events_of(key: str) -> list[dict]:
             "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
             "article_count": int(e.get("article_count") or 1),
             "timeline": tl,
-            "evidence_ids": list(e.get("evidence_ids") or []),
+            "evidence_ids": _own_evidence_ids(h),
         })
     return out
 

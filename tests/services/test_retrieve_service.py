@@ -337,3 +337,38 @@ def test_real_workspace_does_not_shrink_the_material():
 
     assert len(scoped.companies) == len(wide.companies)
     assert scoped.relations
+
+
+def test_real_shared_event_does_not_leak_other_companies_evidence():
+    """★회귀 — 「SK하이닉스」 재료에 남의 회사 근거가 섞이지 않는다(2026-08-23).
+
+    실제 사고: 「SK하이닉스」 질의의 /ask sources 에 현대오토에버 노조
+    기사(ev_14df4ce056904b8b)가 들어갔다. Event '노조 설립' 을 현대오토에버·
+    SK하이닉스·신세계아이앤씨가 공유하는데, `company_service.events_of()` 가
+    Event **노드**의 `evidence_ids`(전 기업 합집합)를 돌려줬기 때문이다.
+    기업별 근거는 `HAS_EVENT` **엣지**에 있다.
+
+    금지 집합을 「남의 엣지 근거 − SK하이닉스가 어디서든 든 근거」로 잡는다 —
+    한 문장이 두 기업을 함께 다루면 양쪽 엣지에 같은 id 가 달리는데(실측 28건),
+    그건 남의 것이 아니라 공동 근거다.
+    """
+    from app.core.database import neo4j_session
+
+    key = "00164779"  # SK하이닉스
+    with neo4j_session() as s:
+        row = s.run("""
+            MATCH (c:Company)-[:HAS_EVENT]->(e:Event)<-[oh:HAS_EVENT]-(o:Company)
+            WHERE (c.corp_code = $k OR c.norm_name = $k) AND o <> c
+            WITH collect(DISTINCT oh.evidence_id) AS theirs
+            MATCH (c2:Company)-[r]-() WHERE c2.corp_code = $k OR c2.norm_name = $k
+            WITH theirs, collect(DISTINCT r.evidence_id) AS mine
+            RETURN [x IN theirs WHERE x IS NOT NULL AND x <> '' AND NOT x IN mine]
+                   AS forbidden
+        """, k=key).single()
+    forbidden = set(row["forbidden"])
+    assert forbidden, "남의 근거 후보가 0건이면 이 회귀를 검증할 수 없다"
+
+    got = RetrieveService().retrieve(AskRequest(question="SK하이닉스"))
+
+    leaked = {e.evidence_id for e in got.evidence} & forbidden
+    assert not leaked, f"남의 회사 근거가 /ask 재료에 섞였다: {sorted(leaked)}"

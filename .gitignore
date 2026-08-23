@@ -8,6 +8,7 @@ documents/
 .claude/
 .uv-cache/
 run_chroma.py
+docs/superpowers/
 
 
 # DB 덤프 — 팀원에게 **파일로 직접** 넘기는 것이지 저장소에 올리는 게 아니다.
