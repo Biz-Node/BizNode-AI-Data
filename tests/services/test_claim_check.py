@@ -112,6 +112,64 @@ def test_empty_claims_yields_empty_result():
 
 # ── 분포 요약 ────────────────────────────────────────────────────────────
 
+# ── Step4b: 형태소 잡음 제거 (2026-08-23) ────────────────────────────────
+
+def test_josa_no_longer_sinks_a_correct_claim():
+    """★Step4a 실측에서 0.00 이 나온 바로 그 문장. 삼성전자도 SFA반도체도
+    근거에 **있었다** — 조사 「에」·「가」가 붙어 못 맞춘 것뿐이다."""
+    ev = {"ev_a": _evidence("ev_a", "SFA반도체는 삼성전자에 반도체 패키징을 "
+                                    "납품하는 기업이다")}
+    got = claim_check.check(
+        [{"text": "삼성전자에 납품하는 기업으로 SFA반도체가 있다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert got[0].score == 1.0, got[0].missing
+
+
+def test_date_format_difference_no_longer_sinks_a_correct_claim():
+    """★주장은 「2026년 3월 18일」, 근거는 「2026-03-18」이었다."""
+    ev = {"ev_a": _evidence("ev_a", "2026-03-18 삼성전자 수원사업장 압수수색이 "
+                                    "진행됐다")}
+    got = claim_check.check(
+        [{"text": "2026년 3월 18일에 삼성전자 수원사업장 압수수색이 진행되었다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert got[0].score == 1.0, got[0].missing
+
+
+def test_conjugated_verb_matches_its_content_noun():
+    """「발주하였다」→「발주」. 근거에 없는 낱말(「규모」)은 그대로 잡히는 것이
+    맞다 — 여기서 보는 것은 **활용 꼬리 때문에 놓치지 않는가**뿐이다."""
+    ev = {"ev_a": _evidence("ev_a", "SK하이닉스가 한미반도체에 97억 원 장비 발주")}
+    got = claim_check.check(
+        [{"text": "SK하이닉스는 한미반도체에 97억 원 규모의 장비를 발주하였다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert "발주하였다" not in got[0].missing
+    assert "발주" not in got[0].missing
+    assert "SK하이닉스는" not in got[0].missing
+    assert got[0].score > 0.8, got[0].missing
+
+
+def test_real_mis_citation_still_scores_zero():
+    """★잡음을 걷어내도 **진짜 오인용은 그대로 0 이어야 한다.** 이게 무너지면
+    개선이 아니라 검출력을 버린 것이다."""
+    ev = {"ev_bad": _evidence("ev_bad", "2025년 HBM3E 12단 중심의 재편이 "
+                                        "유력시되는 시장 수요 변화에 발맞춰 "
+                                        "양산을 시작했다")}
+    got = claim_check.check(
+        [{"text": "이천 공장에서 질소 누출 사고가 발생했습니다",
+          "evidence_ids": ["ev_bad"]}], ev)
+    assert got[0].score == 0.0
+
+
+def test_invented_causation_still_scores_low():
+    """Step4a 가 잡아낸 진짜 문제 — 파급 줄에서 만들어낸 인과."""
+    ev = {"ev_a": _evidence("ev_a", "현대오토에버 내부에서 노동조합 설립 움직임이 "
+                                    "확산되고 있다")}
+    got = claim_check.check(
+        [{"text": "노동조합 설립이 기아, 현대자동차 등에도 공급 차질을 초래할 수 있다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert got[0].score < 0.5, got[0].missing
+
+
 def test_summary_reports_counts_and_scores_for_logging():
     """로그 한 줄로 분포를 남길 수 있어야 한다 — 20개 질문을 모을 도구다."""
     ev = {"ev_a": _evidence("ev_a", "질소 누출 사고")}

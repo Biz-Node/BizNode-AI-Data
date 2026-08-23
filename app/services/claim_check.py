@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
-from pipeline.token_overlap import overlap
+from pipeline.token_overlap import normalize_dates, overlap, sentence_tokens
 
 # 상태 셋 — **판정이 아니라 「점수를 낼 수 있었는가」의 구분**이다.
 STATUS_UNCITED = "uncited"    # 주장이 근거를 하나도 안 들었다
@@ -84,7 +84,13 @@ def check(claims: Sequence[Mapping[str, Any]],
             out.append(ClaimCheck(text, evidence_ids, STATUS_NO_TEXT))
             continue
 
-        score, missing = overlap("\n".join(texts), text)
+        # ★날짜 정규화는 **양쪽에 똑같이** 건다 — 한쪽만 걸면 맞을 것도 어긋난다.
+        #   토큰은 문장용으로 뽑는다(조사·어미 제거). 기본 토크나이저를 쓰면
+        #   「삼성전자에」가 「삼성전자」를 담은 근거에서도 없는 토큰이 된다
+        #   (Step4a 실측: 그게 낮은 점수의 지배적 원인이었다).
+        score, missing = overlap(normalize_dates("\n".join(texts)),
+                                 normalize_dates(text),
+                                 tokenizer=sentence_tokens)
         out.append(ClaimCheck(text, evidence_ids, STATUS_SCORED,
                               score=score, missing=missing))
     return out
