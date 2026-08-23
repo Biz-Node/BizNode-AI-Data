@@ -1,0 +1,11 @@
+{
+  "case": "ask_sk_hynix_production_disruption",
+  "why": "2026-08-23 이 질의 하나에서 서로 다른 3종의 실패가 겹쳐 나왔다 — 현황서 §5-12(근거 극성 반전) · §5-13(질문 프레임 굴절) · §5-14(배경절 오라벨).",
+  "route": "POST /ask",
+  "body": {
+    "question": "SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?",
+    "workspace_keys": ["00164779"]
+  },
+  "workspace_note": "00164779 = SK하이닉스. /ask 는 workspace_keys 를 필수로 받기로 확정됐다(설계서 §3).",
+  "assertions": "없음. 이 단계에서는 정답 기준을 정하지 않는다 — 현황서 §6-2 ⑤ Claim validation · ⑥ Evaluation 에서 정한다."
+}

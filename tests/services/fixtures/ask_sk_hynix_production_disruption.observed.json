@@ -1,0 +1,2736 @@
+{
+  "case": "ask_sk_hynix_production_disruption",
+  "recorded_at": "20260823-223205",
+  "git_head": "27c4e25",
+  "note": "관측 기록이다. 정답이 아니다 — pass/fail 기준은 아직 없다.",
+  "request": {
+    "question": "SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?",
+    "workspace_keys": [
+      "00164779"
+    ]
+  },
+  "retrieved": {
+    "question": "SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?",
+    "match_type": "EXACT",
+    "companies": [
+      {
+        "key": "00164779",
+        "name": "SK하이닉스",
+        "label": "Company"
+      }
+    ],
+    "events": [
+      {
+        "event_id": "evt_news_153cd0debaae",
+        "name": "HBM3E 대량 양산 차질",
+        "event_type": "공급망",
+        "is_risk": true,
+        "role": "subject",
+        "occurred_at": "2024-10-29",
+        "article_count": 1,
+        "timeline": [
+          {
+            "period": "2024-10",
+            "name": "HBM3E 12단 양산"
+          }
+        ],
+        "evidence_ids": [
+          "ev_71d469860eb2a66c"
+        ]
+      },
+      {
+        "event_id": "evt_news_396fdfd70048",
+        "name": "생산 장비 공급처 다각화",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2024-10-18",
+        "article_count": 1,
+        "timeline": [],
+        "evidence_ids": [
+          "ev_5a47a99505f4db67"
+        ]
+      },
+      {
+        "event_id": "evt_news_870c006acee3",
+        "name": "메모리 반도체 생산 확대",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2025-11-14",
+        "article_count": 2,
+        "timeline": [
+          {
+            "period": "2025-11",
+            "name": "M15x 공장의 HBM4 규격 고대역폭 메모리 생산 확대"
+          }
+        ],
+        "evidence_ids": [
+          "ev_4fa6a58a5c293758"
+        ]
+      },
+      {
+        "event_id": "evt_news_77b13c5c182a",
+        "name": "이천 공장 질소 누출 사고",
+        "event_type": "사고재해",
+        "is_risk": true,
+        "role": "subject",
+        "occurred_at": "2024-02-16",
+        "article_count": 1,
+        "timeline": [
+          {
+            "period": "2024-02",
+            "name": "이천 공장 질소가스 누출 사고"
+          }
+        ],
+        "evidence_ids": [
+          "ev_c4da6759d46b4f51"
+        ]
+      },
+      {
+        "event_id": "evt_news_93b19ec040a2",
+        "name": "SK하이닉스 신규 장비 발주",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2025-12-10",
+        "article_count": 4,
+        "timeline": [
+          {
+            "period": "2024-06",
+            "name": "12단 HBM3E용 TC본딩 장비 발주"
+          },
+          {
+            "period": "2025-12",
+            "name": "청주 M15X 공장 HBM4용 TC본더 발주"
+          },
+          {
+            "period": "2025-08",
+            "name": "SK하이닉스 발주 공백"
+          }
+        ],
+        "evidence_ids": [
+          "ev_d7b18ebff8cf4136"
+        ]
+      },
+      {
+        "event_id": "evt_news_64359812273c",
+        "name": "우시 공장 화재",
+        "event_type": "사고재해",
+        "is_risk": true,
+        "role": "subject",
+        "occurred_at": "2013-09-05",
+        "article_count": 1,
+        "timeline": [],
+        "evidence_ids": [
+          "ev_22409d52284429ab"
+        ]
+      },
+      {
+        "event_id": "evt_news_e48b8ddb21df",
+        "name": "장기공급계약",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2026-07-29",
+        "article_count": 2,
+        "timeline": [],
+        "evidence_ids": [
+          "ev_02c782d3f340f24e"
+        ]
+      },
+      {
+        "event_id": "evt_news_0b7945a17217",
+        "name": "첨단 패키징 공장 건설",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2026-02-06",
+        "article_count": 1,
+        "timeline": [],
+        "evidence_ids": [
+          "ev_43aabbcf83e1b674"
+        ]
+      },
+      {
+        "event_id": "evt_news_5bec008f0f83",
+        "name": "중국 우시 D램 공장",
+        "event_type": "사업확장",
+        "is_risk": false,
+        "role": "subject",
+        "occurred_at": "2022-01-28",
+        "article_count": 1,
+        "timeline": [],
+        "evidence_ids": [
+          "ev_f38b2c3616995f56"
+        ]
+      },
+      {
+        "event_id": "evt_news_8ca5978acc0f",
+        "name": "블랙웰 결함",
+        "event_type": "품질",
+        "is_risk": true,
+        "role": "subject",
+        "occurred_at": "2025-01-14",
+        "article_count": 2,
+        "timeline": [
+          {
+            "period": "2025-01",
+            "name": "블랙웰 본격 양산"
+          }
+        ],
+        "evidence_ids": [
+          "ev_28dd5c1a54359f76"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:2302",
+        "evidence_id": "ev_2906b90b748bc6f0",
+        "type": "OWNS_STAKE_IN",
+        "subtype": "최대주주",
+        "source": {
+          "key": "01596425",
+          "name": "SK스퀘어",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-06-22",
+        "valid_from": "2026-06-18",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 3,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 62,
+        "days_until_refresh": 118,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:2780",
+        "evidence_id": "ev_183f7ed9b9b7e981",
+        "type": "OWNS_STAKE_IN",
+        "subtype": "5%이상주주",
+        "source": {
+          "key": "00337977",
+          "name": "CapitalResearchandManagementCompany",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": 3.53,
+        "freshness": "current",
+        "last_seen": "2026-06-09",
+        "valid_from": "2026-06-09",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 1,
+        "source_type": "dart",
+        "refresh_cycle_days": 365,
+        "days_since": 75,
+        "days_until_refresh": 290,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:2781",
+        "evidence_id": "ev_eb00dbc69670f214",
+        "type": "OWNS_STAKE_IN",
+        "subtype": "5%이상주주",
+        "source": {
+          "key": "00789897",
+          "name": "BlackRockFundAdvisors",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": 5.0,
+        "freshness": "current",
+        "last_seen": "2026-02-20",
+        "valid_from": "2026-02-20",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 1,
+        "source_type": "dart",
+        "refresh_cycle_days": 365,
+        "days_since": 184,
+        "days_until_refresh": 181,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:10413",
+        "evidence_id": "ev_31a5a2faa19adbd0",
+        "type": "OWNS_STAKE_IN",
+        "subtype": "재무적 투자자",
+        "source": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "target": {
+          "key": "키옥시아",
+          "name": "키옥시아",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": 3900000000000,
+        "ratio": 19.0,
+        "freshness": "current",
+        "last_seen": "2026-07-27",
+        "valid_from": "2025-11-24",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 6,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 27,
+        "days_until_refresh": 153,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:1825",
+        "evidence_id": "ev_57bc86f6d075367c",
+        "type": "SUPPLIES_TO",
+        "subtype": "반도체 장비",
+        "source": {
+          "key": "01208751",
+          "name": "아이에스티이",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": 6800000000,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-02-23",
+        "valid_from": "2026-02-23",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 3,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 181,
+        "days_until_refresh": -1,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:2157",
+        "evidence_id": "ev_8bde7dcc98052c6e",
+        "type": "SUPPLIES_TO",
+        "subtype": null,
+        "source": {
+          "key": "00301246",
+          "name": "SFA반도체",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-03-23",
+        "valid_from": "2001-09",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 3,
+        "source_type": "dart",
+        "refresh_cycle_days": 365,
+        "days_since": 153,
+        "days_until_refresh": 212,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:2104",
+        "evidence_id": "ev_c93d77e1c7ec3b28",
+        "type": "SUPPLIES_TO",
+        "subtype": "TC본딩 장비",
+        "source": {
+          "key": "01241987",
+          "name": "한화세미텍",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-06-10",
+        "valid_from": "2026-06-10",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 4,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 74,
+        "days_until_refresh": 106,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:1416",
+        "evidence_id": "ev_bc5777f17632e336",
+        "type": "SUPPLIES_TO",
+        "subtype": null,
+        "source": {
+          "key": "01080252",
+          "name": "넥스틴",
+          "label": "Company"
+        },
+        "target": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-03-26",
+        "valid_from": "2026-03-26",
+        "valid_until": "2026-10-11",
+        "score": 1.0,
+        "corroboration": 5,
+        "source_type": "dart_filing",
+        "refresh_cycle_days": 0,
+        "days_since": 150,
+        "days_until_refresh": -150,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:1534",
+        "evidence_id": "ev_552bdbee7a883bc0",
+        "type": "SUPPLIES_TO",
+        "subtype": "고대역폭메모리(HBM)",
+        "source": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "target": {
+          "key": "엔비디아",
+          "name": "엔비디아",
+          "label": "Company"
+        },
+        "symmetric": false,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-06-09",
+        "valid_from": "2023-11-28",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 9,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 75,
+        "days_until_refresh": 105,
+        "exclusive": null,
+        "other_counterparties": []
+      },
+      {
+        "edge_id": "5:d47fb5c8-4171-4af4-8254-a892b395fe0c:7706",
+        "evidence_id": "ev_9eadf57c1cf2e3ea",
+        "type": "PARTNERS_WITH",
+        "subtype": "공급망",
+        "source": {
+          "key": "00164779",
+          "name": "SK하이닉스",
+          "label": "Company"
+        },
+        "target": {
+          "key": "엔비디아",
+          "name": "엔비디아",
+          "label": "Company"
+        },
+        "symmetric": true,
+        "amount": null,
+        "ratio": null,
+        "freshness": "current",
+        "last_seen": "2026-06-09",
+        "valid_from": "2025-04-21",
+        "valid_until": null,
+        "score": 1.0,
+        "corroboration": 7,
+        "source_type": "news",
+        "refresh_cycle_days": 180,
+        "days_since": 75,
+        "days_until_refresh": 105,
+        "exclusive": null,
+        "other_counterparties": []
+      }
+    ],
+    "propagation": [
+      {
+        "target": "SK하이닉스",
+        "key": "00164779",
+        "score": 0.54,
+        "hops": 1,
+        "stated": true,
+        "channel": null,
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스"
+        ]
+      },
+      {
+        "target": "애플",
+        "key": "애플",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "애플"
+        ]
+      },
+      {
+        "target": "ASMPT",
+        "key": "asmpt",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "ASMPT"
+        ]
+      },
+      {
+        "target": "한미반도체",
+        "key": "00161383",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한미반도체"
+        ]
+      },
+      {
+        "target": "구글",
+        "key": "구글",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "구글"
+        ]
+      },
+      {
+        "target": "앤트로픽",
+        "key": "앤트로픽",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "앤트로픽"
+        ]
+      },
+      {
+        "target": "한국마이크로소프트",
+        "key": "00192790",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한국마이크로소프트"
+        ]
+      },
+      {
+        "target": "엔비디아",
+        "key": "엔비디아",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "엔비디아"
+        ]
+      },
+      {
+        "target": "오픈ai",
+        "key": "오픈ai",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "오픈ai"
+        ]
+      },
+      {
+        "target": "웨이모",
+        "key": "웨이모",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "웨이모"
+        ]
+      },
+      {
+        "target": "섀넌 신추앙",
+        "key": "섀넌신추앙",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "섀넌 신추앙"
+        ]
+      },
+      {
+        "target": "신에츠",
+        "key": "신에츠",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "신에츠"
+        ]
+      },
+      {
+        "target": "미라이얼",
+        "key": "미라이얼",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "미라이얼"
+        ]
+      },
+      {
+        "target": "삼성전자",
+        "key": "00126380",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "삼성전자"
+        ]
+      },
+      {
+        "target": "AMD",
+        "key": "amd",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "AMD"
+        ]
+      },
+      {
+        "target": "비보",
+        "key": "비보",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "비보"
+        ]
+      },
+      {
+        "target": "M7",
+        "key": "m7",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "M7"
+        ]
+      },
+      {
+        "target": "LG이노텍",
+        "key": "00105961",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "LG이노텍"
+        ]
+      },
+      {
+        "target": "아이에스티이",
+        "key": "01208751",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "아이에스티이"
+        ]
+      },
+      {
+        "target": "엠엑스로보틱스",
+        "key": "00137915",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠엑스로보틱스"
+        ]
+      },
+      {
+        "target": "이엔에프테크놀로지",
+        "key": "00530185",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이엔에프테크놀로지"
+        ]
+      },
+      {
+        "target": "케이씨텍",
+        "key": "01261893",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "케이씨텍"
+        ]
+      },
+      {
+        "target": "가온전선",
+        "key": "00104768",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "가온전선"
+        ]
+      },
+      {
+        "target": "디아이티",
+        "key": "00576798",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이티"
+        ]
+      },
+      {
+        "target": "피앤에스로지스",
+        "key": "01530447",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "피앤에스로지스"
+        ]
+      },
+      {
+        "target": "ASML",
+        "key": "asml",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "ASML"
+        ]
+      },
+      {
+        "target": "유니테스트",
+        "key": "00540447",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "유니테스트"
+        ]
+      },
+      {
+        "target": "엘티메탈",
+        "key": "00167341",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엘티메탈"
+        ]
+      },
+      {
+        "target": "엠케이전자",
+        "key": "00121686",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠케이전자"
+        ]
+      },
+      {
+        "target": "덕산하이메탈",
+        "key": "00471068",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "덕산하이메탈"
+        ]
+      },
+      {
+        "target": "동진쎄미켐",
+        "key": "00118804",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "동진쎄미켐"
+        ]
+      },
+      {
+        "target": "심텍",
+        "key": "01095722",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "심텍"
+        ]
+      },
+      {
+        "target": "하나머티리얼즈",
+        "key": "00660750",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "하나머티리얼즈"
+        ]
+      },
+      {
+        "target": "이오테크닉스",
+        "key": "00246417",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이오테크닉스"
+        ]
+      },
+      {
+        "target": "솔브레인",
+        "key": "01489648",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "솔브레인"
+        ]
+      },
+      {
+        "target": "SK실트론",
+        "key": "00138020",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SK실트론"
+        ]
+      },
+      {
+        "target": "한화비전",
+        "key": "01867758",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화비전"
+        ]
+      },
+      {
+        "target": "테크윙",
+        "key": "00535676",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "테크윙"
+        ]
+      },
+      {
+        "target": "한성크린텍",
+        "key": "00389998",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한성크린텍"
+        ]
+      },
+      {
+        "target": "SFA반도체",
+        "key": "00301246",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SFA반도체"
+        ]
+      },
+      {
+        "target": "마이크로투나노",
+        "key": "00624378",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "마이크로투나노"
+        ]
+      },
+      {
+        "target": "한화세미텍",
+        "key": "01241987",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화세미텍"
+        ]
+      },
+      {
+        "target": "에스엠코스",
+        "key": "01916656",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "에스엠코스"
+        ]
+      },
+      {
+        "target": "디아이",
+        "key": "00118275",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이"
+        ]
+      },
+      {
+        "target": "넥스틴",
+        "key": "01080252",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "HBM3E 대량 양산 차질",
+          "IMPACTS(positive)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "넥스틴"
+        ]
+      },
+      {
+        "target": "SK하이닉스",
+        "key": "00164779",
+        "score": 0.54,
+        "hops": 1,
+        "stated": true,
+        "channel": null,
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스"
+        ]
+      },
+      {
+        "target": "애플",
+        "key": "애플",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "애플"
+        ]
+      },
+      {
+        "target": "ASMPT",
+        "key": "asmpt",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "ASMPT"
+        ]
+      },
+      {
+        "target": "한미반도체",
+        "key": "00161383",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한미반도체"
+        ]
+      },
+      {
+        "target": "구글",
+        "key": "구글",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "구글"
+        ]
+      },
+      {
+        "target": "앤트로픽",
+        "key": "앤트로픽",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "앤트로픽"
+        ]
+      },
+      {
+        "target": "한국마이크로소프트",
+        "key": "00192790",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한국마이크로소프트"
+        ]
+      },
+      {
+        "target": "엔비디아",
+        "key": "엔비디아",
+        "score": 0.216,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "엔비디아"
+        ]
+      },
+      {
+        "target": "오픈ai",
+        "key": "오픈ai",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "오픈ai"
+        ]
+      },
+      {
+        "target": "웨이모",
+        "key": "웨이모",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "웨이모"
+        ]
+      },
+      {
+        "target": "섀넌 신추앙",
+        "key": "섀넌신추앙",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "섀넌 신추앙"
+        ]
+      },
+      {
+        "target": "신에츠",
+        "key": "신에츠",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "신에츠"
+        ]
+      },
+      {
+        "target": "미라이얼",
+        "key": "미라이얼",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "미라이얼"
+        ]
+      },
+      {
+        "target": "삼성전자",
+        "key": "00126380",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "삼성전자"
+        ]
+      },
+      {
+        "target": "AMD",
+        "key": "amd",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "AMD"
+        ]
+      },
+      {
+        "target": "비보",
+        "key": "비보",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "비보"
+        ]
+      },
+      {
+        "target": "M7",
+        "key": "m7",
+        "score": 0.13,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "M7"
+        ]
+      },
+      {
+        "target": "LG이노텍",
+        "key": "00105961",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "LG이노텍"
+        ]
+      },
+      {
+        "target": "아이에스티이",
+        "key": "01208751",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "아이에스티이"
+        ]
+      },
+      {
+        "target": "엠엑스로보틱스",
+        "key": "00137915",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠엑스로보틱스"
+        ]
+      },
+      {
+        "target": "이엔에프테크놀로지",
+        "key": "00530185",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이엔에프테크놀로지"
+        ]
+      },
+      {
+        "target": "케이씨텍",
+        "key": "01261893",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "케이씨텍"
+        ]
+      },
+      {
+        "target": "가온전선",
+        "key": "00104768",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "가온전선"
+        ]
+      },
+      {
+        "target": "디아이티",
+        "key": "00576798",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이티"
+        ]
+      },
+      {
+        "target": "피앤에스로지스",
+        "key": "01530447",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "피앤에스로지스"
+        ]
+      },
+      {
+        "target": "ASML",
+        "key": "asml",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "ASML"
+        ]
+      },
+      {
+        "target": "유니테스트",
+        "key": "00540447",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "유니테스트"
+        ]
+      },
+      {
+        "target": "엘티메탈",
+        "key": "00167341",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엘티메탈"
+        ]
+      },
+      {
+        "target": "엠케이전자",
+        "key": "00121686",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠케이전자"
+        ]
+      },
+      {
+        "target": "덕산하이메탈",
+        "key": "00471068",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "덕산하이메탈"
+        ]
+      },
+      {
+        "target": "동진쎄미켐",
+        "key": "00118804",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "동진쎄미켐"
+        ]
+      },
+      {
+        "target": "심텍",
+        "key": "01095722",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "심텍"
+        ]
+      },
+      {
+        "target": "하나머티리얼즈",
+        "key": "00660750",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "하나머티리얼즈"
+        ]
+      },
+      {
+        "target": "이오테크닉스",
+        "key": "00246417",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이오테크닉스"
+        ]
+      },
+      {
+        "target": "솔브레인",
+        "key": "01489648",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "솔브레인"
+        ]
+      },
+      {
+        "target": "SK실트론",
+        "key": "00138020",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SK실트론"
+        ]
+      },
+      {
+        "target": "한화비전",
+        "key": "01867758",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화비전"
+        ]
+      },
+      {
+        "target": "테크윙",
+        "key": "00535676",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "테크윙"
+        ]
+      },
+      {
+        "target": "한성크린텍",
+        "key": "00389998",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한성크린텍"
+        ]
+      },
+      {
+        "target": "SFA반도체",
+        "key": "00301246",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SFA반도체"
+        ]
+      },
+      {
+        "target": "마이크로투나노",
+        "key": "00624378",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "마이크로투나노"
+        ]
+      },
+      {
+        "target": "한화세미텍",
+        "key": "01241987",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화세미텍"
+        ]
+      },
+      {
+        "target": "에스엠코스",
+        "key": "01916656",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "에스엠코스"
+        ]
+      },
+      {
+        "target": "디아이",
+        "key": "00118275",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이"
+        ]
+      },
+      {
+        "target": "넥스틴",
+        "key": "01080252",
+        "score": 0.064,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "이천 공장 질소 누출 사고",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "넥스틴"
+        ]
+      },
+      {
+        "target": "SK하이닉스",
+        "key": "00164779",
+        "score": 0.48,
+        "hops": 1,
+        "stated": true,
+        "channel": null,
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스"
+        ]
+      },
+      {
+        "target": "애플",
+        "key": "애플",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "애플"
+        ]
+      },
+      {
+        "target": "ASMPT",
+        "key": "asmpt",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "ASMPT"
+        ]
+      },
+      {
+        "target": "한미반도체",
+        "key": "00161383",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한미반도체"
+        ]
+      },
+      {
+        "target": "구글",
+        "key": "구글",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "구글"
+        ]
+      },
+      {
+        "target": "앤트로픽",
+        "key": "앤트로픽",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "앤트로픽"
+        ]
+      },
+      {
+        "target": "한국마이크로소프트",
+        "key": "00192790",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "한국마이크로소프트"
+        ]
+      },
+      {
+        "target": "엔비디아",
+        "key": "엔비디아",
+        "score": 0.192,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "엔비디아"
+        ]
+      },
+      {
+        "target": "오픈ai",
+        "key": "오픈ai",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "오픈ai"
+        ]
+      },
+      {
+        "target": "웨이모",
+        "key": "웨이모",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "웨이모"
+        ]
+      },
+      {
+        "target": "섀넌 신추앙",
+        "key": "섀넌신추앙",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "섀넌 신추앙"
+        ]
+      },
+      {
+        "target": "신에츠",
+        "key": "신에츠",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "신에츠"
+        ]
+      },
+      {
+        "target": "미라이얼",
+        "key": "미라이얼",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "미라이얼"
+        ]
+      },
+      {
+        "target": "삼성전자",
+        "key": "00126380",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "삼성전자"
+        ]
+      },
+      {
+        "target": "AMD",
+        "key": "amd",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "AMD"
+        ]
+      },
+      {
+        "target": "비보",
+        "key": "비보",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "비보"
+        ]
+      },
+      {
+        "target": "M7",
+        "key": "m7",
+        "score": 0.115,
+        "hops": 2,
+        "stated": false,
+        "channel": "supply",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO(공급 차질)",
+          "M7"
+        ]
+      },
+      {
+        "target": "LG이노텍",
+        "key": "00105961",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "LG이노텍"
+        ]
+      },
+      {
+        "target": "아이에스티이",
+        "key": "01208751",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "아이에스티이"
+        ]
+      },
+      {
+        "target": "엠엑스로보틱스",
+        "key": "00137915",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠엑스로보틱스"
+        ]
+      },
+      {
+        "target": "이엔에프테크놀로지",
+        "key": "00530185",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이엔에프테크놀로지"
+        ]
+      },
+      {
+        "target": "케이씨텍",
+        "key": "01261893",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "케이씨텍"
+        ]
+      },
+      {
+        "target": "가온전선",
+        "key": "00104768",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "가온전선"
+        ]
+      },
+      {
+        "target": "디아이티",
+        "key": "00576798",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이티"
+        ]
+      },
+      {
+        "target": "피앤에스로지스",
+        "key": "01530447",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "피앤에스로지스"
+        ]
+      },
+      {
+        "target": "ASML",
+        "key": "asml",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "ASML"
+        ]
+      },
+      {
+        "target": "유니테스트",
+        "key": "00540447",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "유니테스트"
+        ]
+      },
+      {
+        "target": "엘티메탈",
+        "key": "00167341",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엘티메탈"
+        ]
+      },
+      {
+        "target": "엠케이전자",
+        "key": "00121686",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "엠케이전자"
+        ]
+      },
+      {
+        "target": "덕산하이메탈",
+        "key": "00471068",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "덕산하이메탈"
+        ]
+      },
+      {
+        "target": "동진쎄미켐",
+        "key": "00118804",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "동진쎄미켐"
+        ]
+      },
+      {
+        "target": "심텍",
+        "key": "01095722",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "심텍"
+        ]
+      },
+      {
+        "target": "하나머티리얼즈",
+        "key": "00660750",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "하나머티리얼즈"
+        ]
+      },
+      {
+        "target": "이오테크닉스",
+        "key": "00246417",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "이오테크닉스"
+        ]
+      },
+      {
+        "target": "솔브레인",
+        "key": "01489648",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "솔브레인"
+        ]
+      },
+      {
+        "target": "SK실트론",
+        "key": "00138020",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SK실트론"
+        ]
+      },
+      {
+        "target": "한화비전",
+        "key": "01867758",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화비전"
+        ]
+      },
+      {
+        "target": "테크윙",
+        "key": "00535676",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "테크윙"
+        ]
+      },
+      {
+        "target": "한성크린텍",
+        "key": "00389998",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한성크린텍"
+        ]
+      },
+      {
+        "target": "SFA반도체",
+        "key": "00301246",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "SFA반도체"
+        ]
+      },
+      {
+        "target": "마이크로투나노",
+        "key": "00624378",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "마이크로투나노"
+        ]
+      },
+      {
+        "target": "한화세미텍",
+        "key": "01241987",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "한화세미텍"
+        ]
+      },
+      {
+        "target": "에스엠코스",
+        "key": "01916656",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "에스엠코스"
+        ]
+      },
+      {
+        "target": "디아이",
+        "key": "00118275",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "디아이"
+        ]
+      },
+      {
+        "target": "넥스틴",
+        "key": "01080252",
+        "score": 0.057,
+        "hops": 2,
+        "stated": false,
+        "channel": "demand",
+        "path": [
+          "우시 공장 화재",
+          "IMPACTS(negative)",
+          "SK하이닉스",
+          "SUPPLIES_TO←(매출 상실)",
+          "넥스틴"
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "ev_2906b90b748bc6f0",
+        "text": "SK스퀘어의 SK하이닉스 지분율은 20.5%이다.\n\n— 「'지분율 20%의 마법' SK하이닉스 주주환원이 SK스퀘어 '역대급 현금'으로...」 https://www.newsquest.co.kr/news/articleView.html?idxno=268139",
+        "source_doc": "https://www.newsquest.co.kr/news/articleView.html?idxno=268139",
+        "source_type": "news",
+        "press": "뉴스퀘스트",
+        "published_at": "2026-06-18",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_183f7ed9b9b7e981",
+        "text": "CapitalResearchandManagementCompany은(는) SK하이닉스의 5%이상주주로 지분 3.53%를 보유하고 있다.",
+        "source_doc": "20260609000049",
+        "source_type": "dart",
+        "press": null,
+        "published_at": "2026-06-09",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_eb00dbc69670f214",
+        "text": "BlackRockFundAdvisors은(는) SK하이닉스의 5%이상주주로 지분 5.0%를 보유하고 있다.",
+        "source_doc": "20260220000091",
+        "source_type": "dart",
+        "press": null,
+        "published_at": "2026-02-20",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_31a5a2faa19adbd0",
+        "text": "SK하이닉스는 지난 2018년 베인캐피털이 주도한 컨소시엄에 약 3조9000억원을 투입해 키옥시아 지분을 확보한 바 있다. 컨소시엄 전체 기준 하이닉스의 지분은 약 19% 수준이다.\n\n— 「'어닝 쇼크' 키옥시아, 과제 산적…SK하이닉스 협력 \"無\"」 https://dealsite.co.kr/articles/151917",
+        "source_doc": "https://dealsite.co.kr/articles/151917",
+        "source_type": "news",
+        "press": "딜사이트",
+        "published_at": "2025-11-24",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_57bc86f6d075367c",
+        "text": "아이에스티이(212710) : SK하이닉스와 68억원 규모 반도체 장비 공급계약\n\n— 「[코스피·코스닥,SK하이닉스 LG에너지솔루션 삼성화재 아이에스티이 코웨이 카카오 한화시스템 오뚜기등 20일 주요공시]」 https://www.public25.com/news/articleView.html?idxno=40730",
+        "source_doc": "https://www.public25.com/news/articleView.html?idxno=40730",
+        "source_type": "news",
+        "press": "퍼블릭타임스",
+        "published_at": "2026-02-23",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_8bde7dcc98052c6e",
+        "text": "공급 관계 — 공급자: SFA반도체 / 수요자: SK하이닉스\n계약유형: 공급계약 / 체결: 2001-09\n목적·내용: 48TSOP 등 계약제품에 대한 안정적인 생산 공급\n출처: 사업보고서 「주요계약 및 연구개발활동」",
+        "source_doc": "20260323000826",
+        "source_type": "dart",
+        "press": "사업보고서 (2025.12)",
+        "published_at": null,
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_c93d77e1c7ec3b28",
+        "text": "한화세미텍도 SK하이닉스에 HBM4(6세대 HBM) TC 본더를 납품할 예정인 것으로 10일 파악됐다.\n\n— 「한화세미텍도 SK하이닉스에 HBM4용 TC 본더 공급」 https://zdnet.co.kr/view/?no=20260610151635",
+        "source_doc": "https://zdnet.co.kr/view/?no=20260610151635",
+        "source_type": "news",
+        "press": "지디넷코리아",
+        "published_at": "2026-06-10",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_bc5777f17632e336",
+        "text": "넥스틴은(는) SK하이닉스와 단일판매·공급계약을 체결하였다. 계약기간은 2026-03-26부터 2026-10-11까지이다.",
+        "source_doc": "20260326900367",
+        "source_type": "dart",
+        "press": "단일판매ㆍ공급계약체결(자율공시)              ",
+        "published_at": "2026-03-26",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_552bdbee7a883bc0",
+        "text": "SK하이닉스가 HBM3 메모리 개발 및 대량생산에 삼성전자를 크게 앞서나가며 엔비디아의 독점 공급사로 자리잡고 있었지만\n\n— 「엔비디아 HBM3e 공급업체 곧 확정, SK하이닉스 삼성전자 마이크론 ‘총력전’」 https://www.businesspost.co.kr/BP?command=article_view&num=334430",
+        "source_doc": "https://www.businesspost.co.kr/BP?command=article_view&num=334430",
+        "source_type": "news",
+        "press": "비즈니스포스트",
+        "published_at": "2023-11-28",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_9eadf57c1cf2e3ea",
+        "text": "SK하이닉스는 엔비디아와의 긴밀한 협력 관계를 바탕으로 1위 수성에 나선다.\n\n— 「삼성전자 공 들인 HBM...올해 경쟁 치열해진다」 https://www.mediapen.com/news/view/1008927",
+        "source_doc": "https://www.mediapen.com/news/view/1008927",
+        "source_type": "news",
+        "press": "미디어펜",
+        "published_at": "2025-04-21",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_71d469860eb2a66c",
+        "text": "2025년 HBM3E 12단 중심의 재편이 유력시되는 시장 수요 변화에 발맞춰 SK하이닉스는 이미 HBM3E 12단의 양산을 세계 최초로 시작했다.\n\n— 「HBM 수요는 많은데 공급이...‘AI 병목현상’ 전망까지 등장, SK하이닉스·삼성전자의 운명은?」 https://www.greened.kr/news/articleView.html?idxno=319737",
+        "source_doc": "https://www.greened.kr/news/articleView.html?idxno=319737",
+        "source_type": "news",
+        "press": "녹색경제신문",
+        "published_at": "2024-10-29",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_5a47a99505f4db67",
+        "text": "SK하이닉스가 폭증하는 HBM 수요와 함께 생산 장비 공급처 다각화에 나서면서, 반도체 장비 업체들의 SK하이닉스 공급 경쟁은 더 치열해질 전망이다.\n\n— 「HBM 지배하는 SK하이닉스 잡아라, 반도체 장비업체 공급 경쟁 치열」 https://www.businesspost.co.kr/BP?command=article_view&num=369401",
+        "source_doc": "https://www.businesspost.co.kr/BP?command=article_view&num=369401",
+        "source_type": "news",
+        "press": "비즈니스포스트",
+        "published_at": "2024-10-18",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_4fa6a58a5c293758",
+        "text": "대부분의 투자는 M15x 공장의 HBM4 규격 고대역폭 메모리 생산 확대에 쓰일 것으로 전망된다.\n\n— 「D램·낸드 공급 부족 '패닉바잉' 국면, 삼성전자 SK하이닉스 HBM에 투자 올인」 https://www.businesspost.co.kr/BP?command=article_view&num=419975",
+        "source_doc": "https://www.businesspost.co.kr/BP?command=article_view&num=419975",
+        "source_type": "news",
+        "press": "비즈니스포스트",
+        "published_at": "2025-11-14",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_c4da6759d46b4f51",
+        "text": "2015년 SK하이닉스 이천 공장에서 발생한 질소가스 누출 사고로 인해 근로자 3명이 사망한 사건과 관련, SK하이닉스가 하청업체에 손해배상 청구 소송을 제기한 지 8년 만에 약 8억 원을 배상받게 됐다.\n\n— 「[단독] SK하이닉스, ‘질식사고’ 하청업체에 사실상 패소…손해배상액 ‘단 8억’」 https://www.etoday.co.kr/news/view/2331521",
+        "source_doc": "https://www.etoday.co.kr/news/view/2331521",
+        "source_type": "news",
+        "press": "이투데이",
+        "published_at": "2024-02-16",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_d7b18ebff8cf4136",
+        "text": "SK하이닉스가 내년 3월경 청주 M15X 공장의 1b D램 물량 확대에 맞춰 HBM4용 TC본더 100세트 수준을 신규 발주할 계획\n\n— 「SK하이닉스, ASMPT에 HBM4용 TC본더 신규 발주」 http://www.thelec.kr/news/articleView.html?idxno=45188",
+        "source_doc": "http://www.thelec.kr/news/articleView.html?idxno=45188",
+        "source_type": "news",
+        "press": "디일렉",
+        "published_at": "2025-12-10",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_22409d52284429ab",
+        "text": "SK하이닉스의 중국 우시 공장에서 발생한 화재로 D램 가격이 치솟을 것이라는 우려와 관련해 D램 가격이 급등하지는 않을 것이라고 더레지스터가 5일 보도했다.\n\n— 「외신, \"SK하이닉스 생산차질 크지 않아…D램 급등않을 것\"」 http://news.einfomax.co.kr/news/articleView.html?idxno=78127",
+        "source_doc": "http://news.einfomax.co.kr/news/articleView.html?idxno=78127",
+        "source_type": "news",
+        "press": "연합인포맥스",
+        "published_at": "2013-09-05",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_02c782d3f340f24e",
+        "text": "SK하이닉스는 장기 공급계약으로 반도체 제조 사업의 가장 큰 약점인 사이클 변동성을 극복하고, HBM 리더로서 건강하고 지속 가능한 인공지능(AI) 및 산업 생태계를 조성하겠다는 구상이다.\n\n— 「SK하이닉스, 5년 장기공급계약으로 두 마리 토끼 잡는다」 https://www.newstopkorea.com/news/articleView.html?idxno=46606",
+        "source_doc": "https://www.newstopkorea.com/news/articleView.html?idxno=46606",
+        "source_type": "news",
+        "press": "뉴스톱",
+        "published_at": "2026-07-29",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_43aabbcf83e1b674",
+        "text": "SK하이닉스가 38억7000만 달러(5조5850억원)를 투자해 미국 인디애나주에 짓기로 한 첨단 패키징 공장 건설도 조만간 본궤도에 오를 전망이다.\n\n— 「'현금 쌓인다' 삼성전자·SK하이닉스, 美 공장 투자 탄력」 https://www.newsis.com/view/NISX20260206_0003505281",
+        "source_doc": "https://www.newsis.com/view/NISX20260206_0003505281",
+        "source_type": "news",
+        "press": "뉴시스",
+        "published_at": "2026-02-06",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_f38b2c3616995f56",
+        "text": "SK하이닉스는 중국 장쑤성 우시 D램 생산라인을 운영하는 현지 법인에 2조3940억원을 출자한다고 28일 공시했다.\n\n— 「SK하이닉스, 중국 우시 D램 공장에 3년간 2.4조 보완 투자」 http://www.seoulfn.com/news/articleView.html?idxno=445470",
+        "source_doc": "http://www.seoulfn.com/news/articleView.html?idxno=445470",
+        "source_type": "news",
+        "press": "서울파이낸스",
+        "published_at": "2022-01-28",
+        "missing": false
+      },
+      {
+        "evidence_id": "ev_28dd5c1a54359f76",
+        "text": "SK하이닉스 장비 발주는 블랙웰 본격 양산에 대응, 생산능력을 확대하는 것으로 풀이된다.\n\n— 「한미반도체, SK하이닉스서 108억 규모 HBM 장비 수주」 https://www.etnews.com/20250114000190",
+        "source_doc": "https://www.etnews.com/20250114000190",
+        "source_type": "news",
+        "press": "전자신문",
+        "published_at": "2025-01-14",
+        "missing": false
+      }
+    ]
+  },
+  "response": {
+    "answer": "SK하이닉스는 최근 HBM3E 대량 양산에 차질이 발생했다고 보도되었습니다. 이 사건은 2024년 10월 29일에 보도된 내용으로, HBM3E 12단의 양산이 세계 최초로 시작되었지만, 시장 수요 변화에 따라 생산에 어려움이 생겼습니다. 또한, 이천 공장에서 질소 누출 사고가 발생한 적이 있으며, 이 사건은 2024년 2월 16일에 보도되었습니다. 이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다.",
+    "sources": [
+      {
+        "evidence_id": "ev_71d469860eb2a66c",
+        "edge_id": null,
+        "text": "2025년 HBM3E 12단 중심의 재편이 유력시되는 시장 수요 변화에 발맞춰 SK하이닉스는 이미 HBM3E 12단의 양산을 세계 최초로 시작했다.\n\n— 「HBM 수요는 많은데 공급이...‘AI 병목현상’ 전망까지 등장, SK하이닉스·삼성전자의 운명은?」 https://www.greened.kr/news/articleView.html?idxno=319737",
+        "source_doc": "https://www.greened.kr/news/articleView.html?idxno=319737",
+        "source_type": "news",
+        "published_at": "2024-10-29"
+      },
+      {
+        "evidence_id": "ev_c4da6759d46b4f51",
+        "edge_id": null,
+        "text": "2015년 SK하이닉스 이천 공장에서 발생한 질소가스 누출 사고로 인해 근로자 3명이 사망한 사건과 관련, SK하이닉스가 하청업체에 손해배상 청구 소송을 제기한 지 8년 만에 약 8억 원을 배상받게 됐다.\n\n— 「[단독] SK하이닉스, ‘질식사고’ 하청업체에 사실상 패소…손해배상액 ‘단 8억’」 https://www.etoday.co.kr/news/view/2331521",
+        "source_doc": "https://www.etoday.co.kr/news/view/2331521",
+        "source_type": "news",
+        "published_at": "2024-02-16"
+      }
+    ],
+    "failed": false
+  },
+  "counts": {
+    "companies": 1,
+    "events": 10,
+    "relations": 10,
+    "propagation": 135,
+    "evidence": 20,
+    "evidence_missing": 0,
+    "sources": 2
+  },
+  "match_type": "EXACT",
+  "failed": false
+}
