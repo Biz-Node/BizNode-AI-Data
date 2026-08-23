@@ -24,11 +24,11 @@ HTTP 쪽에서 필요한 타임아웃은 `retrieve_async()` 가 감싼다 — �
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 from app.api.schemas import (AskRequest, Event, Evidence, MatchType, Propagation, Relation,
                              RelationEndpoint, RetrieveResponse)
+from app.core.trace import new_trace_id, trace_logger
 from app.services import company_service, relation_service
 from search.dto.search_request import SearchRequest
 from search.dto.search_result import SearchResult
@@ -36,7 +36,11 @@ from search.model.enums import EntityType, SearchMode
 from search.service.factory import build_orchestrator
 from search.service.orchestrator import SearchOrchestrator
 
-log = logging.getLogger(__name__)
+log = trace_logger(__name__)
+
+# 로그 한 줄에 실을 근거 id 개수. 전량은 응답에 있고, 로그에는 「어떤 것이
+# 걸렸나」의 앞머리만 있으면 된다.
+_MAX_LOGGED_EVIDENCE = 10
 
 # ── 상한 셋. 전부 **실측 근거 없는 잠정치**다 ────────────────────────────
 # 챗봇이 한 답변에서 실제로 인용하는 양을 재 본 적이 없다. 상한을 걸지 않으면
@@ -93,6 +97,8 @@ class RetrieveService:
 
     def retrieve(self, request: AskRequest) -> RetrieveResponse:
         """질문 하나 → 챗봇이 인용할 재료. **여기서 문장을 만들지 않는다.**"""
+        # 요청 경계다 — 여기서 발급한 id 가 검색·랭킹·근거·LLM 로그를 잇는다.
+        new_trace_id()
         search_request = SearchRequest(
             query=request.question,
             workspace_keys=request.workspace_keys,
@@ -191,19 +197,23 @@ class RetrieveService:
         달린 근거(`Event.evidence_ids`), 그리고 검색이 짚어 준 근거. 어느 하나만
         보면 답변이 인용할 수 있는 문장이 줄어든다.
         """
-        ids: list[str] = []
-        for relation in relations:
-            if relation.evidence_id:
-                ids.append(relation.evidence_id)
-        for event in events:
-            ids.extend(event.evidence_ids)
-        for hit in result.hits:
-            for ref in hit.evidence:
-                if ref.get("evidence_id"):
-                    ids.append(ref["evidence_id"])
+        from_relations = [r.evidence_id for r in relations if r.evidence_id]
+        from_events = [eid for event in events for eid in event.evidence_ids]
+        from_hits = [ref["evidence_id"] for hit in result.hits for ref in hit.evidence
+                     if ref.get("evidence_id")]
+        ids = from_relations + from_events + from_hits
 
         rows = relation_service.evidence_for_ids(ids)
-        return [Evidence(**row) for row in rows]
+        evidence = [Evidence(**row) for row in rows]
+
+        # 출처별로 갈라 남긴다 — 합계만 있으면 「근거가 왜 이것뿐인가」를 못
+        # 따진다. `missing` 은 id 는 있는데 원문을 못 찾은 것이라 인용에 못 쓴다.
+        log.info("evidence.collect from_relations=%d from_events=%d from_hits=%d "
+                 "unique=%d -> fetched=%d missing=%d ids=%s",
+                 len(from_relations), len(from_events), len(from_hits), len(set(ids)),
+                 len(evidence), sum(1 for e in evidence if e.missing),
+                 [e.evidence_id for e in evidence[:_MAX_LOGGED_EVIDENCE]])
+        return evidence
 
     # ── HTTP 경계용 ──────────────────────────────────────────────────────
     async def retrieve_async(self, request: AskRequest) -> RetrieveResponse:

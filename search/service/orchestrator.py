@@ -33,6 +33,7 @@ import time
 from datetime import date
 from typing import Optional
 
+from app.core.trace import trace_logger
 from pipeline.normalizer.resolver import Resolution
 from search.dto.search_hit import SearchHit
 from search.dto.search_query import SearchQuery
@@ -45,6 +46,16 @@ from search.service.graph_searcher import GraphSearcher
 from search.service.query_router import QueryRouter
 from search.service.result_ranker import ResultRanker
 from search.service.vector_searcher import VectorSearcher
+
+
+log = trace_logger(__name__)
+
+# 질의는 사용자 입력이라 길이 상한이 없다 — 그대로 찍으면 로그 한 줄이 화면을 덮는다.
+_MAX_LOGGED_QUERY = 120
+
+
+def _short(text: str) -> str:
+    return text if len(text) <= _MAX_LOGGED_QUERY else text[:_MAX_LOGGED_QUERY] + "…"
 
 
 def _normalize_for_routing(raw_query: str) -> str:
@@ -97,6 +108,13 @@ class SearchOrchestrator:
         # 「생산 차질 → SUPPLIES_TO/DEPENDS_ON」처럼 엣지를 직접 지정하는데,
         # QueryRouter 키워드 추론에 밀리면 프로파일이 무력해진다.
         edge_types = request.edge_types or routing.edge_types
+
+        # 라우팅 직후에 찍는다 — 「이 질의가 어느 분기로 갔는가」가 이 줄 하나로
+        # 결정되고, 뒤따르는 모든 로그가 그 분기의 결과이기 때문이다.
+        log.info("search.start query=%r edge_types=%s direction=%s workspace=%d",
+                 _short(request.query), edge_types,
+                 routing.direction.value if routing.direction else None,
+                 len(request.workspace_keys or []))
 
         # AnchorExtractor는 분기와 무관하게 먼저 돈다 — 확신이 없으면 None을 주고
         # 원문이 그대로 내려간다. 전에는 edge_types가 있는 분기에서만 불러서,
@@ -162,6 +180,9 @@ class SearchOrchestrator:
                 hit.evidence = []
 
         took_ms = int((time.monotonic() - start) * 1000)
+        log.info("search.done mode=%s hits=%d top=%s took_ms=%d semantic_fallback=%s",
+                 mode.value, len(hits), [hit.entity_id for hit in hits[:3]],
+                 took_ms, used_semantic_fallback)
         result = SearchResult(
             query=request.query,
             mode=mode,

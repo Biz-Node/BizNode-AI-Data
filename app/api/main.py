@@ -38,7 +38,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from app.api import examples as ex
-from app.core.config import CHROMA_HOST, CHROMA_PORT
+from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
+from app.core.trace import configure_logging
 from app.services.retrieve_service import RetrieveService
 from app.services.answer_service import AnswerService
 from app.services import (
@@ -58,6 +59,10 @@ from app.api.schemas import (
     WorkspaceInsightRequest, WorkspaceSuggestRequest, WorkspaceSuggestResponse,
     WorkspaceSummaryRequest,
 )
+
+# 라우트를 만들기 전에 켠다 — 이게 없으면 검색·답변 경계의 trace 로그가 root
+# 로거 기본값(WARNING)에 막혀 통째로 사라진다.
+configure_logging(LOG_LEVEL)
 
 app = FastAPI(
     title="BizNode 데이터 API",

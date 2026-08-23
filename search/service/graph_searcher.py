@@ -19,11 +19,18 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional
 
+from app.core.trace import trace_logger
 from app.services.graph_service import Relation, relations_of
 from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.resolver import Resolution
 from search.dto.search_hit import SearchHit, SearchRelation
 from search.model.enums import Direction, EntityType
+
+log = trace_logger(__name__)
+
+# 로그 한 줄에 실을 엣지 개수. 전부 찍으면 한 검색이 로그 수십 줄이 된다 —
+# 추적에는 「어떤 엣지가 걸렸나」의 앞머리만 있으면 되고, 전량은 응답에 있다.
+_MAX_LOGGED_EDGES = 5
 
 # resolved_entities가 비었을 때(norm_name=None) relations_of()가 그래프 전체를
 # 스캔하지 않도록 강제하는 안전 상한(§6). 실측 근거 없는 잠정치.
@@ -160,6 +167,18 @@ def _to_search_hit(
     )
 
 
+def _logged_edges(hits: list[SearchHit]) -> list[str]:
+    """`edge_id source→target` 로 요약한다 — id 만 있으면 로그를 읽고도 어느
+    관계인지 모르고, 이름만 있으면 그래프에서 되짚을 수가 없다."""
+    summary: list[str] = []
+    for hit in hits:
+        for relation in hit.relations or []:
+            summary.append(f"{relation.edge_id} {relation.source}→{relation.target}")
+            if len(summary) >= _MAX_LOGGED_EDGES:
+                return summary
+    return summary
+
+
 class GraphSearcher:
     def search(
         self,
@@ -178,9 +197,18 @@ class GraphSearcher:
         anchor_norm_name = normalize_company_name(primary.corp_name) if primary else None
 
         if anchor_norm_name is not None:
-            return self._search_anchored(
+            hits = self._search_anchored(
                 anchor_norm_name, edge_types, direction, top_k, workspace_keys)
-        return self._search_anchorless(edge_types, top_k, workspace_keys)
+        else:
+            hits = self._search_anchorless(edge_types, top_k, workspace_keys)
+
+        # anchor 유무로 쿼리가 통째로 갈리므로 그 값을 같이 남긴다 — 결과가
+        # 이상할 때 제일 먼저 볼 것이 「anchor 를 잡았는가」다.
+        log.info("graph.search anchor=%s edge_types=%s direction=%s -> hits=%d edges=%s",
+                 anchor_norm_name, edge_types,
+                 direction.value if direction is not None else None,
+                 len(hits), _logged_edges(hits))
+        return hits
 
     def _search_anchored(
         self, anchor_norm_name: str, edge_types: list[str],
