@@ -131,7 +131,17 @@ class PostgresRepository:
             return [(cand, corp_name, float(sim)) for cand, corp_name, sim in cur.fetchall()]
 
     def alias_exact_match(self, candidates: list[str]) -> Optional[str]:
-        """후보 중 `company_aliases`에 정확히 등록된 것 하나 — 없으면 None.
+        """후보 중 `company_aliases`에 정확히 등록된 것의 **정식 법인명**
+        (`canon_name`) — 없으면 None.
+
+        ★2026-08-23: 전에는 **걸린 별칭 문자열 그대로**("네이버")를 돌려줬다.
+          그러면 호출부가 그 문자열을 EntityResolver에 다시 넘기고, resolve()는
+          corp_code_master만 보므로 similarity('NAVER','네이버')=0.000에 걸려
+          **같은 회사를 두 번째 창구에서 다시 놓쳤다**(현황서 §4-6).
+          canon_name('NAVER Corporation')을 주면 resolve()의 fuzzy 경로가
+          normalize_company_name()으로 'naver'를 만들어 'NAVER'에 1.000으로
+          붙는다 — EntityResolver._tier()가 이미 열어 둔 「정규화/별칭 경유
+          fuzzy」 계층(tier 1)이 정확히 이 경우다.
 
         pg_trgm이 원리적으로 못 잇는 경우를 위한 2차 창구다.
         similarity('NAVER','네이버')는 **0.000**이다 — 트라이그램은 한글과
@@ -160,16 +170,18 @@ class PostgresRepository:
         with postgres_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT DISTINCT k.key
+                SELECT k.key, MIN(a.canon_name) AS canon_name
                 FROM unnest(%(keys)s::text[]) AS k(key)
-                WHERE EXISTS (
-                    SELECT 1 FROM company_aliases a
-                    WHERE a.alias_key = k.key OR a.canonical_key = k.key
-                )
+                JOIN company_aliases a
+                  ON a.alias_key = k.key OR a.canonical_key = k.key
+                WHERE a.canon_name IS NOT NULL AND a.canon_name <> ''
+                GROUP BY k.key
                 """,
                 {"keys": list(by_key)},
             )
-            hits = [by_key[row[0]] for row in cur.fetchall()]
+            hits = [(by_key[row[0]], row[1]) for row in cur.fetchall()]
         if not hits:
             return None
-        return max(hits, key=len)
+        # 여러 개가 걸리면 **후보가 긴 것**을 고른다 — 짧을수록 일상어와
+        # 겹칠 확률이 높다. 고르는 기준은 후보, 돌려주는 것은 정식 법인명이다.
+        return max(hits, key=lambda h: len(h[0]))[1]

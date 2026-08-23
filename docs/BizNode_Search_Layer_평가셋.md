@@ -6,7 +6,7 @@
 >     -o docs/BizNode_Search_Layer_평가셋.md
 > ```
 
-마지막 실행 **2026-08-22** · 케이스 **20개**
+마지막 실행 **2026-08-23** · 케이스 **20개**
 
 케이스 정의는 `tests/search/eval/cases.py`, 판정은 `tests/search/eval/test_search_eval.py`에 있습니다.
 
@@ -19,8 +19,8 @@
 
 | 판정 | 케이스 |
 |---|---|
-| PASS | 18 |
-| FAIL (known issue) | 2 |
+| PASS | 19 |
+| FAIL (known issue) | 1 |
 
 | # | 케이스 | 질의 | 판정 방식 | 결과 |
 |---:|---|---|---|---|
@@ -42,7 +42,7 @@
 | 16 | `rank-workspace-relationship` | 삼성전자에 납품하는 기업은? | 고정값 | PASS |
 | 17 | `sem-hbm-anchorless` | HBM을 만드는 기업 | 구조 조건 | PASS |
 | 18 | `sem-unknown-company` | 존재하지않는기업 관련 뉴스 | 구조 조건 | PASS |
-| 19 | `known-alias-naver` | 네이버 | 고정값 | FAIL (known issue) |
+| 19 | `known-alias-naver` | 네이버 | 고정값 | PASS |
 | 20 | `known-generic-noun-daesang` | 이 사건의 대상 기업은? | 구조 조건 | FAIL (known issue) |
 
 ## 2. 검색 분기 커버리지
@@ -109,7 +109,7 @@
 | 판정 방식 | 고정값(기업명·corp_code를 못 박는다) |
 | 무엇을 검증하나 | 2글자 실존 상장사가 _MIN_CANDIDATE_LEN 필터에 탈락하지 않는가 (상수를 2에서 올리면 이 케이스가 죽는다) |
 | 커버 분기 | mode:NAME, anchor:Kiwi 문맥 분석, negative:2글자 기업명 |
-| 현재 실제 결과 | mode=NAME · anchor='농심' · direction=없음 · edge_types=없음 · 1건 · postgres · Company 1 · 상위 농심 · 40ms |
+| 현재 실제 결과 | mode=NAME · anchor='농심' · direction=없음 · edge_types=없음 · 1건 · postgres · Company 1 · 상위 농심 · 46ms |
 
 ### 3. `name-josa-noise-ilii` — **PASS**
 
@@ -139,7 +139,7 @@
 | 판정 방식 | 고정값(기업명·corp_code를 못 박는다) |
 | 무엇을 검증하나 | corp_code_master에 영문으로 등재된 법인은 영문 질의로 NAME 분기에 들어간다 — 한글 질의(known-alias-naver)와의 비대칭을 드러내는 대조군 |
 | 커버 분기 | mode:NAME, anchor:DART 1차, negative:한글/영문 alias |
-| 현재 실제 결과 | mode=NAME · anchor='NAVER' · direction=없음 · edge_types=없음 · 1건 · postgres · Company 1 · 상위 NAVER · 37ms |
+| 현재 실제 결과 | mode=NAME · anchor='NAVER' · direction=없음 · edge_types=없음 · 1건 · postgres · Company 1 · 상위 NAVER · 38ms |
 
 ### 5. `rel-supplies-outgoing` — **PASS**
 
@@ -184,7 +184,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | OWNS_STAKE_IN에서도 주체 조사가 OUTGOING을 만드는가 (투자자 → 피투자사) |
 | 커버 분기 | mode:RELATIONSHIP, direction:OUTGOING, router:깊은 규칙, graph:anchored |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=outgoing · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 10 · 신선도 current 10 · 상위 스킬드AI · 미스트랄AI · 주타코어 · 96ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=outgoing · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 10 · 신선도 current 10 · 상위 스킬드AI · 미스트랄AI · 주타코어 · 98ms |
 
 ### 8. `rel-stake-incoming` — **PASS**
 
@@ -199,7 +199,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 같은 edge_type이 대상 조사에서 INCOMING으로 뒤집히는가 (피투자사 ← 투자자). 상대가 Person일 수도 있다(EDGE_MATRIX) |
 | 커버 분기 | mode:RELATIONSHIP, direction:INCOMING, router:깊은 규칙, graph:anchored, negative:조사에 따른 방향 반전 |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=incoming · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 7 Person 3 · 신선도 current 6 stale 4 · 상위 삼성생명보험㈜ (특별계정) · 삼성화재해상보험 · 삼성복지재단 · 70ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=incoming · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 7 Person 3 · 신선도 current 6 stale 4 · 상위 삼성생명보험㈜ (특별계정) · 삼성화재해상보험 · 삼성복지재단 · 73ms |
 
 ### 9. `rel-stake-bidirectional` — **PASS**
 
@@ -214,7 +214,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 조사가 없으면 방향을 강제하지 않고(direction=None) 양방향 관계가 모두 후보에 남는가 |
 | 커버 분기 | mode:RELATIONSHIP, direction:없음(양방향), router:깊은 규칙, graph:anchored |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 10 · 신선도 current 10 · 상위 스킬드AI · 삼성생명보험㈜ (특별계정) · 삼성화재해상보험 · 71ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['OWNS_STAKE_IN'] · 10건 · neo4j · Company 10 · 신선도 current 10 · 상위 스킬드AI · 삼성생명보험㈜ (특별계정) · 삼성화재해상보험 · 73ms |
 
 ### 10. `rel-sues-incoming` — **PASS**
 
@@ -229,7 +229,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 목적격 조사 「를」+제소가 INCOMING(피고가 앵커)으로 읽히는가 |
 | 커버 분기 | mode:RELATIONSHIP, direction:INCOMING, router:깊은 규칙, graph:anchored, entity:Company, entity:Organization |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='SK하이닉스' · direction=incoming · edge_types=['SUES'] · 8건 · neo4j · Company 4 Organization 3 Person 1 · 신선도 stale 6 current 2 · 상위 소비자 집단 · 김진원 · 넷리스트 · 50ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='SK하이닉스' · direction=incoming · edge_types=['SUES'] · 8건 · neo4j · Company 4 Organization 3 Person 1 · 신선도 stale 6 current 2 · 상위 소비자 집단 · 김진원 · 넷리스트 · 49ms |
 
 ### 11. `rel-shallow-partners` — **PASS**
 
@@ -259,7 +259,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 상대 엔티티가 Person인 관계도 라벨을 지어내지 않고 그대로 싣는가. 앵커가 Company인 IS_EXECUTIVE_OF는 EDGE_MATRIX상 상대가 Person뿐이다 |
 | 커버 분기 | mode:RELATIONSHIP, router:얕은 키워드, graph:anchored, entity:Person |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['IS_EXECUTIVE_OF'] · 10건 · neo4j · Person 10 · 신선도 current 6 stale 4 · 상위 신제윤 · 김준성 · 허은녕 · 49ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['IS_EXECUTIVE_OF'] · 10건 · neo4j · Person 10 · 신선도 current 6 stale 4 · 상위 신제윤 · 김준성 · 허은녕 · 48ms |
 
 ### 13. `rel-organization-regulates` — **PASS**
 
@@ -274,7 +274,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 상대 엔티티가 Organization인 관계. REGULATES의 source는 EDGE_MATRIX상 Organization뿐이다 |
 | 커버 분기 | mode:RELATIONSHIP, router:얕은 키워드, graph:anchored, entity:Organization |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['REGULATES'] · 10건 · neo4j · Organization 10 · 신선도 current 10 · 상위 미국 정부 · 금융위원회 증권선물위원회 · 서울남부지검 금융·증권범죄합동수사부 · 49ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=없음 · edge_types=['REGULATES'] · 10건 · neo4j · Organization 10 · 신선도 current 10 · 상위 미국 정부 · 금융위원회 증권선물위원회 · 서울남부지검 금융·증권범죄합동수사부 · 50ms |
 
 ### 14. `rel-anchorless-sues` — **PASS**
 
@@ -289,7 +289,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 기업명이 없으면 anchorless 경로로 빠져 source/target 슬롯을 따로 채우는가. 앵커가 없으므로 관계의 direction은 지어내지 않고 None이며, 결과가 있어도 VectorSearcher를 섞지 않는다 |
 | 커버 분기 | mode:RELATIONSHIP, direction:없음(양방향), anchor:추출 실패, graph:anchorless |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor=None · direction=없음 · edge_types=['SUES'] · 8건 · neo4j · Company 8 · 신선도 current 8 · 상위 한미반도체 · 한화세미텍 · 넷리스트 · 124ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor=None · direction=없음 · edge_types=['SUES'] · 8건 · neo4j · Company 8 · 신선도 current 8 · 상위 한미반도체 · 한화세미텍 · 넷리스트 · 123ms |
 
 ### 15. `rel-request-edge-override` — **PASS**
 
@@ -319,7 +319,7 @@
 | 판정 방식 | 고정값(기업명·corp_code를 못 박는다) |
 | 무엇을 검증하나 | 워크스페이스는 필터가 아니라 랭킹 문맥이다 — 워크스페이스에 닿는 관계가 점수를 이기고 먼저 오되, 바깥 기업이 후보에서 사라지지는 않는가. SK하이닉스는 점수순으로는 271번째라 워크스페이스 없이는 top-10에 못 든다(현황서 §5) |
 | 커버 분기 | mode:RELATIONSHIP, direction:INCOMING, graph:anchored, ranking:workspace_keys |
-| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=incoming · edge_types=['SUPPLIES_TO'] · 10건 · neo4j · Company 10 · 신선도 current 9 stale 1 · 상위 SK하이닉스 · SFA반도체 · ㈜원익아이피에스 · 87ms |
+| 현재 실제 결과 | mode=RELATIONSHIP · anchor='삼성전자' · direction=incoming · edge_types=['SUPPLIES_TO'] · 10건 · neo4j · Company 10 · 신선도 current 9 stale 1 · 상위 SK하이닉스 · SFA반도체 · ㈜원익아이피에스 · 84ms |
 
 ### 17. `sem-hbm-anchorless` — **PASS**
 
@@ -334,7 +334,7 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 기업명도 관계 키워드도 없으면 VectorSearcher로 빠지는가. company 컬렉션만 보므로 결과는 전부 Company다 |
 | 커버 분기 | mode:SEMANTIC, anchor:추출 실패, vector:company 컬렉션, ranking:RRF |
-| 현재 실제 결과 | mode=SEMANTIC · anchor=None · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 한미반도체 · HD현대 · SK하이닉스 · 1763ms |
+| 현재 실제 결과 | mode=SEMANTIC · anchor=None · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 한미반도체 · HD현대 · SK하이닉스 · 1440ms |
 
 ### 18. `sem-unknown-company` — **PASS**
 
@@ -349,23 +349,22 @@
 | 판정 방식 | 구조 조건만(기업명 미고정) |
 | 무엇을 검증하나 | 없는 기업명을 실존 기업으로 잘못 해소하지 않는가 — anchor는 None, EntityResolver도 None이어야 하고, 의미검색 결과를 이름 해소로 둔갑시키지 않는다(mode는 SEMANTIC이지 NAME이 아니다) |
 | 커버 분기 | mode:SEMANTIC, anchor:추출 실패, vector:company 컬렉션, negative:존재하지 않는 기업 |
-| 현재 실제 결과 | mode=SEMANTIC · anchor=None · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 하나마이크론 · 코미코 · 뉴로메카 · 186ms |
+| 현재 실제 결과 | mode=SEMANTIC · anchor=None · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 하나마이크론 · 코미코 · 뉴로메카 · 178ms |
 
-### 19. `known-alias-naver` — **FAIL (known issue)**
+### 19. `known-alias-naver` — **PASS**
 
 | | |
 |---|---|
 | query | `네이버` |
 | expected_mode | NAME |
-| expected_anchor | '네이버' |
+| expected_anchor | 'NAVER Corporation' |
 | expected_direction | 해당 없음(관계 질의가 아니다) |
 | expected_edge_type | 없음 |
 | expected_result/source | source=['postgres'] · 정확히 1건 · 고정 기업: NAVER(00266961) |
 | 판정 방식 | 고정값(기업명·corp_code를 못 박는다) |
-| 무엇을 검증하나 | AnchorExtractor는 company_aliases 2차 창구로 「네이버」를 뽑아내지만, EntityResolver.resolve()는 corp_code_master만 보므로 similarity('NAVER','네이버')=0.000에 걸려 해소에 실패한다. 그 결과 NAME이어야 할 질의가 SEMANTIC으로 빠진다 |
+| 무엇을 검증하나 | corp_code_master에 'NAVER'로만 있는 회사를 한글 「네이버」로 물어도 이름 해소로 답한다. company_aliases 2차 창구가 **정식 법인명**을 돌려주므로 EntityResolver의 fuzzy 경로가 normalize로 'naver'를 만들어 1.000으로 붙는다 — 두 컴포넌트가 같은 창구를 쓴다(2026-08-23 해소) |
 | 커버 분기 | mode:NAME, anchor:company_aliases fallback, negative:한글/영문 alias |
-| 현재 실제 결과 | mode=SEMANTIC · anchor='네이버' · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 NAVER · 현대오토에버 · 삼성전자 · 186ms |
-| ⚠ known issue | AnchorExtractor는 alias로 해소하는데 EntityResolver는 못 한다 — alias_exact_match()가 corp_code를 돌려주지 않아 anchor 문자열이 그대로 pg_trgm에 다시 들어간다. 이번 작업 범위 밖(수정 금지) |
+| 현재 실제 결과 | mode=NAME · anchor='NAVER Corporation' · direction=없음 · edge_types=없음 · 1건 · postgres · Company 1 · 상위 NAVER · 49ms |
 
 ### 20. `known-generic-noun-daesang` — **FAIL (known issue)**
 
@@ -386,12 +385,6 @@
 ## 4. 알려진 결함 (이번 작업에서 고치지 않았다)
 
 `xfail(strict=True)`로 돌아갑니다 — **지금은 실패로 집계되고**, 결함이 고쳐지면 XPASS로 뒤집혀 평가셋을 갱신하라고 알립니다.
-
-### `known-alias-naver` — 네이버
-
-- **기대** NAME · anchor='네이버'
-- **실제** mode=SEMANTIC · anchor='네이버' · direction=없음 · edge_types=없음 · 10건 · chroma · Company 10 · 상위 NAVER · 현대오토에버 · 삼성전자 · 186ms
-- **왜** AnchorExtractor는 alias로 해소하는데 EntityResolver는 못 한다 — alias_exact_match()가 corp_code를 돌려주지 않아 anchor 문자열이 그대로 pg_trgm에 다시 들어간다. 이번 작업 범위 밖(수정 금지)
 
 ### `known-generic-noun-daesang` — 이 사건의 대상 기업은?
 
