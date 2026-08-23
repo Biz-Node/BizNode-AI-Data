@@ -29,7 +29,8 @@ from typing import Optional
 from app.api.schemas import (AskRequest, Event, Evidence, MatchType, Propagation, Relation,
                              RelationEndpoint, RetrieveResponse)
 from app.core.trace import new_trace_id, trace_logger
-from app.services import company_service, relation_service
+from app.services import company_service, evidence_selector, relation_service
+from search.dto.search_query import SearchQuery
 from search.dto.search_request import SearchRequest
 from search.dto.search_result import SearchResult
 from search.model.enums import EntityType, SearchMode
@@ -49,6 +50,27 @@ _MAX_LOGGED_EVIDENCE = 10
 _MAX_COMPANIES = 5
 _MAX_RELATIONS_PER_COMPANY = 10
 _MAX_RISK_EVENTS_FOR_PROPAGATION = 3
+# ★사건에는 상한이 **없었다**(Step2, 2026-08-23). 실측으로 「삼성전자와
+#   SK하이닉스의 담합 소송」이 사건 155건 → 근거 205건 → 34,430자를 프롬프트에
+#   실었다. 기업마다 따로 적용한다 — 전체 상한 하나로 두면 사건 많은 기업이
+#   다 먹는다. 역시 실측 근거 없는 잠정치다.
+_MAX_EVENTS_PER_COMPANY = 10
+
+
+def _default_embed(texts: list[str]):
+    """지연 로딩 — 임포트 시점에 OpenAI 클라이언트를 만들지 않는다. 테스트는
+    이 이름을 monkeypatch 해서 끈다(`None` 이면 유사도 없이 규칙만 쓴다)."""
+    from pipeline.vectorstore.chroma_store import get_store
+
+    return get_store().embed(texts)
+
+
+def _merge_evidence_ids(target: Event, other: Event) -> None:
+    """공유 사건의 근거를 합친다 — 순서 보존, 중복 제거."""
+    for evidence_id in other.evidence_ids:
+        if evidence_id not in target.evidence_ids:
+            target.evidence_ids.append(evidence_id)
+
 
 _MATCH_TYPE_BY_MODE: dict[SearchMode, MatchType] = {
     SearchMode.NAME: MatchType.EXACT,
@@ -92,8 +114,12 @@ def _companies_from(result: SearchResult) -> list[RelationEndpoint]:
 
 
 class RetrieveService:
-    def __init__(self, orchestrator: Optional[SearchOrchestrator] = None) -> None:
+    def __init__(self, orchestrator: Optional[SearchOrchestrator] = None,
+                 *, embed=None) -> None:
         self._orchestrator = orchestrator or build_orchestrator()
+        # 주입용 — 테스트가 OpenAI 없이 돌 수 있어야 한다. None 이면 호출 시점에
+        # 모듈 전역 `_default_embed` 를 쓴다(monkeypatch 가 먹도록 늦게 읽는다).
+        self._embed = embed
 
     def retrieve(self, request: AskRequest) -> RetrieveResponse:
         """질문 하나 → 챗봇이 인용할 재료. **여기서 문장을 만들지 않는다.**"""
@@ -105,10 +131,13 @@ class RetrieveService:
             # 인용이 목적이라 항상 켠다.
             include_evidence=True,
         )
-        _, result = self._orchestrator.search(search_request)
+        # ★`SearchQuery` 를 버리지 않는다(Step2). 앵커 기업명이 여기 있고,
+        #   그게 있어야 질문에서 「무엇을」만 떼어낼 수 있다 —
+        #   `evidence_selector.intent_of()` 참고.
+        query, result = self._orchestrator.search(search_request)
 
         companies = _companies_from(result)
-        events = self._events_of(companies)
+        events = self._events_of(companies, request.question, query)
         propagation = self._propagation_of(events)
         relations = self._relations_of(companies)
         evidence = self._evidence_of(events, relations, result)
@@ -124,18 +153,52 @@ class RetrieveService:
         )
 
     # ── 사건 ────────────────────────────────────────────────────────────
-    def _events_of(self, companies: list[RelationEndpoint]) -> list[Event]:
+    def _events_of(self, companies: list[RelationEndpoint],
+                   question: str, query: SearchQuery) -> list[Event]:
         """**Event 노드 기준**으로 묶는다. 같은 사건에 여러 기업이 엮여 있으면
         기업마다 한 번씩 나오는데, 그걸 그대로 쌓으면 같은 사건을 여러 번 말한다.
+
+        ★selection 은 **기업 scope 안에서, 기업마다 따로** 한다(Step2).
+          전부 한 줄로 세워 자르면 사건이 많은 기업이 상한을 다 먹고 나머지
+          기업이 통째로 사라진다 — 그건 「관련 없어서」가 아니라 「다른
+          기업이라서」 버린 것이다.
+
+        ★공유 사건의 근거는 **scope 안에 있는 기업들 것을 합친다.** Step1 이
+          근거를 엣지로 좁힌 뒤로, 여기 dedup 이 먼저 온 기업 것만 남기고
+          나머지를 조용히 버리고 있었다(실측: 「담합 소송」 질의에서 3건).
+          질문이 부른 기업이 둘이면 둘 다 근거다. scope 밖 기업은 애초에
+          `companies` 에 없으므로 섞이지 않는다.
         """
+        anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
+        intent = evidence_selector.intent_of(question, anchor_names)
+        matched = evidence_selector.matched_event_types(intent)
+
+        by_company = [(c, [Event(**row) for row in company_service.events_of(c.key)])
+                      for c in companies]
+        # 유사도는 **한 번에** 구한다 — 기업마다 부르면 왕복이 기업 수만큼 는다.
+        embed = self._embed if self._embed is not None else _default_embed
+        sims = evidence_selector.similarities(
+            [e for _, events in by_company for e in events],
+            intent=intent, embed=embed, anchor_names=anchor_names)
+
         out: list[Event] = []
-        seen: set[str] = set()
-        for company in companies:
-            for row in company_service.events_of(company.key):
-                if row["event_id"] in seen:
+        seen: dict[str, Event] = {}
+        dropped = 0
+        for _company, events in by_company:
+            kept, cut = evidence_selector.select(
+                events, matched=matched, sims=sims, limit=_MAX_EVENTS_PER_COMPANY)
+            dropped += len(cut)
+            for event in kept:
+                previous = seen.get(event.event_id)
+                if previous is not None:
+                    _merge_evidence_ids(previous, event)
                     continue
-                seen.add(row["event_id"])
-                out.append(Event(**row))
+                seen[event.event_id] = event
+                out.append(event)
+
+        if dropped:
+            log.info("events truncated dropped=%d kept=%d intent=%r matched=%s "
+                     "sims=%d", dropped, len(out), intent, sorted(matched), len(sims))
         return out
 
     # ── 파급 ────────────────────────────────────────────────────────────

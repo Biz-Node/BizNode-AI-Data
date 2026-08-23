@@ -20,6 +20,7 @@ from app.services.retrieve_service import RetrieveService
 from search.dto.search_hit import SearchHit
 from search.dto.search_query import SearchQuery
 from search.dto.search_result import SearchResult
+from pipeline.normalizer.resolver import Resolution
 from search.model.enums import EntityType, SearchMode
 
 _TODAY = date(2026, 8, 20)
@@ -32,10 +33,15 @@ def _hit(entity_id, name, *, entity_type=EntityType.COMPANY, evidence=()):
     )
 
 
-def _orchestrator(hits, *, mode=SearchMode.RELATIONSHIP):
+def _resolution(corp_code, corp_name):
+    return Resolution(corp_code=corp_code, corp_name=corp_name, stock_code=None,
+                      method="exact", score=1.0)
+
+
+def _orchestrator(hits, *, mode=SearchMode.RELATIONSHIP, resolved=()):
     orch = MagicMock()
     query = SearchQuery(raw_query="q", normalized_query="q",
-                        mode=mode, today=_TODAY)
+                        mode=mode, today=_TODAY, resolved_entities=list(resolved))
     result = SearchResult(query="q", mode=mode, hits=list(hits),
                           total=len(hits), took_ms=1, cache_hit=False,
                           used_semantic_fallback=False)
@@ -43,8 +49,8 @@ def _orchestrator(hits, *, mode=SearchMode.RELATIONSHIP):
     return orch
 
 
-def _event(event_id, name, *, is_risk=False, evidence_ids=()):
-    return {"event_id": event_id, "name": name, "event_type": "사고재해",
+def _event(event_id, name, *, is_risk=False, evidence_ids=(), event_type="사고재해"):
+    return {"event_id": event_id, "name": name, "event_type": event_type,
             "is_risk": is_risk, "role": "subject", "occurred_at": "2026-06-11",
             "article_count": 1, "timeline": [], "evidence_ids": list(evidence_ids)}
 
@@ -72,6 +78,9 @@ def stub_services(monkeypatch):
     relation.event_impact.return_value = []
     monkeypatch.setattr(rs_module, "company_service", company)
     monkeypatch.setattr(rs_module, "relation_service", relation)
+    # ★임베더를 끈다 — Tier A 는 조립 계약만 본다. 켜 두면 단위 테스트가
+    #   OpenAI 를 부르고, 유사도 때문에 순서가 흔들려 재현이 안 된다.
+    monkeypatch.setattr(rs_module, "_default_embed", None)
     return company, relation
 
 
@@ -170,6 +179,118 @@ def test_same_event_from_two_companies_appears_once(stub_services):
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
     assert len(got.events) == 1
+
+
+# ── 사건 selection (Step2, 2026-08-23) ──────────────────────────────────
+
+def test_events_are_capped_per_company_and_reported(stub_services, caplog):
+    """★사건에 상한이 없었다 — 실측으로 근거 205건·34,430자가 프롬프트에 실렸다.
+    자르되 **조용히 자르지 않는다.**"""
+    company, _ = stub_services
+    company.events_of.return_value = [
+        _event(f"evt_{i}", f"사건{i}") for i in range(rs_module._MAX_EVENTS_PER_COMPANY + 4)]
+    orch = _orchestrator([_hit("00126380", "삼성전자")])
+
+    with caplog.at_level("INFO"):
+        got = RetrieveService(orch).retrieve(AskRequest(question="q"))
+
+    assert len(got.events) == rs_module._MAX_EVENTS_PER_COMPANY
+    assert "events truncated" in caplog.text
+
+
+def test_each_company_gets_its_own_quota(stub_services):
+    """★기업별로 **독립** selection 한다 — 한 기업이 상한을 다 먹으면 다른
+    기업의 사건이 통째로 사라진다. 그건 「다른 기업이라서 버린 것」이 된다."""
+    company, _ = stub_services
+    n = rs_module._MAX_EVENTS_PER_COMPANY
+    company.events_of.side_effect = lambda key: (
+        [_event(f"a{i}", f"A사건{i}") for i in range(n + 5)] if key == "A"
+        else [_event("b1", "B사건")])
+    orch = _orchestrator([_hit("A", "A기업"), _hit("B", "B기업")])
+
+    got = RetrieveService(orch).retrieve(AskRequest(question="q"))
+
+    ids = {e.event_id for e in got.events}
+    assert "b1" in ids, "두 번째 기업의 사건이 첫 기업에 밀려 사라졌다"
+
+
+def test_rule_matched_event_types_are_kept_over_others(stub_services):
+    """규칙 신호가 우선 — 「노조」를 물으면 노무 사건이 상한 안에 들어온다."""
+    company, _ = stub_services
+    company.events_of.return_value = (
+        [_event(f"x{i}", f"확장{i}", event_type="사업확장")
+         for i in range(rs_module._MAX_EVENTS_PER_COMPANY)]
+        + [_event("labour", "노조 설립", event_type="노무")])
+    orch = _orchestrator([_hit("00126380", "삼성전자")])
+
+    got = RetrieveService(orch).retrieve(AskRequest(question="노조 관련 리스크"))
+
+    assert "labour" in {e.event_id for e in got.events}
+
+
+def test_shared_event_keeps_evidence_from_every_in_scope_company(stub_services):
+    """★공유 사건은 event_id 로 한 번만 나가는데(기존 계약), 그때 **먼저 온
+    기업의 근거만** 남아 나머지가 조용히 사라졌다. 둘 다 질문이 부른 기업이면
+    둘 다 근거다 — 실측으로 「담합 소송」 질의에서 3건을 잃고 있었다."""
+    company, relation = stub_services
+    company.events_of.side_effect = lambda key: [
+        _event("shared", "담합 혐의 피소",
+               evidence_ids=["ev_samsung"] if key == "00126380" else ["ev_hynix"])]
+    orch = _orchestrator([_hit("00126380", "삼성전자"), _hit("00164779", "SK하이닉스")])
+
+    got = RetrieveService(orch).retrieve(AskRequest(question="담합 소송"))
+
+    assert len(got.events) == 1, "공유 사건은 여전히 한 번만 나가야 한다"
+    assert set(got.events[0].evidence_ids) == {"ev_samsung", "ev_hynix"}
+
+
+def test_out_of_scope_company_evidence_is_still_not_merged(stub_services):
+    """★Step1 회귀 — in-scope 기업만 합친다. 검색에 안 걸린 기업 근거는 안 온다."""
+    company, _ = stub_services
+    company.events_of.side_effect = lambda key: [
+        _event("shared", "노조 설립", evidence_ids=["ev_samsung"])]
+    orch = _orchestrator([_hit("00126380", "삼성전자")])
+
+    got = RetrieveService(orch).retrieve(AskRequest(question="노조"))
+
+    assert got.events[0].evidence_ids == ["ev_samsung"]
+
+
+def test_anchor_name_is_stripped_using_resolved_entities(stub_services):
+    """★앵커명을 질문·라벨 양쪽에서 지워야 유사도가 맞는다(실험 ③).
+    앵커는 SearchQuery.resolved_entities 에 이미 있다 — 새로 추출하지 않는다."""
+    company, _ = stub_services
+    company.events_of.return_value = [_event("e1", "SK하이닉스 압수수색",
+                                             event_type="규제수사")]
+    seen: list[str] = []
+
+    def recording_embed(texts):
+        seen.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    orch = _orchestrator([_hit("00164779", "SK하이닉스")],
+                         resolved=[_resolution("00164779", "SK하이닉스")])
+
+    RetrieveService(orch, embed=recording_embed).retrieve(
+        AskRequest(question="SK하이닉스 압수수색"))
+
+    assert seen, "임베더가 호출돼야 한다"
+    assert not any("SK하이닉스" in t for t in seen), seen
+
+
+def test_answer_material_survives_when_the_embedder_dies(stub_services):
+    """★OpenAI 가 죽어도 /ask 는 죽지 않는다 — 규칙 티어로 폴백한다."""
+    company, _ = stub_services
+    company.events_of.return_value = [_event("e1", "노조 설립", event_type="노무")]
+
+    def broken_embed(texts):
+        raise RuntimeError("openai down")
+
+    orch = _orchestrator([_hit("00164779", "SK하이닉스")])
+    got = RetrieveService(orch, embed=broken_embed).retrieve(
+        AskRequest(question="노조 리스크"))
+
+    assert [e.event_id for e in got.events] == ["e1"]
 
 
 # ── 파급 ────────────────────────────────────────────────────────────────
