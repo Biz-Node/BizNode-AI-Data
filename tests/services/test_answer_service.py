@@ -35,6 +35,13 @@ def _retrieved(*, evidence=(), relations=(), match_type=MatchType.EXACT):
                             match_type=match_type)
 
 
+def _event_fact():
+    from app.api.schemas import Event
+    return Event(event_id="evt_1", name="이천 공장 질소 누출 사고",
+                 event_type="사고재해", is_risk=True, role="subject",
+                 occurred_at="2024-02-16", evidence_ids=["ev_a"])
+
+
 def test_edge_id_for_matches_relation_by_evidence_id():
     relations = [_relation("5:a:1", "ev_a")]
     assert as_module._edge_id_for("ev_a", relations) == "5:a:1"
@@ -174,6 +181,66 @@ def test_user_prompt_includes_match_type_note():
 def test_system_prompt_tells_model_to_hedge_semantic_matches():
     assert "SEMANTIC" in as_module._SYSTEM_PROMPT
     assert "일 수 있습니다" in as_module._SYSTEM_PROMPT
+
+
+# ── Step3: 근거 밖 생성 억제 (2026-08-23) ────────────────────────────────
+
+def test_fact_lines_labels_the_event_date_as_a_report_date():
+    """★`occurred_at` 은 **사건 발생일이 아니라 기사 보도일**이다
+    (`news_loader.py:167,230` — `observed = published_at`, 실측 1,062건 중
+    1,059건이 `last_seen` 과 같다). 날짜만 덩그러니 찍으면 LLM 이 발생일로 읽는다.
+
+    실제로 그렇게 읽었다: 「2024년 2월 16일에 질소 누출 사고」라고 답했는데
+    인용한 근거 원문은 **2015년** 사고였다. 환각이 아니라 프롬프트가 그렇게
+    말한 것이다."""
+    retrieved = _retrieved()
+    retrieved.events.append(_event_fact())
+
+    line = next(l for l in as_module._fact_lines(retrieved).splitlines()
+                if "질소 누출" in l)
+
+    assert "보도" in line, line
+    assert "2024-02-16" in line
+
+
+def test_propagation_lines_are_capped_and_the_cut_is_disclosed():
+    """★파급이 프롬프트를 먹는다 — 실측으로 한 질문에 45줄 이상이 붙었고 전부
+    `stated=False` 추정이었다. 조용히 자르면 「그게 전부」로 읽힌다."""
+    retrieved = _retrieved()
+    for i in range(as_module._MAX_PROPAGATION_LINES + 7):
+        retrieved.propagation.append(
+            Propagation(target=f"기업{i}", score=0.3, hops=2, stated=False,
+                        path=["a", "b"]))
+
+    lines = as_module._fact_lines(retrieved).splitlines()
+    shown = [l for l in lines if l.startswith("파급:")]
+
+    assert len(shown) == as_module._MAX_PROPAGATION_LINES
+    assert any("7곳" in l for l in lines), lines[-3:]
+
+
+def test_system_prompt_forbids_inventing_causal_links():
+    """★실제 실패: 「안전 문제는 노조 설립과 관련하여 … 배경이 될 수 있습니다」
+    — 두 사실을 이어 준 근거가 하나도 없었다. 나란히 있다는 것은 인과가 아니다."""
+    assert "인과" in as_module._SYSTEM_PROMPT
+    assert "나란히" in as_module._SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_sentences_that_cannot_be_cited():
+    """★실제 실패: sources 0건인데 실질 주장을 여럿 했다. 화이트리스트는
+    **인용된 것만** 검사하므로 인용 없는 주장은 그대로 통과한다."""
+    assert "인용할 수 없는 문장" in as_module._SYSTEM_PROMPT
+
+
+def test_system_prompt_tells_the_model_facts_block_dates_are_report_dates():
+    """기존 규칙 4는 freshness=stale 얘기라 [사실] 블록 날짜를 다루지 않는다 —
+    별도로 못박는다."""
+    assert "[사실] 블록의 날짜" in as_module._SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_padding_an_unknown_answer_with_speculation():
+    """★「정보는 확인되지 않았습니다」로 끝내지 않고 추측을 덧붙였다."""
+    assert "추측" in as_module._SYSTEM_PROMPT
 
 
 from unittest.mock import MagicMock

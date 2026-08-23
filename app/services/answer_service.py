@@ -41,6 +41,18 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    키워드가 정확히 일치해서 찾은 게 아니라 의미가 비슷해서 찾은 것입니다.
    "~일 수 있습니다"처럼 조심스럽게 표현하고 확정된 사실처럼 단정하지
    마세요. EXACT면 이 구분 없이 평소대로 답하세요.
+8. **인과관계를 지어내지 마세요.** 두 사실이 [사실]·[근거]에 나란히 있다는
+   것은 둘이 원인과 결과라는 뜻이 아닙니다. "A 때문에 B", "A로 인해 B",
+   "A가 B의 배경이 된다"처럼 쓰려면 그렇게 말하는 문장이 근거 원문 안에
+   실제로 있어야 합니다. 없으면 두 사실을 각각 따로 서술하세요.
+9. **근거를 달 수 없는 문장은 쓰지 마세요.** 답변의 모든 사실 주장은
+   evidence_ids 에 넣을 수 있는 근거가 뒷받침해야 합니다. 인용할 수 없는 문장은
+   아예 빼세요 — 근거 없이 덧붙인 배경 설명·전망·해석은 답변이 아니라 창작입니다.
+10. **[사실] 블록의 날짜는 기사가 보도된 시점입니다.** 사건이 실제로 일어난
+   날짜가 아닙니다. 근거 원문에 발생 시점이 따로 적혀 있으면 그걸 쓰고,
+   없으면 "OOOO-OO-OO 에 보도됨"처럼 보도 시점으로만 말하세요.
+11. 답할 근거가 없으면 **없다고만 하고 끝내세요.** "확인되지 않았습니다" 뒤에
+   추측이나 일반론을 덧붙이지 마세요. 짧게 모른다고 답하는 편이 낫습니다.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
@@ -53,6 +65,10 @@ _ANSWER_SCHEMA = {
     "required": ["answer", "evidence_ids"],
     "additionalProperties": False,
 }
+
+# 프롬프트에 실을 파급 줄 수. **실측 근거 없는 잠정치**다 — 다만 상한이
+# 없을 때 45줄 넘게 실린 것은 실측이다(2026-08-23).
+_MAX_PROPAGATION_LINES = 15
 
 _SAFE_FALLBACK = {"answer": "", "evidence_ids": []}
 _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
@@ -79,18 +95,33 @@ def _fact_lines(retrieved: RetrieveResponse) -> str:
         lines.append("기업: " + ", ".join(f"{c.name}({c.key})" for c in retrieved.companies))
     for event in retrieved.events:
         risk = "위험사건" if event.is_risk else "일반"
+        # ★날짜를 그냥 찍으면 LLM 이 **사건 발생일**로 읽는다. 실제로는 기사
+        #   보도일이다(`news_loader.py:167,230` — `observed = published_at` 을
+        #   `occurred_at` 에 넣는다. 실측 1,062건 중 1,059건이 `last_seen` 과 같다).
+        #   그렇게 읽은 사고가 있었다: 「2024년 2월 16일에 질소 누출 사고」라고
+        #   답했는데 근거 원문은 2015년 사고였다 — 환각이 아니라 우리가 그렇게
+        #   말한 것이다.
+        when = f"보도 {event.occurred_at}" if event.occurred_at else "보도일 미상"
         lines.append(f"사건 {event.event_id}: {event.name} ({event.event_type}, "
-                     f"{event.occurred_at}, {risk}) 근거: {', '.join(event.evidence_ids) or '없음'}")
+                     f"{when}, {risk}) 근거: {', '.join(event.evidence_ids) or '없음'}")
     for relation in retrieved.relations:
         lines.append(
             f"관계 {relation.edge_id}: {relation.source.name} --{relation.type.value}"
             f"({relation.subtype or '-'})--> {relation.target.name} "
             f"(freshness={relation.freshness.value}, score={relation.score}) "
             f"근거: {relation.evidence_id or '없음'}")
-    for prop in retrieved.propagation:
+    # ★파급은 **프롬프트를 먹는다.** 실측(2026-08-23) 「SK하이닉스 안전사고 …」
+    #   한 질문에 45줄 넘게 붙었고 전부 `stated=False` 인 2홉 계산값이었다.
+    #   위험사건 수는 `_MAX_RISK_EVENTS_FOR_PROPAGATION` 으로 막혀 있지만 사건
+    #   하나가 수십 곳으로 번지므로 줄 수 자체를 막아야 한다. 조용히 자르지
+    #   않고 **몇 곳을 뺐는지 적는다** — 안 그러면 「그게 전부」로 읽힌다.
+    for prop in retrieved.propagation[:_MAX_PROPAGATION_LINES]:
         lines.append(
             f"파급: {prop.target} ({prop.hops}홉, stated={prop.stated}, "
             f"경로: {' → '.join(prop.path)})")
+    hidden = len(retrieved.propagation) - _MAX_PROPAGATION_LINES
+    if hidden > 0:
+        lines.append(f"(파급 {hidden}곳은 지면상 생략했습니다 — 없는 것이 아닙니다)")
     body = "\n".join(lines) if lines else "(찾은 사실 없음)"
     return f"{_match_type_note(retrieved.match_type)}\n{body}"
 
