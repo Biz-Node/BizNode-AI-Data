@@ -888,12 +888,27 @@ class InsightCard(BaseModel):
 # ══════════════════════════════════════════════════════════════════
 
 
+class MatchType(str, Enum):
+    """검색이 이 결과를 어떤 경로로 찾았는가 — 설계서 §11 "SEMANTIC 결과를 같은
+    무게로 말하지 않는다"를 추론 계층이 지킬 수 있도록 노출한다. 내부
+    `search.model.enums.SearchMode`(NAME/RELATIONSHIP/SEMANTIC)를 그대로 쓰지
+    않고 이분화한다 — 추론 계층에 필요한 건 「그래프에서 정확히 찾았나, 의미
+    유사도로 찾았나」뿐이다."""
+
+    EXACT = "EXACT"
+    SEMANTIC = "SEMANTIC"
+
+
 # ★**답변을 만들지 않는다.** 사실과 근거만 준다 — 문장 생성은 추론 담당 몫이고,
 # 경계를 섞으면 「누가 지어냈나」를 못 가린다.
 class RetrieveResponse(BaseModel):
     """추론 계층이 쓰는 재료."""
 
     question: str = Field(examples=["SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"])
+    match_type: MatchType = Field(
+        description="EXACT — 이름/관계가 그래프에서 정확히 일치해 찾았다. "
+                    "SEMANTIC — 프로필 문서와의 의미 유사도로 골랐다(설계서 §11, "
+                    "같은 무게로 말하면 안 된다)")
     companies: list[RelationEndpoint] = Field(default_factory=list, description="질문에서 찾아낸 기업")
     events: list[Event] = Field(default_factory=list)
     relations: list[Relation] = Field(default_factory=list)

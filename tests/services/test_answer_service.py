@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.api.schemas import AskResponse, Evidence, Relation, RelationEndpoint, Source
+from app.api.schemas import AskResponse, Evidence, MatchType, Relation, RelationEndpoint, Source
 from app.api.schemas import RetrieveResponse
 from app.services import answer_service as as_module
 
@@ -30,8 +30,9 @@ def _relation(edge_id, evidence_id, *, freshness="current"):
         freshness=freshness)
 
 
-def _retrieved(*, evidence=(), relations=()):
-    return RetrieveResponse(question="q", evidence=list(evidence), relations=list(relations))
+def _retrieved(*, evidence=(), relations=(), match_type=MatchType.EXACT):
+    return RetrieveResponse(question="q", evidence=list(evidence), relations=list(relations),
+                            match_type=match_type)
 
 
 def test_edge_id_for_matches_relation_by_evidence_id():

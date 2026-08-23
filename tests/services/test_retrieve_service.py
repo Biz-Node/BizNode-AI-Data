@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.api.schemas import AskRequest
+from app.api.schemas import AskRequest, MatchType
 from app.services import retrieve_service as rs_module
 from app.services.retrieve_service import RetrieveService
 from search.dto.search_hit import SearchHit
@@ -32,11 +32,11 @@ def _hit(entity_id, name, *, entity_type=EntityType.COMPANY, evidence=()):
     )
 
 
-def _orchestrator(hits):
+def _orchestrator(hits, *, mode=SearchMode.RELATIONSHIP):
     orch = MagicMock()
     query = SearchQuery(raw_query="q", normalized_query="q",
-                        mode=SearchMode.RELATIONSHIP, today=_TODAY)
-    result = SearchResult(query="q", mode=SearchMode.RELATIONSHIP, hits=list(hits),
+                        mode=mode, today=_TODAY)
+    result = SearchResult(query="q", mode=mode, hits=list(hits),
                           total=len(hits), took_ms=1, cache_hit=False,
                           used_semantic_fallback=False)
     orch.search.return_value = (query, result)
@@ -288,6 +288,26 @@ def test_missing_evidence_is_kept_not_hidden(stub_services):
 
     assert [e.evidence_id for e in got.evidence] == ["ev_gone"]
     assert got.evidence[0].missing is True
+
+
+# ── match_type ─────────────────────────────────────────────────────────
+
+def test_match_type_is_exact_for_relationship_mode(stub_services):
+    orch = _orchestrator([], mode=SearchMode.RELATIONSHIP)
+    got = RetrieveService(orch).retrieve(AskRequest(question="q"))
+    assert got.match_type == MatchType.EXACT
+
+
+def test_match_type_is_exact_for_name_mode(stub_services):
+    orch = _orchestrator([], mode=SearchMode.NAME)
+    got = RetrieveService(orch).retrieve(AskRequest(question="q"))
+    assert got.match_type == MatchType.EXACT
+
+
+def test_match_type_is_semantic_for_semantic_mode(stub_services):
+    orch = _orchestrator([], mode=SearchMode.SEMANTIC)
+    got = RetrieveService(orch).retrieve(AskRequest(question="q"))
+    assert got.match_type == MatchType.SEMANTIC
 
 
 # ══════════════════════════════════════════════════════════════════════

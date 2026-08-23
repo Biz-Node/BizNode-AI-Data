@@ -27,12 +27,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from app.api.schemas import (AskRequest, Event, Evidence, Propagation, Relation,
+from app.api.schemas import (AskRequest, Event, Evidence, MatchType, Propagation, Relation,
                              RelationEndpoint, RetrieveResponse)
 from app.services import company_service, relation_service
 from search.dto.search_request import SearchRequest
 from search.dto.search_result import SearchResult
-from search.model.enums import EntityType
+from search.model.enums import EntityType, SearchMode
 from search.service.factory import build_orchestrator
 from search.service.orchestrator import SearchOrchestrator
 
@@ -45,6 +45,16 @@ log = logging.getLogger(__name__)
 _MAX_COMPANIES = 5
 _MAX_RELATIONS_PER_COMPANY = 10
 _MAX_RISK_EVENTS_FOR_PROPAGATION = 3
+
+_MATCH_TYPE_BY_MODE: dict[SearchMode, MatchType] = {
+    SearchMode.NAME: MatchType.EXACT,
+    SearchMode.RELATIONSHIP: MatchType.EXACT,
+    SearchMode.SEMANTIC: MatchType.SEMANTIC,
+}
+
+
+def _match_type_of(result: SearchResult) -> MatchType:
+    return _MATCH_TYPE_BY_MODE[result.mode]
 
 
 def _companies_from(result: SearchResult) -> list[RelationEndpoint]:
@@ -92,6 +102,7 @@ class RetrieveService:
 
         return RetrieveResponse(
             question=request.question,
+            match_type=_match_type_of(result),
             companies=companies,
             events=events,
             relations=relations,
