@@ -51,8 +51,17 @@ def test_stub_header_is_gone(client):
     assert "X-Stub" not in resp.headers
 
 
-def test_stub_header_still_marks_other_stubs(client):
-    """스텁 표시 자체를 없앤 게 아니다 — `/news` 는 아직 고정값이다."""
+def test_stub_header_marks_only_listed_routes(monkeypatch, client):
+    """스텁 표시 장치는 살아 있다 — `_STUB` 에 적힌 것만 표시한다.
+
+    전에는 이 테스트가 `/news` 를 고정값이라 단정했다. 그런데 `/news` 는
+    실물이 된 뒤에도 `_STUB` 에 남아 있어 **PostgreSQL 에서 12,250건을
+    돌려주면서 `X-Stub: true` 를 달고 나갔다**(2026-08-23). 테스트가 그
+    버그를 지키고 있었던 셈이라, 특정 경로 대신 장치를 검증한다.
+    """
+    assert client.get("/news").headers.get("X-Stub") is None
+
+    monkeypatch.setattr(main_module, "_STUB", ("/news",))
     assert client.get("/news").headers.get("X-Stub") == "true"
 
 
