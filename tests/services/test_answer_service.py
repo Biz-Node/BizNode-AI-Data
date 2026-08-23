@@ -243,6 +243,85 @@ def test_system_prompt_forbids_padding_an_unknown_answer_with_speculation():
     assert "추측" in as_module._SYSTEM_PROMPT
 
 
+# ── Step4a: claim 단위 관측 (2026-08-23) ────────────────────────────────
+
+def test_answer_schema_asks_for_claims_with_their_own_evidence_ids():
+    """★답변이 통짜 문자열이면 「어떤 주장이 어떤 근거에 기대는가」가 데이터로
+    존재하지 않는다. 그게 없으면 오인용을 원리적으로 못 잡는다."""
+    props = as_module._ANSWER_SCHEMA["properties"]
+    assert "claims" in props
+    item = props["claims"]["items"]
+    assert set(item["required"]) == {"text", "evidence_ids"}
+    assert item["additionalProperties"] is False
+
+
+def test_answer_schema_stays_strict_mode_compatible():
+    """OpenAI json_schema strict — 모든 property 가 required 여야 한다."""
+    schema = as_module._ANSWER_SCHEMA
+    assert set(schema["required"]) == set(schema["properties"])
+    assert schema["additionalProperties"] is False
+
+
+def test_safe_fallback_carries_empty_claims():
+    """LLM 이 죽었을 때도 모양이 같아야 뒤 코드가 분기하지 않는다."""
+    assert as_module._SAFE_FALLBACK["claims"] == []
+
+
+def test_system_prompt_explains_how_to_split_claims():
+    assert "claims" in as_module._SYSTEM_PROMPT
+
+
+def test_ask_response_schema_is_unchanged_by_step4a(monkeypatch):
+    """★Step4a 는 **외부 계약을 건드리지 않는다.** claims 는 내부 관측용이다."""
+    assert set(AskResponse.model_fields) == {"answer", "sources", "failed"}
+
+
+def test_ask_logs_the_claim_grounding_distribution(monkeypatch, caplog):
+    """★임계값도 판정도 없다 — 분포만 남긴다. 20개 질문을 모을 도구다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="질소 누출 사고가 났다")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "질소 누출 사고가 났습니다.",
+        "evidence_ids": ["ev_a"],
+        "claims": [{"text": "질소 누출 사고", "evidence_ids": ["ev_a"]},
+                   {"text": "근거 없는 말", "evidence_ids": []}]})
+
+    with caplog.at_level("INFO"):
+        as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+            AskRequest(question="q"))
+
+    assert "claim.grounding" in caplog.text
+    assert "uncited=1" in caplog.text
+
+
+def test_ask_does_not_drop_a_low_overlap_claim_from_the_answer(monkeypatch):
+    """★관측만 한다 — 문장을 지우지 않는다. 거짓 양성이 정상 답변을 훼손하면
+    안 되고, 임계값을 실측 없이 정할 수도 없다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="전혀 다른 내용")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "겹침이 0인 주장입니다.",
+        "evidence_ids": ["ev_a"],
+        "claims": [{"text": "평택 공장 화재", "evidence_ids": ["ev_a"]}]})
+
+    got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q"))
+
+    assert got.answer == "겹침이 0인 주장입니다."
+    assert got.failed is False
+    assert [s.evidence_id for s in got.sources] == ["ev_a"]
+
+
+def test_ask_survives_a_response_without_claims(monkeypatch):
+    """구형 응답(또는 폴백)이 와도 죽지 않는다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "답", "evidence_ids": ["ev_a"]})
+
+    got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q"))
+
+    assert got.answer == "답"
+
+
 from unittest.mock import MagicMock
 
 from app.api.schemas import AskRequest

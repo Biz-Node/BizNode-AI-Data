@@ -16,6 +16,7 @@ from typing import Optional
 
 from app.api.schemas import AskRequest, AskResponse, Evidence, MatchType, Relation, RetrieveResponse, Source
 from app.core.trace import trace_logger
+from app.services import claim_check
 from app.services.retrieve_service import RetrieveService
 from pipeline.llm import ask_json
 
@@ -53,16 +54,42 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    없으면 "OOOO-OO-OO 에 보도됨"처럼 보도 시점으로만 말하세요.
 11. 답할 근거가 없으면 **없다고만 하고 끝내세요.** "확인되지 않았습니다" 뒤에
    추측이나 일반론을 덧붙이지 마세요. 짧게 모른다고 답하는 편이 낫습니다.
+12. answer 를 쓴 뒤, 그 안의 **사실 주장을 하나씩 쪼개 claims 에** 넣으세요.
+   claims 의 각 항목은 주장 한 문장(text)과 **그 주장을 뒷받침하는 근거의
+   evidence_ids** 입니다. answer 전체가 아니라 **그 주장에** 해당하는 근거만
+   고르세요. 근거 없이 쓴 문장이 있다면 evidence_ids 를 빈 목록으로 두세요 —
+   숨기지 말고 그대로 두세요. 인사말·"확인되지 않았습니다" 같은 메타 문장은
+   사실 주장이 아니므로 claims 에 넣지 않습니다.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
+# ★`claims` 는 **내부 관측용**이다(Step4a). `AskResponse` 에는 나가지 않는다 —
+#   외부 계약을 바꾸기 전에 먼저 분포를 봐야 한다.
+#
+#   답변이 통짜 문자열이면 「어떤 주장이 어떤 근거에 기대는가」가 데이터로
+#   존재하지 않는다. 그래서 화이트리스트(`_sources_from`)가 「지어낸 id」밖에
+#   못 잡는다 — 실제로 있는 id 를 **엉뚱한 주장에** 달아도 그대로 통과한다
+#   (실측 2026-08-23: 질소 누출 답변이 HBM3E 양산 근거를 인용했다).
 _ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "answer": {"type": "string"},
         "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "evidence_ids"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["answer", "evidence_ids"],
+    # strict 모드는 모든 property 가 required 여야 한다.
+    "required": ["answer", "evidence_ids", "claims"],
     "additionalProperties": False,
 }
 
@@ -70,7 +97,7 @@ _ANSWER_SCHEMA = {
 # 없을 때 45줄 넘게 실린 것은 실측이다(2026-08-23).
 _MAX_PROPAGATION_LINES = 15
 
-_SAFE_FALLBACK = {"answer": "", "evidence_ids": []}
+_SAFE_FALLBACK = {"answer": "", "evidence_ids": [], "claims": []}
 _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
 
 
@@ -225,6 +252,23 @@ class AnswerService:
                  failed, cited, accepted,
                  [eid for eid in dict.fromkeys(cited) if eid not in set(accepted)],
                  len(answer))
+
+        # ★Step4a — **관측만 한다.** 임계값도 판정도 없고 문장을 지우지도 않는다.
+        #   `claim_check` 는 검증기가 아니라 의심 탐지기라, 낮은 점수가 곧 거짓이
+        #   아니다(의역·동의어·한국어 조사에 걸린다). `batch/audit/grounding.py` 의
+        #   0.34 를 그대로 못 쓰는 이유도 같다 — 그 값은 노드 **이름** 기준이고
+        #   여기는 **문장**이다. 대표 질문으로 분포를 모은 뒤에 정한다.
+        claims = result.get("claims") or []
+        if claims:
+            checked = claim_check.check(
+                claims, {e.evidence_id: e for e in retrieved.evidence})
+            summary = claim_check.summarize(checked)
+            log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "
+                     "min=%s mean=%s max=%s scores=%s",
+                     summary["claims"], summary["uncited"], summary["no_text"],
+                     summary["scored"], summary["min"], summary["mean"],
+                     summary["max"],
+                     [c.score for c in checked if c.score is not None])
 
         if failed:
             return AskResponse(answer=_SAFE_MESSAGE, sources=sources, failed=True)
