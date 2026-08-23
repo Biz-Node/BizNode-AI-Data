@@ -104,5 +104,28 @@ def test_overlap_accepts_an_injected_tokenizer():
     assert score == 1.0, "조사를 뗀 토크나이저를 주면 맞아야 한다"
 
 
+# ── 문장 전용 불용어 (Step4b-2, 2026-08-23) ─────────────────────────────
+
+def test_generic_predicate_nouns_are_dropped_from_sentences():
+    """★실측(claim 84건)에서 못 맞춘 토큰 상위가 전부 이것들이었다 —
+    발생(7)·기업(5)·진행(3)·보도(3)·발표(3). 어느 문장에나 붙고 변별력이 없다."""
+    got = to.sentence_tokens("질소 누출 사고가 발생했다고 보도되었다")
+    assert "질소" in got and "누출" in got
+    assert "발생" not in got and "보도" not in got
+
+
+def test_content_nouns_are_not_dropped():
+    """★변별력 있는 낱말까지 버리면 검출력을 잃는다 — 개선이 아니라 후퇴다."""
+    got = to.sentence_tokens("마이크론의 공급 차질로 심텍에 매출 상실 우려")
+    for keep in ("마이크론", "공급", "차질", "심텍", "매출", "상실"):
+        assert keep in got, keep
+
+
+def test_sentence_stopwords_do_not_leak_into_the_default_tokenizer():
+    """★`STOP` 은 `batch/audit/grounding.py` 와 공유된다. 문장용 불용어를
+    거기 섞으면 그쪽 판정이 조용히 바뀐다."""
+    assert to.tokens("사고 발생 기업") == ["사고", "발생", "기업"]
+
+
 def test_sentence_tokenizer_on_empty_text():
     assert to.sentence_tokens("") == []

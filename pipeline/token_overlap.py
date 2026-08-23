@@ -74,6 +74,20 @@ def overlap(text: str, *names: str,
 # 발주/NNG + 하/XSV + 었/EP + 다/EF 라 「발주」가 살아남는다.
 _CONTENT_TAGS = frozenset({"NNG", "NNP", "NR", "SN", "SL", "SH"})
 
+# ★문장 **전용** 불용어. `STOP` 에 섞지 않는다 — 그건 `batch/audit/grounding.py`
+#   와 공유하는 집합이라 건드리면 그쪽 판정이 조용히 바뀐다.
+#
+#   실측(claim 84건, 2026-08-23)에서 못 맞춘 토큰의 상위가 전부 이 부류였다:
+#   발생(7)·기업(5)·진행(3)·보도(3)·발표(3)·기록(2)·관련(2)·제기(2)·직면(2).
+#   어느 기업 기사에나 붙는 서술 명사라 **있고 없고가 아무것도 말해 주지 않는다.**
+#   반대로 납품·공급·차질·사고·장비 같은 낱말은 변별력이 있어 남긴다 —
+#   여기 더 담을수록 검출력을 잃는다.
+_SENTENCE_STOP = frozenset({
+    "발생", "진행", "기록", "관련", "제기", "직면", "상황", "기업", "회사",
+    "사례", "경우", "시작", "완료", "공식", "규모", "체계", "이후", "처음",
+    "보도", "발표", "확인", "예정", "가능", "존재", "대한", "위한",
+})
+
 # 이미 정규화된 ISO 날짜 — Kiwi 에 넣으면 하이픈에서 쪼개지므로 통째로 뽑아 둔다.
 _ISO_DATE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?")
 
@@ -145,4 +159,5 @@ def sentence_tokens(text: str) -> list[str]:
     except Exception:  # noqa: BLE001 — 형태소 분석 실패로 답변을 죽이지 않는다
         return tokens(text)
     return dates + [w for w in words
-                    if len(w) >= _MIN_TOKEN_LEN and w.lower() not in STOP]
+                    if len(w) >= _MIN_TOKEN_LEN
+                    and w.lower() not in STOP and w not in _SENTENCE_STOP]

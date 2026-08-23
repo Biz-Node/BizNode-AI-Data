@@ -51,15 +51,29 @@ class ClaimCheck:
 
 def _texts_of(evidence_ids: Sequence[str],
               evidence_by_id: Mapping[str, Any]) -> list[str]:
-    """든 근거들의 원문. 못 찾거나 missing 인 것은 뺀다."""
+    """든 근거들의 대조 corpus. 못 찾거나 missing 인 것은 뺀다.
+
+    ★원문뿐 아니라 `published_at` 도 넣는다 — **모델에게 보여 준 것이 그것**이다.
+
+      프롬프트는 `<evidence id="…" source_type="news" published_at="2026-06-12">`
+      로 날짜를 함께 준다. 그런데 채점이 본문만 보던 탓에 「2026년 6월 12일에
+      …」라고 쓴 주장이 「없는 근거를 지어냈다」로 잘못 읽혔다. 실측
+      (claim 84건, 2026-08-23): 못 맞춘 토큰 123개 중 26개(21.1%)가 날짜였고
+      단일 최대 원인이었다.
+
+      corpus 는 **보여 준 것과 같아야 한다.** 보여 준 적 없는 날짜는 여전히
+      안 맞는다 — 그건 회귀 테스트가 지킨다.
+    """
     out = []
     for evidence_id in evidence_ids:
         evidence = evidence_by_id.get(evidence_id)
         if evidence is None or getattr(evidence, "missing", False):
             continue
         text = getattr(evidence, "text", "") or ""
-        if text.strip():
-            out.append(text)
+        if not text.strip():
+            continue
+        published_at = getattr(evidence, "published_at", None)
+        out.append(f"{text}\n{published_at}" if published_at else text)
     return out
 
 

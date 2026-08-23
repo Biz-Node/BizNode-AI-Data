@@ -34,6 +34,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+# 진단 출력에서 「낮다」고 눈에 띄게 할 선. **임계값이 아니다** — 아직 임계값은
+# 없다. 어디를 자를지 정하려고 보는 것이라 넉넉히 잡아 둔다.
+_SHOW_BELOW = 0.5
+
+
 # 대표 질문 20개. 모드(NAME/RELATIONSHIP/SEMANTIC)·사건 유형·기업 수·
 # 재료 없음까지 고르게 섞었다 — 한쪽만 보면 분포가 거짓말을 한다.
 QUESTIONS = [
@@ -91,7 +96,7 @@ def _print_row(row: dict) -> None:
     for c in row["checked"]:
         if c.status == claim_check.STATUS_UNCITED:
             print(f"   [uncited] {c.text[:70]}")
-        elif c.score is not None and c.score <= 0.34:
+        elif c.score is not None and c.score <= _SHOW_BELOW:
             print(f"   [{c.score:.2f}] {c.text[:60]}  없는토큰 {c.missing[:5]}")
 
 

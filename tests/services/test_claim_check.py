@@ -148,6 +148,33 @@ def test_conjugated_verb_matches_its_content_noun():
     assert got[0].score > 0.8, got[0].missing
 
 
+def test_report_date_is_grounded_by_the_evidence_published_at():
+    """★근거 원문에 날짜가 없어도 `published_at` 으로 보여 줬다면 근거가 있는 것이다.
+
+    실측: 못 맞춘 토큰 123개 중 26개(21.1%)가 날짜였다. 프롬프트의
+    `<evidence id=... published_at="2026-06-12">` 가 모델이 본 그 값인데,
+    채점은 본문만 봐서 「없는 근거를 지어냈다」로 잘못 읽혔다.
+    """
+    ev = {"ev_a": Evidence(evidence_id="ev_a", text="불소 누출 사고가 났다",
+                           source_doc="d", source_type="news",
+                           published_at="2026-06-12")}
+    got = claim_check.check(
+        [{"text": "2026년 6월 12일에 불소 누출 사고가 났다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert got[0].score == 1.0, got[0].missing
+
+
+def test_a_date_we_never_showed_is_still_missing():
+    """★반대는 성립하면 안 된다 — 보여 준 적 없는 날짜는 여전히 못 맞춘다."""
+    ev = {"ev_a": Evidence(evidence_id="ev_a", text="불소 누출 사고가 났다",
+                           source_doc="d", source_type="news",
+                           published_at="2026-06-12")}
+    got = claim_check.check(
+        [{"text": "1999년 1월 1일에 불소 누출 사고가 났다",
+          "evidence_ids": ["ev_a"]}], ev)
+    assert "1999-01-01" in got[0].missing
+
+
 def test_real_mis_citation_still_scores_zero():
     """★잡음을 걷어내도 **진짜 오인용은 그대로 0 이어야 한다.** 이게 무너지면
     개선이 아니라 검출력을 버린 것이다."""
