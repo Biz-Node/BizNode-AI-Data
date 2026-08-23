@@ -55,11 +55,19 @@ _SAFE_FALLBACK = {"answer": "", "evidence_ids": []}
 _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
 
 
+# ★dict 조회로 전수 분기한다 — 미지 값을 조용히 EXACT(="확신을 갖고 말해도
+#   된다"는 허가)로 떨어뜨리지 않는다. 매핑에 없는 값이 오면 KeyError 로
+#   즉시 죽는다. 검증 우회 경로(`model_construct()` 등)로 pydantic 강제변환을
+#   건너뛴 값이 들어와도 조용히 잘못된 문구를 돌려주지 않기 위함이다.
+_NOTE_BY_MATCH_TYPE: dict[MatchType, str] = {
+    MatchType.EXACT: "검색 방식: EXACT — 이름 또는 관계가 그래프에서 정확히 일치한 결과입니다.",
+    MatchType.SEMANTIC: ("검색 방식: SEMANTIC — 이름/키워드가 정확히 일치하지 않아 의미가 "
+                         "비슷한 문서로 찾은 결과입니다. 확정된 사실처럼 말하지 마세요."),
+}
+
+
 def _match_type_note(match_type: MatchType) -> str:
-    if match_type is MatchType.SEMANTIC:
-        return ("검색 방식: SEMANTIC — 이름/키워드가 정확히 일치하지 않아 의미가 "
-                "비슷한 문서로 찾은 결과입니다. 확정된 사실처럼 말하지 마세요.")
-    return "검색 방식: EXACT — 이름 또는 관계가 그래프에서 정확히 일치한 결과입니다."
+    return _NOTE_BY_MATCH_TYPE[match_type]
 
 
 def _fact_lines(retrieved: RetrieveResponse) -> str:

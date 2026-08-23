@@ -158,6 +158,13 @@ def test_fact_lines_still_reports_no_facts_found_when_empty():
     assert "(찾은 사실 없음)" in lines
 
 
+def test_fact_lines_puts_the_note_first_so_rule_7_can_reference_it():
+    """★시스템 프롬프트 규칙 7이 「[사실] 맨 앞의 "검색 방식" 줄」이라고 위치를
+    명시해 참조한다 — 노트가 앞이 아니게 되면 그 앵커가 조용히 깨진다."""
+    retrieved = _retrieved(match_type=MatchType.SEMANTIC)
+    assert as_module._fact_lines(retrieved).startswith("검색 방식:")
+
+
 def test_user_prompt_includes_match_type_note():
     retrieved = _retrieved(match_type=MatchType.SEMANTIC)
     prompt = as_module._build_user_prompt("q", retrieved)
@@ -166,6 +173,7 @@ def test_user_prompt_includes_match_type_note():
 
 def test_system_prompt_tells_model_to_hedge_semantic_matches():
     assert "SEMANTIC" in as_module._SYSTEM_PROMPT
+    assert "일 수 있습니다" in as_module._SYSTEM_PROMPT
 
 
 from unittest.mock import MagicMock

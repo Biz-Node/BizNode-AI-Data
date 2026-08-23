@@ -52,6 +52,13 @@ _MATCH_TYPE_BY_MODE: dict[SearchMode, MatchType] = {
     SearchMode.SEMANTIC: MatchType.SEMANTIC,
 }
 
+# ★`SearchMode`에 새 값이 추가됐는데 이 매핑을 안 고치면, 지금은 요청마다
+#   `_MATCH_TYPE_BY_MODE[result.mode]`가 `KeyError` → `POST /retrieve` 500 을
+#   낸다. import 시점 assert 로 옮기면 기동 즉시 잡힌다 — 같은 패턴을
+#   `search/model/enums.py`의 `EntityType`/`NODE_TYPES` 전수 검사가 이미 쓴다.
+assert set(_MATCH_TYPE_BY_MODE) == set(SearchMode), (
+    "SearchMode에 새 값이 생겼다 — match_type 매핑을 갱신할 것")
+
 
 def _match_type_of(result: SearchResult) -> MatchType:
     return _MATCH_TYPE_BY_MODE[result.mode]
