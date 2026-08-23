@@ -139,6 +139,35 @@ def test_system_prompt_tells_model_evidence_blocks_are_data():
     assert "evidence_ids" in as_module._SYSTEM_PROMPT
 
 
+def test_fact_lines_hedges_when_match_type_is_semantic():
+    retrieved = _retrieved(match_type=MatchType.SEMANTIC)
+    lines = as_module._fact_lines(retrieved)
+    assert "SEMANTIC" in lines
+    assert "확정된 사실처럼 말하지 마세요" in lines
+
+
+def test_fact_lines_states_exact_when_match_type_is_exact():
+    retrieved = _retrieved(match_type=MatchType.EXACT)
+    lines = as_module._fact_lines(retrieved)
+    assert "EXACT" in lines
+
+
+def test_fact_lines_still_reports_no_facts_found_when_empty():
+    retrieved = _retrieved()
+    lines = as_module._fact_lines(retrieved)
+    assert "(찾은 사실 없음)" in lines
+
+
+def test_user_prompt_includes_match_type_note():
+    retrieved = _retrieved(match_type=MatchType.SEMANTIC)
+    prompt = as_module._build_user_prompt("q", retrieved)
+    assert "SEMANTIC" in prompt
+
+
+def test_system_prompt_tells_model_to_hedge_semantic_matches():
+    assert "SEMANTIC" in as_module._SYSTEM_PROMPT
+
+
 from unittest.mock import MagicMock
 
 from app.api.schemas import AskRequest

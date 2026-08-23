@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.api.schemas import AskRequest, AskResponse, Evidence, Relation, RetrieveResponse, Source
+from app.api.schemas import AskRequest, AskResponse, Evidence, MatchType, Relation, RetrieveResponse, Source
 from app.services.retrieve_service import RetrieveService
 from pipeline.llm import ask_json
 
@@ -34,6 +34,10 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    계산한 것"이라고 분명히 구분해서 말하세요.
 6. 주어진 사실과 근거만으로 답할 수 없으면 모른다고 답하세요. 근거 밖의
    사실을 지어내지 마세요.
+7. [사실] 맨 앞의 "검색 방식" 줄이 SEMANTIC이면, 그 아래 기업·관계는 이름이나
+   키워드가 정확히 일치해서 찾은 게 아니라 의미가 비슷해서 찾은 것입니다.
+   "~일 수 있습니다"처럼 조심스럽게 표현하고 확정된 사실처럼 단정하지
+   마세요. EXACT면 이 구분 없이 평소대로 답하세요.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
@@ -49,6 +53,13 @@ _ANSWER_SCHEMA = {
 
 _SAFE_FALLBACK = {"answer": "", "evidence_ids": []}
 _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
+
+
+def _match_type_note(match_type: MatchType) -> str:
+    if match_type is MatchType.SEMANTIC:
+        return ("검색 방식: SEMANTIC — 이름/키워드가 정확히 일치하지 않아 의미가 "
+                "비슷한 문서로 찾은 결과입니다. 확정된 사실처럼 말하지 마세요.")
+    return "검색 방식: EXACT — 이름 또는 관계가 그래프에서 정확히 일치한 결과입니다."
 
 
 def _fact_lines(retrieved: RetrieveResponse) -> str:
@@ -69,7 +80,8 @@ def _fact_lines(retrieved: RetrieveResponse) -> str:
         lines.append(
             f"파급: {prop.target} ({prop.hops}홉, stated={prop.stated}, "
             f"경로: {' → '.join(prop.path)})")
-    return "\n".join(lines) if lines else "(찾은 사실 없음)"
+    body = "\n".join(lines) if lines else "(찾은 사실 없음)"
+    return f"{_match_type_note(retrieved.match_type)}\n{body}"
 
 
 def _neutralize_delimiters(text: str) -> str:
