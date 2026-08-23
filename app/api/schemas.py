@@ -1,16 +1,6 @@
 """응답 계약 — **백엔드·프론트가 보는 유일한 정의.**
 
-★왜 문서가 아니라 코드인가 (2026-08-15)
-
-「어떤 주소에 뭘 보내면 뭐가 오는지」를 따로 문서로 쓰면 **코드와 어긋난다.**
-pydantic 으로 쓰면 코드가 곧 문서이고, FastAPI 가 `/docs` 를 자동으로 만든다.
-필드를 고치면 문서가 같이 바뀐다 — 어긋날 방법이 없다.
-
-★이 파일이 실제로 하는 일은 「무엇을 감출지」다
-
-조회 함수의 결과에는 **내부 검사 흔적**이 붙어 있다. 그대로 내보내면 화면에
-새어 나간다. 아래가 그 경계다.
-
+스키마 중에 노출하지 않는 필드는 다음과 같다.
     grounding_suspect        그 관계를 **아예 응답에서 뺀다**
     confidence × 신선도 가중치  `score` 하나로 합쳐서
     신선도 판정               `freshness` 세 값으로
@@ -19,19 +9,8 @@ pydantic 으로 쓰면 코드가 곧 문서이고, FastAPI 가 `/docs` 를 자�
     listed_shares.suspect    시가총액·PER·PBR·PSR 을 **안 보낸다**
     corp_code 를 못 믿을 때    corp_code 를 **안 보낸다**
 
-★단위는 한 곳에서만 정한다
-
-    금액   **원** (int)          — 억·백만 단위로 접지 않는다. 화면이 정한다
-    비율   **퍼센트** (float)     — 0~100. 0~1 소수로 주지 않는다
-    날짜   **ISO 8601** (str)    — "2026-08-14"
-
-  `ratio` 를 0~1 로 준 적이 있어서 18건이 틀렸다. 계약에 못 박는다.
-
-★키 규칙 — 이름을 키로 쓰지 않는다
-
-  법인 명부 118,535건 중 **11.3%가 동명**이다(「신우」 11곳 · 「에스엠」 11곳).
-  그래서 `GET /companies/{이름}` 같은 주소는 만들지 않는다. 이름은 `/search`
-  로만 받고, 거기서 고른 `key` 를 다시 보낸다.
+금액, 비율, 날짜 등의 단위는 한 곳에서만 정한다.
+키 규칙 — 이름을 키로 쓰지 않는다
 """
 
 from __future__ import annotations
@@ -437,7 +416,14 @@ class Event(BaseModel):
     article_count: int = Field(1, description="여러 기사가 같은 사건을 말하면 신뢰도가 올라간다")
     timeline: list[EventTimelinePhase] = Field(
         default_factory=list, description="같은 사건의 여러 국면. **흩어진 기사가 아니라 하나의 줄거리**")
-    evidence_ids: list[str] = Field(default_factory=list)
+    # 사건 노드가 아니라 **이 기업의 연결에서 나온 근거**다. 한 사건에 여러 기업이
+    # 붙어도 서로의 근거가 섞이지 않는다 — 챗봇이 남의 근거로 이 기업을 설명하면
+    # 없는 연루를 만들어 낸다.
+    evidence_ids: list[str] = Field(
+        default_factory=list,
+        description="**이 기업이 이 사건에 엮인 근거만.** 같은 사건에 붙은 다른 "
+                    "기업의 근거는 들어 있지 않다",
+        examples=[["ev_1fdde758922d6de6"]])
 
 
 class NewsItem(BaseModel):
