@@ -170,8 +170,12 @@ class RetrieveService:
         """관계·사건·검색히트의 근거 id 를 **합집합으로 모아 한 번에** 조회한다.
 
         셋을 다 모으는 이유는 출처가 셋이기 때문이다 — 관계에 달린 근거, 사건에
-        달린 근거(`Event.evidence_ids`), 그리고 검색이 짚어 준 근거. 어느 하나만
+        달린 근거, 그리고 검색이 짚어 준 근거. 어느 하나만
         보면 답변이 인용할 수 있는 문장이 줄어든다.
+
+        ★사건 근거는 **HAS_EVENT 엣지**에서 온다(`company_service.events_of`).
+          Event 노드의 `evidence_ids` 는 그 사건에 엮인 **모든 기업의 합집합**이라,
+          쓰면 「SK하이닉스 노조」 질의에 현대오토에버 기사가 섞인다(2026-08-23).
         """
         ids: list[str] = []
         for relation in relations:

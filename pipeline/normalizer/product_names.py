@@ -9,7 +9,7 @@ Company는 `norm_name` + DART corp_code로 개체해소가 되지만, **Product�
     낸드플래시(6) · NAND Flash(3) · NAND(1)                ← 같은 것
     TC 본더(7) · TC본더(TC4) · 열압착(TC) 본더               ← 같은 것
 
-★그런데 **합치면 안 되는 것**이 훨씬 많다. 이게 이 모듈의 어려운 부분이다:
+그런데 **합치면 안 되는 것**이 훨씬 많다. 이게 이 모듈의 어려운 부분이다:
 
     HBM3 · HBM3E · HBM4 · HBM4E · HBM5      세대가 다르면 다른 제품
     DRAM · 범용 DRAM · 서버 D램 · DDR5 D램    세그먼트가 다르면 다른 제품

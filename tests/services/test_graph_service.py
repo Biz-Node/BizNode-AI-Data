@@ -1,6 +1,6 @@
 """graph_service.relations_of() 기준선 — 실 Neo4j 대상, mock 없음.
 
-★왜 이 파일이 있나 (2026-08-20)
+왜 이 파일이 있나 (2026-08-20)
 
 `relations_of()` 는 프로덕션 Cypher(`_QUERY`)를 직접 들고 있는데, 이걸 지켜 주는
 테스트가 한 개도 없었다. Search Layer 쪽 `tests/search/service/test_graph_searcher.py`
