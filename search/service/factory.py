@@ -1,6 +1,6 @@
 """Search Layer 조립을 한 곳으로 모은다.
 
-★왜 만들었나 (2026-08-20)
+왜 만들었나 (2026-08-20)
 
 `SearchOrchestrator`는 협력 객체 6개를 전부 생성자로 받는다. 그 조립이 세 곳에
 따로 적혀 있었다 — `search/api/search_controller.get_orchestrator()`(프로덕션),

@@ -5,7 +5,7 @@
 PostgreSQL·Neo4j·ChromaDB를 대상으로 `SearchOrchestrator.search()`를 **끝까지
 돌려** 검색 경로가 설계대로 갈리는지 본다.
 
-★고정값과 구조 조건을 가른다(`kind`).
+고정값과 구조 조건을 가른다(`kind`).
 
     kind="fixed"       결과 기업을 이름·corp_code로 못 박는다. 이름 해소가
                        답 그 자체인 케이스(NAME 분기)와, 랭킹 정책을 증명하려면

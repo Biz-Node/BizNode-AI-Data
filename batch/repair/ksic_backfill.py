@@ -1,6 +1,6 @@
 """DART `induty`(5자리 세분류)에서 KSIC 중분류를 채운다. 비용 0.
 
-★왜 DART가 우선인가
+왜 DART가 우선인가
 
 `sector_label`은 LLM이 지은 자유 문자열이라 같은 업종이 여러 이름으로 갈렸다
 (「국내 IT 서비스 기업」 vs 「국내 IT 서비스 제공사」). 그런데 **DART가 이미
@@ -11,7 +11,7 @@
 
 `induty`가 있으면 그게 정답이다. LLM 추론은 **없는 곳만** 채운다.
 
-★중분류(앞 2자리)를 쓰는 이유는 `normalizer/ksic.py` 참고.
+중분류(앞 2자리)를 쓰는 이유는 `normalizer/ksic.py` 참고.
 
     python -m batch.repair.ksic_backfill --dry-run
     python -m batch.repair.ksic_backfill

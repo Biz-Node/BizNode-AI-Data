@@ -1,6 +1,6 @@
 """BizNode 데이터 API.
 
-★모양을 먼저 확정하고 내용을 나중에 채웠다
+모양을 먼저 확정하고 내용을 나중에 채웠다
 
   프론트는 응답이 진짜인지 가짜인지 구분하지 않는다. 모양만 같으면 화면을
   끝까지 만들 수 있다 — 그동안 프론트·백엔드·추론이 대기하지 않아도 된다.
@@ -9,15 +9,10 @@
       2단계  스텁 서버        이 파일
       3단계  하나씩 진짜로     app/services/       ← 라우트는 그대로, 속만 간다
 
-  지금 **데이터 라우트 21개가 전부 실제 DB 를 읽는다**(2026-08-23 확인 ·
-  `/health`·`/preview` 제외). 고정값을 돌려주는 라우트는 **없다.**
+  **3단계가 끝났다. 공개 라우트 21개가 전부 실제 DB 를 읽는다**(2026-08-23).
+  스텁이 없으므로 `X-Stub` 헤더도 더는 나가지 않는다.
 
-  ★다만 `X-Stub: true` 는 아직 `/news` 하나에 붙는다 — `_STUB` 에 남아 있어서다.
-    `/news` 는 `news_service.news_feed()` 로 PostgreSQL 을 읽으므로(실측 12,250건)
-    **헤더와 구현이 어긋난 상태다.** 목록을 정리할지는 아직 정하지 않았다 —
-    `tests/services/test_retrieve_api.py` 와 `/preview` 가 이 헤더를 보고 있다.
-
-★경계 — 이 API 는 사용자를 모른다
+경계 — 이 API 는 사용자를 모른다
 
   누가 로그인했는지 알 필요가 없다. 노드 키를 받아 사실을 돌려줄 뿐이다.
   워크스페이스·보관함은 **백엔드 것**이다 — 「사용자가 어느 기업을 담아 뒀나」는
@@ -29,7 +24,6 @@
 
 실행:
     uvicorn app.api.main:app --reload --port 8100
-    python -m uvicorn app.api.main:app --reload --port 8100 
     → http://localhost:8100/docs      대화형 문서 (백엔드가 볼 것)
     → http://localhost:8100/openapi.json   클라이언트 자동 생성용
 """
@@ -42,9 +36,7 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.api import examples as ex
-from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
-from app.core.trace import configure_logging
+from app.core.config import CHROMA_HOST, CHROMA_PORT
 from app.services.retrieve_service import RetrieveService
 from app.services.answer_service import AnswerService
 from app.services import (
@@ -73,11 +65,7 @@ app = FastAPI(
     title="BizNode 데이터 API",
     version="0.2.0",
     description=(
-        "기업 관계 그래프 조회 API. **데이터 라우트 21개가 전부 실제 DB 를 "
-        "읽습니다** — 고정값을 돌려주는 라우트는 없습니다.\n\n"
-        "`POST /retrieve`(챗봇 재료)와 `POST /ask`(답변 문장)도 실물입니다.\n\n"
-        "⚠ `X-Stub: true` 헤더는 `/news` 하나에 아직 붙습니다. `/news` 는 실제 DB 를 "
-        "읽으므로 **헤더를 실물 여부 판단에 쓰지 마세요.**\n\n"
+        "기업 관계 그래프 조회 API. **공개 라우트 21개가 전부 실제 DB 를 읽습니다** (2026-08-23).\n\n"
         "화면이 어떻게 보이는지는 **`/preview`** 에서 실제 응답으로 볼 수 있습니다.\n\n"
         "### 화면을 만들 때 반드시 다뤄야 하는 것\n"
         "- `in_graph = false` — **실재하지만 우리가 안 모은 회사**입니다. "
@@ -120,21 +108,19 @@ app.add_middleware(
 )
 
 
-# ★아직 고정값인 라우트를 **하나씩 적는다.**
-#   전에는 경로 접두사로 판정했는데(`/workspace/` 로 시작하면 실제 …),
-#   같은 접두사 안에서 진짜와 가짜가 섞이자 **두 개를 틀리게 표시했다** —
-#   `/events/{id}/impact` 는 진짜인데 스텁으로, `/workspace/changes` 는
-#   스텁인데 진짜로 나갔다. 갈아끼울 때 여기서 지우면 헤더가 사라진다.
-#   ★`/retrieve` 를 한 번 빠뜨렸다 — 여러 줄에 걸쳐 `ex.*` 를 넣고 있어서
-#     `return ex.` 로 훑을 때 안 걸렸다. 헤더가 아니라 **본문을 봐야 한다.**
-#   ★2026-08-20 `/retrieve` 가 실물이 되어 여기서 뺐다. 헤더가 사라지는 것이
-#     완료 신호다.
-_STUB = ("/news",)
+# 아직 고정값인 라우트를 **경로 그대로** 적는다. 접두사로 판정하던 때는 같은
+# 접두사 안에 진짜와 가짜가 섞여 두 개를 거꾸로 표시했다.
+#
+# ★비어 있는 것이 정상이다 — 지금은 전부 실물이다. 라우트가 실물이 될 때 여기서
+#   빼는 것을 잊으면 **멀쩡한 응답이 가짜로 나간다.** `/news` 가 실물이 된 뒤에도
+#   남아 있어, 12,250건을 돌려주면서 `X-Stub: true` 를 달고 나갔다(2026-08-23).
+#   헤더가 아니라 **본문이 무엇을 부르는지**로 판단해야 한다.
+_STUB: tuple[str, ...] = ()
 
 
 @app.middleware("http")
 async def _mark_stub(request, call_next):
-    """고정값을 돌려주는 라우트에만 `X-Stub: true`. **헤더가 없으면 진짜다.**"""
+    """`_STUB` 에 적힌 라우트에만 `X-Stub: true`."""
     resp: Response = await call_next(request)
     path = request.url.path
     if any(path == s or path.startswith(s + "/") for s in _STUB):
@@ -541,7 +527,9 @@ async def ask(body: AskRequest) -> AskResponse:
 
 @app.get("/health", tags=["운영"], summary="상태 확인")
 def health() -> dict:
-    return {"status": "ok", "stub": True, "version": app.version}
+    # ★`stub` 이 상수 True 라 **모든 라우트가 실물이 된 뒤에도** True 였다.
+    #   배포 점검이 늘 「미완성」이라 답하는 셈이었다.
+    return {"status": "ok", "stub": bool(_STUB), "version": app.version}
 
 
 # ══════════════════════════════════════════════════════════════════

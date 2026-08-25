@@ -297,7 +297,7 @@ CHECKS: list[tuple] = [
 def _true_count(session, cypher: str, shown: int) -> int:
     """검사 쿼리의 **진짜** 건수. `LIMIT`을 떼고 다시 센다.
 
-    ★왜 필요한가 (2026-08-10)
+    왜 필요한가 (2026-08-10)
 
     검사 쿼리에는 화면이 넘치지 않게 `LIMIT 10`이 붙어 있는데, 건수를
     `len(rows)`로 세고 있었다. 그래서 **10건 이상은 전부 「10건」으로 보고**됐다.
@@ -524,7 +524,7 @@ def _matrix_check(session) -> list[str]:
 def _seed_identity_check(session) -> list[str]:
     """시드가 **동명 다른 법인**을 가리키고 있지 않나 — 공시가 0건이면 의심한다.
 
-    ★2026-08-03 실측. 시드 목록의 corp_code가 틀려 있었다:
+    2026-08-03 실측. 시드 목록의 corp_code가 틀려 있었다:
 
         케이씨텍  01142729(비상장)  ← 잡혀 있던 것
                  01261893(종목 281820)  ← 진짜
@@ -717,7 +717,7 @@ def _cross_db_checks(session) -> list[str]:
 def _subtype_quality(session) -> list[str]:
     """subtype이 **엣지 타입 이름을 되풀이하기만 하는** 비율.
 
-    ★왜 이 지표인가 (2026-08-11)
+    왜 이 지표인가 (2026-08-11)
 
     subtype은 「엣지 타입이 못 하는 말」을 담으라고 둔 칸인데, 재보니 전체 60%
     (뉴스만 보면 87%)가 타입 이름이었다 — `IMPACTS/영향`·`HAS_EVENT/사건`.
@@ -771,7 +771,7 @@ def _subtype_quality(session) -> list[str]:
 def _doc_freshness_check(session) -> list[str]:
     """진행현황 문서가 지금 DB와 맞는지 본다.
 
-    ★왜 검사까지 하나 (2026-08-09)
+    왜 검사까지 하나 (2026-08-09)
 
     문서는 `finalize` 꼬리에서 자동 갱신되지만, `repair.person_merge`처럼
     **따로 돌리는 스크립트**는 문서를 건드리지 않는다. 실제로 문서가 01:29
