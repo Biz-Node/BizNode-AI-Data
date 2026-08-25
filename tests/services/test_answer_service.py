@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from app.api.schemas import AskResponse, Evidence, MatchType, Relation, RelationEndpoint, Source
+from app.api.schemas import (AnchorSource, AskResponse, Evidence, MatchType, Relation,
+                             RelationEndpoint, Source)
 from app.api.schemas import RetrieveResponse
 from app.services import answer_service as as_module
+from app.services.query_understanding import AnchorDecision
+
+# `/ask` 는 워크스페이스가 비면 검색 전에 거부한다(설계서 §16-2). 이 파일은
+# **앵커가 정해진 뒤**의 조립·화이트리스트를 보는 곳이라 채워서 부른다.
+_WORKSPACE = {"00126380": "삼성전자"}
+_WS_KEYS = list(_WORKSPACE)
 
 
 def test_source_defaults():
@@ -272,8 +279,15 @@ def test_system_prompt_explains_how_to_split_claims():
 
 
 def test_ask_response_schema_is_unchanged_by_step4a(monkeypatch):
-    """★Step4a 는 **외부 계약을 건드리지 않는다.** claims 는 내부 관측용이다."""
-    assert set(AskResponse.model_fields) == {"answer", "sources", "failed"}
+    """★Step4a 는 **외부 계약을 건드리지 않는다.** claims 는 내부 관측용이다.
+
+    ★`anchor_source` 는 **Step4a 가 아니라** 2026-08-25 계약 개정이 넣은 것이다
+      (설계서 §5·§14). 이 테스트가 지키는 것은 「claims 가 밖으로 새지 않는다」이지
+      「필드가 영영 안 는다」가 아니므로, 늘어난 필드를 확인하고 claims 만 막는다.
+    """
+    assert set(AskResponse.model_fields) == {
+        "answer", "sources", "failed", "anchor_source"}
+    assert "claims" not in AskResponse.model_fields
 
 
 def test_ask_logs_the_claim_grounding_distribution(monkeypatch, caplog):
@@ -287,7 +301,7 @@ def test_ask_logs_the_claim_grounding_distribution(monkeypatch, caplog):
 
     with caplog.at_level("INFO"):
         as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-            AskRequest(question="q"))
+            AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert "claim.grounding" in caplog.text
     assert "uncited=1" in caplog.text
@@ -303,7 +317,7 @@ def test_ask_does_not_drop_a_low_overlap_claim_from_the_answer(monkeypatch):
         "claims": [{"text": "평택 공장 화재", "evidence_ids": ["ev_a"]}]})
 
     got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-        AskRequest(question="q"))
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert got.answer == "겹침이 0인 주장입니다."
     assert got.failed is False
@@ -317,7 +331,7 @@ def test_ask_survives_a_response_without_claims(monkeypatch):
         "answer": "답", "evidence_ids": ["ev_a"]})
 
     got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-        AskRequest(question="q"))
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert got.answer == "답"
 
@@ -327,9 +341,15 @@ from unittest.mock import MagicMock
 from app.api.schemas import AskRequest
 
 
+# ★`/ask` 는 이제 `retrieve_for_ask()` 만 쓴다 — `(AnchorDecision, 재료)` 를 준다
+#   (설계서 §14-4: unresolved 면 재료를 만들지 않는다). `retrieve()` 는 `/retrieve`
+#   전용으로 남아 있어 여기서 세울 필요가 없다.
+_ANCHORED = AnchorDecision(source=AnchorSource.QUERY, workspace_names=_WORKSPACE)
+
+
 def _retrieve_service_stub(retrieved: RetrieveResponse) -> MagicMock:
     service = MagicMock()
-    service.retrieve.return_value = retrieved
+    service.retrieve_for_ask.return_value = (_ANCHORED, retrieved)
     return service
 
 
@@ -339,7 +359,7 @@ def test_ask_returns_answer_and_whitelisted_sources(monkeypatch):
         "answer": "삼성전자에 공급 이슈가 있었습니다.", "evidence_ids": ["ev_a", "ev_ghost"]})
 
     got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-        AskRequest(question="q"))
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert got.failed is False
     assert got.answer == "삼성전자에 공급 이슈가 있었습니다."
@@ -352,7 +372,7 @@ def test_ask_falls_back_to_safe_message_when_llm_call_fails(monkeypatch):
         "answer": "", "evidence_ids": [], "failed": True, "reason": "LLM 호출 실패"})
 
     got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-        AskRequest(question="q"))
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert got.failed is True
     assert got.answer == as_module._SAFE_MESSAGE
@@ -365,7 +385,7 @@ def test_ask_treats_blank_answer_as_failure(monkeypatch):
         "answer": "", "evidence_ids": []})
 
     got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
-        AskRequest(question="q"))
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert got.failed is True
     assert got.answer == as_module._SAFE_MESSAGE
@@ -377,7 +397,7 @@ def test_ask_sends_the_built_prompt_to_ask_json(monkeypatch):
     monkeypatch.setattr(as_module, "ask_json", lambda system, user, **k: (
         calls.append((system, user)), {"answer": "답", "evidence_ids": []})[1])
 
-    as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(AskRequest(question="질문내용"))
+    as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(AskRequest(question="질문내용", workspace_keys=_WS_KEYS))
 
     system, user = calls[0]
     assert system == as_module._SYSTEM_PROMPT
@@ -389,11 +409,14 @@ def test_ask_reuses_the_injected_retrieve_service(monkeypatch):
     retrieved = _retrieved()
     monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {"answer": "답", "evidence_ids": []})
     stub = _retrieve_service_stub(retrieved)
-    request = AskRequest(question="q")
+    request = AskRequest(question="q", workspace_keys=_WS_KEYS)
 
     as_module.AnswerService(stub).ask(request)
 
-    stub.retrieve.assert_called_once_with(request)
+    # ★`/ask` 는 `retrieve_for_ask()` 를 쓴다 — `unresolved` 면 재료를 만들지
+    #   않아야 해서 입구가 다르다(설계서 §14-4). `retrieve()` 는 `/retrieve` 것이다.
+    stub.retrieve_for_ask.assert_called_once_with(request)
+    stub.retrieve.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -411,7 +434,7 @@ _needs_openai_key = pytest.mark.skipif(
 
 def _no_hallucinated_or_missing_sources(question: str) -> None:
     """공통 검증 — sources 의 evidence_id 가 전부 재료 안에 있고 missing 이 아니다."""
-    request = AskRequest(question=question)
+    request = AskRequest(question=question, workspace_keys=_WS_KEYS)
     fresh = RetrieveService().retrieve(request)
     by_id = {e.evidence_id: e for e in fresh.evidence}
 
@@ -437,5 +460,5 @@ def test_real_ask_does_not_hallucinate_or_cite_missing_evidence_risk_question():
 @_needs_openai_key
 def test_real_ask_returns_a_non_empty_answer_when_no_material_is_found():
     """★재료가 없어도(엉뚱한 질문) 빈 문자열이 아니라 「모른다」류의 답을 써야 한다."""
-    got = as_module.AnswerService().ask(AskRequest(question="storminmvpsdjfk 이 뭐야"))
+    got = as_module.AnswerService().ask(AskRequest(question="storminmvpsdjfk 이 뭐야", workspace_keys=_WS_KEYS))
     assert got.answer

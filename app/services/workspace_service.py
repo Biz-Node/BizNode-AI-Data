@@ -32,8 +32,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.core.database import neo4j_session
+from app.core.trace import trace_logger
+from app.services import company_service
 from app.services.company_service import _relation
 from pipeline.normalizer.ksic import label_of
+
+log = trace_logger(__name__)
 
 # 다리로 쓰지 않을 노드의 차수. 삼성전자(1,169)를 다리로 허용하면 거의 모든
 # 쌍이 이어져 **의미가 0인 그래프**가 된다.
@@ -57,6 +61,39 @@ def _nodes(session, keys: list[str]) -> dict[str, dict]:
                c.entity_kind AS kind, c.ksic AS ksic, c.corp_code AS cc,
                count(e) AS degree""", k=keys)
     return {r["key"]: dict(r) for r in rows}
+
+
+def names_of(keys: list[str]) -> dict[str, str]:
+    """워크스페이스 key → **표시용 이름**(설계서 §16-3).
+
+    `workspace_keys` 는 키만 온다. 그런데 답변 문구(§14-4)·앵커 2차 대조(§14-7)·
+    워크스페이스 소속 표기(§12)는 이름을 쓴다. 그 이름을 **우리가 조회한다** —
+    백엔드가 밀어 주지 않는다.
+
+    ★**경계에서 한 번만 부른다.** flow ①b 는 이 결과를 메모리에서 대조만 해야
+      한다(설계서 §10 ①b 의 금지사항 「새 검색을 하지 않는다」).
+
+    ★**못 찾은 key 를 조용히 지우지 않는다.** 그래프에 없는 기업이 워크스페이스에
+      담겨 있을 수 있다 — 이름 자리에 key 를 그대로 두고 로그에 남긴다
+      ([규칙 2](../../docs/BizNode_Search_Layer_설계.md)).
+
+    ★**이름은 식별 기준이 아니다.** 식별은 key 이고(`corp_code` → `norm_name`),
+      이름은 표시·해석용이다(설계서 §16-1).
+
+    ★조회는 `company_service.names_by_keys()` 가 한다 — 같은 질의를 두 벌 두면
+      key 판별 규약이 갈린다. 여기서 얹는 것은 **못 찾은 key 의 처리**뿐이다.
+      `_nodes()` 를 안 쓰는 이유는 비용이다 — 저쪽은 `OPTIONAL MATCH (c)-[e]-()`
+      로 차수까지 세서 3.6배 비싸다(실측 2026-08-25: 8.7ms → 2.4ms).
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    found = company_service.names_by_keys(unique)
+
+    missing = [k for k in unique if k not in found]
+    if missing:
+        log.info("workspace.names unnamed=%d keys=%s", len(missing), missing)
+    return {k: found.get(k) or k for k in unique}
 
 
 _DIRECT = """

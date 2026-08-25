@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.api.schemas import AskRequest, AskResponse, Evidence, MatchType, Relation, RetrieveResponse, Source
+from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, MatchType,
+                             Relation, RetrieveResponse, Source)
 from app.core.trace import trace_logger
 from app.services import claim_check
+from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import RetrieveService
 from pipeline.llm import ask_json
 
@@ -61,6 +63,21 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    숨기지 말고 그대로 두세요. 인사말·"확인되지 않았습니다" 같은 메타 문장은
    사실 주장이 아니므로 claims 에 넣지 않습니다.
 
+13. **[사실] 의 "답변 대상" 줄이 답변의 형태를 정합니다.**
+   - "질문" 이면 그 대상에 대해 **서술형**으로 답하세요. 평소대로입니다.
+   - "워크스페이스" 면 질문이 대상을 지정하지 않아 **저희가 대상을 골랐다는 뜻**
+     입니다. 하나의 서사로 엮지 말고 **기업별 목록**으로 쓰세요 — "A 에 이런 건이,
+     B 에 이런 건이 있습니다". 그리고 대상을 저희가 골랐다는 사실을 답변에
+     밝히세요. 재료가 약하면 "다음이 걸렸습니다 — 직접 관련은 확인되지
+     않았습니다"처럼 **걸린 것만 보여주고 단정하지 마세요.**
+   ★이 헤지는 7번(검색 방식)과 **다른 이유**입니다. 워크스페이스 기업은 키가
+   정확합니다 — 부정확한 것은 그 기업이 맞나가 아니라 **대상을 누가 골랐나**입니다.
+14. **[사실] 에 "OO=워크스페이스" 라고 적힌 기업이 사용자가 담아 둔 기업입니다.**
+   "=바깥" 은 그 밖입니다. 이건 저희가 확실히 아는 사실이지 추측이 아닙니다.
+   **인사이트(파급·전망·해석) 문장은 워크스페이스 기업을 하나 이상 주어나 영향
+   대상으로 가져야 합니다** — 사용자가 담지도 않은 기업들끼리의 이야기는 이
+   워크스페이스의 인사이트가 아닙니다.
+
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
 # ★`claims` 는 **내부 관측용**이다(Step4a). `AskResponse` 에는 나가지 않는다 —
@@ -100,6 +117,19 @@ _MAX_PROPAGATION_LINES = 15
 _SAFE_FALLBACK = {"answer": "", "evidence_ids": [], "claims": []}
 _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다. 아래 근거를 참고해 주세요."
 
+# ★LLM 을 부르지 않고 내는 문구 둘. **결정론적으로 조립한다**(설계서 §14-4·§16-2) —
+#   재료가 없으면 해석할 것도 없다.
+#
+# ★둘을 가르는 이유는 **사용자가 할 일이 다르기 때문**이다. 하나는 기업을
+#   추가해야 하고, 하나는 다른 이름으로 물어야 한다.
+_NO_WORKSPACE_MESSAGE = "이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다."
+
+# ★조사를 변수 뒤에 붙이지 않는다 — 「'TSMC' 를」/「'심텍' 을」처럼 받침에 따라
+#   갈리는데, 영문·약어는 한글 발음으로 판정해야 해서 규칙이 커진다. 「~에
+#   해당하는」은 받침과 무관하게 성립한다.
+_UNRESOLVED_TEMPLATE = "질문하신 '{named}' 에 해당하는 기업을 저희 데이터에서 찾지 못했습니다."
+_WORKSPACE_HINT_TEMPLATE = "현재 워크스페이스에 담긴 기업은 다음과 같습니다 — {names}"
+
 
 # ★dict 조회로 전수 분기한다 — 미지 값을 조용히 EXACT(="확신을 갖고 말해도
 #   된다"는 허가)로 떨어뜨리지 않는다. 매핑에 없는 값이 오면 KeyError 로
@@ -116,8 +146,38 @@ def _match_type_note(match_type: MatchType) -> str:
     return _NOTE_BY_MATCH_TYPE[match_type]
 
 
-def _fact_lines(retrieved: RetrieveResponse) -> str:
+# ★답변 형태를 가르는 줄(설계서 §14-6). 시스템 프롬프트 규칙 13이 「"답변 대상"
+#   줄」이라고 **이름으로** 참조하므로 문구를 바꿀 때 규칙도 같이 봐야 한다.
+_TARGET_NOTE_BY_SOURCE: dict[AnchorSource, str] = {
+    AnchorSource.QUERY: "답변 대상: 질문 — 질문이 지정한 대상에 대해 답합니다.",
+    AnchorSource.WORKSPACE: ("답변 대상: 워크스페이스 — 질문이 대상을 지정하지 않아 "
+                             "워크스페이스 기업들을 대상으로 삼았습니다."),
+    # `unresolved` 는 애초에 LLM 을 부르지 않는다(설계서 §14-4).
+    AnchorSource.UNRESOLVED: "",
+}
+
+
+def _membership(relation: Relation, workspace_keys: set[str]) -> str:
+    """★「이 기업이 사용자의 워크스페이스 안인가」 — 설계서 §12.
+
+    ④ Insight 등급에 **처음으로 걸리는 결정론적 고리**다. 지어내는 값이 아니라
+    우리가 확실히 아는 사실이고, claim ⑤ 에 **집합 확인**이라는 부분 검증 원천이
+    생긴다. ★그래도 **여기서 판정하지 않는다** — 표기만 한다.
+    """
+    if not workspace_keys:
+        return ""
+    def _mark(endpoint) -> str:
+        inside = "워크스페이스" if endpoint.key in workspace_keys else "바깥"
+        return f"{endpoint.name}={inside}"
+    return f", {_mark(relation.source)}, {_mark(relation.target)}"
+
+
+def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozenset(),
+                *, workspace_names: Optional[dict[str, str]] = None) -> str:
     lines: list[str] = []
+    # ★집합 확인(설계서 §12)을 하려면 LLM 이 그 집합을 봐야 한다.
+    if workspace_names:
+        lines.append("워크스페이스: " + " · ".join(workspace_names.values()))
     if retrieved.companies:
         lines.append("기업: " + ", ".join(f"{c.name}({c.key})" for c in retrieved.companies))
     for event in retrieved.events:
@@ -135,7 +195,8 @@ def _fact_lines(retrieved: RetrieveResponse) -> str:
         lines.append(
             f"관계 {relation.edge_id}: {relation.source.name} --{relation.type.value}"
             f"({relation.subtype or '-'})--> {relation.target.name} "
-            f"(freshness={relation.freshness.value}, score={relation.score}) "
+            f"(freshness={relation.freshness.value}, score={relation.score}"
+            f"{_membership(relation, workspace_keys)}) "
             f"근거: {relation.evidence_id or '없음'}")
     # ★파급은 **프롬프트를 먹는다.** 실측(2026-08-23) 「SK하이닉스 안전사고 …」
     #   한 질문에 45줄 넘게 붙었고 전부 `stated=False` 인 2홉 계산값이었다.
@@ -172,9 +233,22 @@ def _evidence_block(retrieved: RetrieveResponse) -> str:
     return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
 
 
-def _build_user_prompt(question: str, retrieved: RetrieveResponse) -> str:
+def _build_user_prompt(question: str, retrieved: RetrieveResponse,
+                       decision: Optional[AnchorDecision] = None) -> str:
+    """★`decision` 이 없으면 「답변 대상」 줄을 붙이지 않는다 — 판정이 없는데
+    형태를 지시하면 그게 곧 거짓말이다."""
+    workspace_names = decision.workspace_names if decision else None
+    workspace_keys = set(workspace_names or ())
+    facts = _fact_lines(retrieved, workspace_keys, workspace_names=workspace_names)
+    if decision is not None:
+        note = _TARGET_NOTE_BY_SOURCE[decision.source]
+        if note:
+            # 「검색 방식」 바로 뒤에 둔다 — 규칙 7·13이 둘 다 [사실] 앞머리를
+            # 위치로 참조한다.
+            head, _, rest = facts.partition("\n")
+            facts = f"{head}\n{note}\n{rest}" if rest else f"{head}\n{note}"
     return (f"질문: {question}\n\n"
-            f"[사실]\n{_fact_lines(retrieved)}\n\n"
+            f"[사실]\n{facts}\n\n"
             f"[근거]\n{_evidence_block(retrieved)}")
 
 
@@ -212,6 +286,27 @@ def _sources_from(evidence_ids: list[str], retrieved: RetrieveResponse) -> list[
     return out
 
 
+def _no_material(message: str) -> AskResponse:
+    """재료 없이 내는 응답 — **`failed=false` 다.**
+
+    ★`failed` 는 「LLM 호출이 실패했다」는 뜻이다(설계서 §15-4). 여기서는
+      애초에 안 불렀으므로 실패가 아니다. 섞으면 화면이 「서버가 고장났다」와
+      「그 기업을 못 찾았다」를 구별하지 못한다.
+    """
+    return AskResponse(answer=message, sources=[], failed=False,
+                       anchor_source=AnchorSource.UNRESOLVED)
+
+
+def _unresolved_message(decision: AnchorDecision) -> str:
+    """★대안은 **「제안」까지만**이다(설계서 §14-4) — 워크스페이스 기업 이름을
+    보여줄 뿐, 그 기업들에 대해 답하지 않는다. 답하면 그게 곧 조용한 오답이다."""
+    lines = [_UNRESOLVED_TEMPLATE.format(named=decision.named)]
+    if decision.workspace_names:
+        lines.append(_WORKSPACE_HINT_TEMPLATE.format(
+            names=" · ".join(decision.workspace_names.values())))
+    return "\n".join(lines)
+
+
 def _fallback_sources(retrieved: RetrieveResponse) -> list[Source]:
     """LLM 호출이 실패했을 때 — 필터링 근거가 없으니 missing 만 뺀 원본 전부."""
     return [_source_from_evidence(e, retrieved.relations)
@@ -224,8 +319,23 @@ class AnswerService:
 
     def ask(self, request: AskRequest) -> AskResponse:
         """질문 하나 → 답변 문장 + 화이트리스트를 통과한 근거."""
-        retrieved = self._retrieve_service.retrieve(request)
-        user = _build_user_prompt(request.question, retrieved)
+        # ── 워크스페이스가 비었나 (설계서 §16-2) ────────────────────────
+        # ★검색조차 하지 않는다 — 재료를 모을 출발점이 없다. 「무엇에 대한
+        #   인사이트인가」가 정해지지 않으면 답하지 않는 것이 맞다.
+        if not request.workspace_keys:
+            log.info("ask.rejected reason=empty_workspace")
+            return _no_material(_NO_WORKSPACE_MESSAGE)
+
+        decision, retrieved = self._retrieve_service.retrieve_for_ask(request)
+
+        # ── 대상을 못 찾았나 (설계서 §14-4) ─────────────────────────────
+        # ★**워크스페이스로 갈아타지 않는다.** 그러면 「TSMC 를 물었는데
+        #   삼성전자로 답하는」 탐지 불가능한 오답이 된다. LLM 도 안 부른다 —
+        #   재료가 없으면 해석할 것도 없다.
+        if retrieved is None:
+            return _no_material(_unresolved_message(decision))
+
+        user = _build_user_prompt(request.question, retrieved, decision)
 
         # ★프롬프트는 **길이만** 남긴다 — 본문에 시스템 지시문과 근거 원문이
         #   통째로 들어 있어, 그대로 찍으면 로그가 근거 사본이 된다(설계서 §13-2).
@@ -270,9 +380,13 @@ class AnswerService:
                      summary["max"],
                      [c.score for c in checked if c.score is not None])
 
+        # ★`anchor_source` 는 LLM 과 무관한 **서버가 아는 결정론적 값**이라
+        #   실패 경로에도 그대로 실린다(설계서 §14-3).
         if failed:
-            return AskResponse(answer=_SAFE_MESSAGE, sources=sources, failed=True)
-        return AskResponse(answer=answer, sources=sources, failed=False)
+            return AskResponse(answer=_SAFE_MESSAGE, sources=sources, failed=True,
+                               anchor_source=decision.source)
+        return AskResponse(answer=answer, sources=sources, failed=False,
+                           anchor_source=decision.source)
 
     async def ask_async(self, request: AskRequest) -> AskResponse:
         """`ask()` 를 threadpool 에서 돌린다 — `retrieve()`·OpenAI 호출 모두 블로킹이다."""

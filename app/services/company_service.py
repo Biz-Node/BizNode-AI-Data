@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from app.core.database import neo4j_session, postgres_connection
 from pipeline.freshness import assess
+from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.ksic import label_of
 
 # 근거 검증에서 이 판정이 난 관계는 **응답에서 아예 뺀다.**
@@ -63,6 +64,96 @@ def _node(session, key: str) -> Optional[dict]:
         """MATCH (c:Company) WHERE c.corp_code = $k OR c.norm_name = $k
            RETURN properties(c) AS p LIMIT 1""", k=key).single()
     return dict(row["p"]) if row else None
+
+
+_BY_NAME_Q = """
+MATCH (c:Company) WHERE c.norm_name IN $n
+RETURN c.norm_name AS norm_name, coalesce(c.corp_code, c.norm_name) AS key,
+       c.name AS name, c.corp_code AS corp_code
+"""
+
+
+def find_by_names(names: list[str]) -> Optional[dict]:
+    """이름 후보들 중 **그래프에 실재하는 기업** 하나. 없으면 `None`.
+
+    ★`EntityResolver`(PostgreSQL `corp_code_master`)가 해소에 실패했을 때의
+      **두 번째 수단**이다 — 설계서 §16-1 의 식별 우선순위 `corp_code` →
+      `norm_name` 에서 뒤쪽이다.
+
+    ★왜 필요한가 (실측 2026-08-25 · 현황서 §8-5) — `TSMC`·`마이크론` 은 Neo4j 에
+      Company 로 있는데 `corp_code_master` 에 없다. 이 fallback 없이 두면
+      「저희 데이터에서 찾지 못했습니다」(설계서 §14-4)가 **거짓말**이 된다.
+
+    ★**정규화하고 조회한다.** `norm_name` 규약이 어긋나면 조용히 0건이 된다
+      (설계서 §16-1). 후보가 하나도 안 남으면 조회하지 않는다 — 빈 `IN` 절은
+      전체 스캔이다.
+
+    ★**입력 순서가 이긴다.** 여럿이 걸려도 먼저 준 후보를 쓴다 — 같은 질문에
+      매번 다른 앵커가 잡히면 안 된다(`evidence_selector.select` 와 같은 규약).
+    """
+    norms = list(dict.fromkeys(
+        normalize_company_name(n) for n in names if n and n.strip()))
+    norms = [n for n in norms if n]
+    if not norms:
+        return None
+
+    with neo4j_session() as s:
+        by_norm = {r["norm_name"]: {"key": r["key"], "name": r["name"],
+                                    "corp_code": r["corp_code"]}
+                   for r in s.run(_BY_NAME_Q, n=norms)}
+    for norm in norms:
+        if norm in by_norm:
+            return by_norm[norm]
+    return None
+
+
+_BY_KEY_Q = """
+MATCH (c:Company) WHERE c.corp_code IN $k OR c.norm_name IN $k
+RETURN coalesce(c.corp_code, c.norm_name) AS key, c.name AS name
+"""
+
+
+def names_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → 이름. **그래프에 있는 것만** 돌려준다 — 없는 key 는 빠진다.
+
+    ★그래서 **존재 확인을 겸한다.** 「해소됐다 ≠ 그래프에 있다」이기 때문이다 —
+      `corp_code_master` 118,535건 대 그래프 Company 3,432건이다. 없는 key 를
+      재료 기업에 넣으면 `companies` 에 **팬텀 항목**만 남고 사건·관계는 0 이 된다
+      (`events_of`·`relations_of` 는 없는 key 에 조용히 빈 목록을 준다).
+
+    ★`workspace_service.names_of()` 가 이 함수를 쓴다 — 조회를 두 벌 두지 않는다.
+      저쪽은 여기 결과에 「못 찾은 key 는 key 로 남긴다」를 얹을 뿐이다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["name"] for r in s.run(_BY_KEY_Q, k=unique)}
+
+
+_NON_COMPANY_Q = """
+MATCH (n) WHERE NOT n:Company AND n.name IN $names
+RETURN n.name AS name, labels(n)[0] AS label
+"""
+
+
+def non_company_labels(names: list[str]) -> dict[str, str]:
+    """이름 → 그 이름을 **정확히** 가진 비-Company 노드의 라벨. 없으면 빠진다.
+
+    ★기업이 아닌 것을 기업으로 오인하는 것을 막는 데 쓴다 — 실측(2026-08-25 ·
+      현황서 §8-5)에서 「HBM을 만드는 기업」의 `HBM` 이 Kiwi `SL` 태그를 받아
+      **기업을 지목한 것**으로 읽혔다. `HBM` 은 Product 노드다.
+
+    ★**정확 일치만 본다.** `CONTAINS` 로 하면 「삼성전자」가 Event 이름에,
+      「엔비디아」가 Product 이름에 걸려 **실존 기업이 통째로 억제**된다
+      (실측: 삼성전자→Event · TSMC→Event · 마이크론→Organization · 엔비디아→Product).
+      정확 일치에서는 `HBM` 만 걸리고 나머지는 하나도 안 걸린다 — 오탐 0.
+    """
+    unique = list(dict.fromkeys(n for n in names if n and n.strip()))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["name"]: r["label"] for r in s.run(_NON_COMPANY_Q, names=unique)}
 
 
 def _verdict(p: dict) -> str:

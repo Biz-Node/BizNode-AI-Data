@@ -122,6 +122,16 @@ def _kiwi():
     return Kiwi()
 
 
+def kiwi():
+    """형태소 분석기 **공용 접근자** — 프로세스당 한 인스턴스.
+
+    ★이 레포에 Kiwi 인스턴스가 이미 둘이다(여기 · `anchor_extractor`). 세 번째를
+      만들지 않으려고 연다 — 로드가 1.3초이고 `/ask` 는 둘 다 지나는 경로다.
+      `anchor_extractor` 쪽까지 합치는 것은 Search Layer 수정이라 범위 밖이다.
+    """
+    return _kiwi()
+
+
 def _merge_adjacent(analyzed) -> list[str]:
     """붙어 있던 내용어를 도로 붙인다.
 

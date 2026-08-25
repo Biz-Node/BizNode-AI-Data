@@ -36,7 +36,9 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.core.config import CHROMA_HOST, CHROMA_PORT
+
+from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
+from app.core.trace import configure_logging
 from app.services.retrieve_service import RetrieveService
 from app.services.answer_service import AnswerService
 from app.services import (

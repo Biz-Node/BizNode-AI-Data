@@ -448,9 +448,25 @@ PostgreSQL 을 읽으므로(실측 12,250건) **이 헤더를 실물 여부 판�
             요청 바디는 /retrieve 와 같습니다(AskRequest). 새 이름을 만들지 않았습니다.
 ```
 
-★`/ask` 에서 `workspace_keys` 는 **필수**입니다 — 그래프 안에서 인사이트를 만드는
-챗봇이라 워크스페이스 없이 부를 수 없습니다. 다만 스키마 기본값이 아직
-`default_factory=list` 라 **서버가 강제하지는 않습니다.**
+★`/ask` 에서 `workspace_keys` 는 **필수**입니다 — 그래프 안에서 인사이트를
+만드는 챗봇이라 워크스페이스 없이 부를 수 없습니다. 스키마 기본값이
+`default_factory=list` 라 **422 는 아니지만**, 2026-08-26 부터 **서버가 검색 전에
+거부**하고 `anchor_source="unresolved"` 로 고정 문구를 돌려줍니다.
+
+★**요청 계약은 바뀌지 않습니다** (2026-08-25 확인). `/ask` 는 계속
+`{ question, workspace_keys }` 를 받고, `workspace_keys` 는 **현재 워크스페이스 기업의
+`corp_code` 배열**입니다 — 요청마다 실어 보내 주세요. 워크스페이스 동기화 API 는
+**만들지 않습니다.**
+
+★**응답 필드 둘이 2026-08-26 에 추가됐습니다** —
+`AskResponse.anchor_source`(`query`/`workspace`/`unresolved`)와
+`RetrieveResponse.anchors[]`. 뜻은
+[설계서 §14](BizNode_Search_Layer_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
+[현황서 §3-2](BizNode_Search_Layer_현황서.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
+
+★`anchor_source` 가 `unresolved` 면 **`failed=false` 인데 `sources` 가 빕니다** — 서버
+오류가 아니라 「그 기업을 못 찾았다」는 뜻이고, `answer` 에 대안이 담깁니다. 화면에서
+`failed=true`(LLM 실패)와 **다르게** 다뤄 주세요.
 
 ★`failed=true` 면 `answer` 는 고정 문구이고 **HTTP 는 200** 입니다. `sources` 는
 그대로 나가므로 화면이 「답은 못 썼지만 근거는 있다」를 보여줄 수 있습니다.

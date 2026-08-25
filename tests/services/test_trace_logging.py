@@ -16,11 +16,13 @@ import logging
 import re
 from unittest.mock import MagicMock
 
-from app.api.schemas import AskRequest, Evidence, MatchType, RetrieveResponse
+from app.api.schemas import (AnchorSource, AskRequest, Evidence, MatchType,
+                             RetrieveResponse)
 from app.core import trace as trace_module
 from app.services import answer_service as as_module
 from app.services import retrieve_service as rs_module
 from app.services.graph_service import Relation
+from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import RetrieveService
 from pipeline.freshness import Freshness
 from pipeline.normalizer.resolver import Resolution
@@ -303,13 +305,21 @@ def _evidence(evidence_id, *, missing=False, text=_SECRET_TEXT):
                     source_type="news", missing=missing)
 
 
+# `/ask` 는 워크스페이스가 비면 검색 전에 거부한다(설계서 §16-2) — 로그를 보려면
+# 앵커 경로를 타야 하므로 채워서 부른다.
+_WORKSPACE = {"00126380": "삼성전자"}
+_WS_KEYS = list(_WORKSPACE)
+
+
 def _retrieved(*, evidence=(), match_type=MatchType.EXACT):
     return RetrieveResponse(question="q", evidence=list(evidence), match_type=match_type)
 
 
 def _answer_service(retrieved, monkeypatch, *, llm_result):
     service = MagicMock()
-    service.retrieve.return_value = retrieved
+    # ★`/ask` 는 `retrieve_for_ask()` 만 쓴다 — `(AnchorDecision, 재료)`.
+    service.retrieve_for_ask.return_value = (
+        AnchorDecision(source=AnchorSource.QUERY, workspace_names=_WORKSPACE), retrieved)
     monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: llm_result)
     return as_module.AnswerService(service)
 
@@ -321,7 +331,7 @@ def test_llm_request_log_carries_material_counts_and_match_type(caplog, monkeypa
                               llm_result={"answer": "답", "evidence_ids": []})
 
     with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert "llm.request" in caplog.text
     assert "match_type=SEMANTIC" in caplog.text
@@ -338,7 +348,7 @@ def test_llm_response_log_separates_cited_accepted_and_dropped(caplog, monkeypat
         llm_result={"answer": "답", "evidence_ids": ["ev_a", "ev_gone", "ev_ghost"]})
 
     with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert "llm.response" in caplog.text
     assert "accepted=['ev_a']" in caplog.text
@@ -352,7 +362,7 @@ def test_llm_failure_is_visible_in_the_log(caplog, monkeypatch):
         "answer": "", "evidence_ids": [], "failed": True, "reason": "LLM 호출 실패"})
 
     with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert "failed=True" in caplog.text
 
@@ -368,7 +378,7 @@ def test_evidence_text_never_reaches_the_log(caplog, monkeypatch):
                               llm_result={"answer": "답", "evidence_ids": ["ev_a"]})
 
     with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert _SECRET_TEXT not in caplog.text
     assert "ev_a" in caplog.text, "본문을 뺐다고 id 까지 빠지면 추적이 안 된다"
@@ -382,7 +392,7 @@ def test_the_prompt_itself_never_reaches_the_log(caplog, monkeypatch):
                               llm_result={"answer": "답", "evidence_ids": []})
 
     with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert "당신은 BizNode" not in caplog.text     # 시스템 프롬프트 첫 구절
     assert "<evidence id=" not in caplog.text      # 근거 블록 델리미터
@@ -395,7 +405,7 @@ def test_the_generated_answer_body_never_reaches_the_log(caplog, monkeypatch):
         "answer": f"근거에 따르면 {_SECRET_TEXT}", "evidence_ids": ["ev_a"]})
 
     with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q"))
+        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
 
     assert _SECRET_TEXT not in caplog.text
 

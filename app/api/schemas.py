@@ -885,6 +885,47 @@ class MatchType(str, Enum):
     SEMANTIC = "SEMANTIC"
 
 
+class AnchorSource(str, Enum):
+    """이 답이 **무엇을 대상으로** 쓰였는가 — 설계서 §14.
+
+    ★`match_type`(**어떻게 찾았나**)과 **별개 축**이다. 관계 키워드는 있는데
+      질문이 대상을 지정하지 않은 질의는 `EXACT` 로 나가는데, 그건 거짓말이
+      아니라 **빠져 있던 축이 이것**이었다(현황서 §5-3).
+    """
+
+    # 질문이 대상을 지정했고 그 대상이 해소됐다.
+    QUERY = "query"
+    # 질문이 대상을 지정하지 않아 **워크스페이스 기업**을 대상 문맥으로 삼았다.
+    WORKSPACE = "workspace"
+    # ★질문이 대상을 지정했는데 **못 찾았다.** 워크스페이스로 갈아타지 않는다 —
+    #   그러면 「TSMC 를 물었는데 삼성전자로 답하는」 탐지 불가능한 오답이 된다
+    #   (설계서 §14-3·§14-4).
+    UNRESOLVED = "unresolved"
+
+
+class Anchor(BaseModel):
+    """재료를 모은 **출발점** 한 곳.
+
+    ★`companies` 와 다르다 — `companies` 는 「재료가 된 기업」이고 여기는 「그
+      재료를 모으려고 잡은 기업」이다. 워크스페이스 앵커 질의에서는 둘이 크게
+      달라진다(설계서 §5, 현황서 §5-7).
+
+    ★`source` 에 `unresolved` 는 올 수 없다 — 해소에 실패하면 앵커 자체가
+      없다. 그 값은 `AskResponse.anchor_source` 의 것이다.
+    """
+
+    key: str = Field(
+        description="**`corp_code`(8자리 숫자) 또는 `norm_name`.** 식별 우선순위는 "
+                    "`corp_code` → `norm_name` 이고, `name` 은 식별에 쓰지 않는다 "
+                    "(설계서 §16-1)",
+        examples=["00164779"])
+    name: str = Field(description="표시·해석용. **식별 기준이 아니다**",
+                      examples=["SK하이닉스"])
+    source: Literal[AnchorSource.QUERY, AnchorSource.WORKSPACE] = Field(
+        description="`query` — 질문이 지정한 대상. "
+                    "`workspace` — 워크스페이스 기업을 대상 문맥으로 삼았다")
+
+
 # ★**답변을 만들지 않는다.** 사실과 근거만 준다 — 문장 생성은 추론 담당 몫이고,
 # 경계를 섞으면 「누가 지어냈나」를 못 가린다.
 class RetrieveResponse(BaseModel):
@@ -895,7 +936,16 @@ class RetrieveResponse(BaseModel):
         description="EXACT — 이름/관계가 그래프에서 정확히 일치해 찾았다. "
                     "SEMANTIC — 프로필 문서와의 의미 유사도로 골랐다(설계서 §11, "
                     "같은 무게로 말하면 안 된다)")
-    companies: list[RelationEndpoint] = Field(default_factory=list, description="질문에서 찾아낸 기업")
+    anchors: list[Anchor] = Field(
+        default_factory=list,
+        description="**재료를 모은 출발점.** `companies` 와 다르다 — 이쪽이 「어디서부터 "
+                    "모았나」이고 `companies` 는 「그래서 무엇이 재료가 됐나」다")
+    # ★설명을 사실에 맞춘다(현황서 §5-7). 전에는 「질문에서 찾아낸 기업」이라고
+    #   적혀 있었는데, 실제로 담기는 것은 검색 히트에서 추린 **재료가 된 기업**이다.
+    #   앵커는 `anchors[]` 로 따로 싣는다.
+    companies: list[RelationEndpoint] = Field(
+        default_factory=list,
+        description="**재료가 된 기업.** 질문에서 찾아낸 기업이 아니다 — 앵커는 `anchors`")
     events: list[Event] = Field(default_factory=list)
     relations: list[Relation] = Field(default_factory=list)
     propagation: list[Propagation] = Field(default_factory=list)
@@ -925,6 +975,21 @@ class AskResponse(BaseModel):
     answer: str
     sources: list[Source] = Field(default_factory=list)
     failed: bool = False
+    # ★`match_type` 은 여기 싣지 않는다(설계서 부록 A) — 프론트에 필요한 것은
+    #   「무엇을 대상으로 답했나」이고, 그건 `anchor_source` 다. `match_type`
+    #   (어떻게 찾았나)은 `/retrieve` 에 남는다.
+    #
+    # ★`None` 은 **네 번째 앵커 상태가 아니라 「아직 판정하지 않았다」**이다.
+    #   판정기(`query_understanding`)는 현황서 §6-2 ② 단계에서 붙고, 그때 이
+    #   필드가 필수가 된다. 그 전에 억지 기본값을 넣으면 — 예컨대 전부
+    #   `query` 로 두면 — 못 찾은 대상을 「질문이 지정한 대상으로 답했다」고
+    #   말하는 셈이라 §14-3 이 막으려는 바로 그 조용한 오답이 된다.
+    anchor_source: Optional[AnchorSource] = Field(
+        None,
+        description="이 답이 **무엇을 대상으로** 쓰였나 — `query`(질문이 지정한 대상) / "
+                    "`workspace`(워크스페이스 기업을 대상 문맥으로 해석) / "
+                    "`unresolved`(대상을 못 찾음). **`match_type` 과 별개 축이다.** "
+                    "판정기가 붙기 전에는 `null` 이다")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1023,10 +1088,18 @@ class AskRequest(BaseModel):
 
     question: str = Field(min_length=1,
                           examples=["SK하이닉스에 생산 차질을 일으킬 만한 일이 있었나?"])
+    # ★설명이 **폐기된 정책**을 담고 있었다(2026-08-25 정정). 「관계는 양끝이
+    #   모두 이 안에 있어야 한다」는 hard filter 는 2026-08-20 에 뒤집혔다 —
+    #   워크스페이스 밖의 관련 정보가 통째로 사라졌기 때문이다(설계서 §3).
+    #   지금은 **후보를 지우지 않고 순서만** 정한다. 동작은 그때 이미 바뀌었고
+    #   설명만 옛 정책에 남아 있었다.
     workspace_keys: list[str] = Field(
         default_factory=list,
-        description="검색 범위. 관계는 **양끝이 모두** 이 안에 있어야 한다 — "
-                    "챗봇은 사용자의 워크스페이스 안에서 존재하는 기능이다")
+        description="현재 워크스페이스에 담긴 기업의 **`corp_code` 배열.** "
+                    "**필터가 아니라 랭킹 문맥이다** — 워크스페이스 밖 기업도 그대로 "
+                    "나오고 순서만 달라진다(설계서 §3). `corp_code` 가 없는 기업은 "
+                    "`norm_name` 으로 온다(설계서 §16-1)",
+        examples=[["00126380", "00164779"]])
 
     @field_validator("question")
     @classmethod
