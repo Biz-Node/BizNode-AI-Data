@@ -197,6 +197,108 @@ def test_invented_causation_still_scores_low():
     assert got[0].score < 0.5, got[0].missing
 
 
+# ── claim 6번째 유형 — 미분류/자유결합 Insight (2026-08-26) ──────────────
+# ★설계서 §13-1 의 claim 5종에 **분류되지 않는** 주장이 있다.
+#
+#     ⑤ Insight/파급 의 검증 원천은 `propagation[]`(target·path·stated)다.
+#     그런데 실측 사례1의 「이 사고로 인해 생산에 영향을 미쳤을 가능성이
+#     있습니다」는 `propagation[]` 근거 없이 LLM 이 두 사실을 **자유 결합**한
+#     것이라 ⑤ 에도 안 들어간다 — 4등급 ④(Insight)에는 속하는데 claim 5종
+#     어디에도 안 걸린다. **검증 원천이 없는 게 아니라 분류가 안 된다.**
+#
+# ★**이번 단계에서는 관측·분류만 한다** — strip 하지 않는다. 발생률과 오탐률을
+#   재기 전에 문장을 지우면 정상 답변을 훼손한다(Step4a 와 같은 규율).
+
+def test_a_causal_claim_unsupported_by_propagation_is_typed_as_free_combination():
+    """★실측 사례1 그 자체 — 근거는 손해배상 판결을 말하는데 답변이
+    「이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다」로 끝났다."""
+    ev = {"ev_a": _evidence("ev_a", "2015년 SK하이닉스 이천 공장에서 발생한 "
+                                    "질소가스 누출 사고로 인해 근로자 3명이 "
+                                    "사망한 사건과 관련, 손해배상 소송을 제기했다")}
+
+    got = claim_check.check(
+        [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+          "evidence_ids": ["ev_a"]}], ev)
+
+    assert got[0].claim_type == claim_check.TYPE_FREE_COMBINATION
+
+
+def test_a_claim_without_a_causal_marker_is_not_a_free_combination():
+    """★인과를 주장하지 않은 문장은 대상이 아니다 — 대다수가 여기다."""
+    ev = {"ev_a": _evidence("ev_a", "이천 공장에서 질소 누출 사고가 났다")}
+
+    got = claim_check.check(
+        [{"text": "이천 공장에서 질소 누출 사고가 발생했습니다",
+          "evidence_ids": ["ev_a"]}], ev)
+
+    assert got[0].claim_type is None
+
+
+def test_a_causal_claim_whose_effect_is_in_the_evidence_is_not_flagged():
+    """★근거가 그 인과를 **실제로 말하고 있으면** ② 관측된 인과다(설계서 §12).
+    자유 결합이 아니다."""
+    ev = {"ev_a": _evidence("ev_a", "질소 누출 사고로 인해 근로자 3명이 사망했다")}
+
+    got = claim_check.check(
+        [{"text": "질소 누출 사고로 인해 근로자 3명이 사망했습니다",
+          "evidence_ids": ["ev_a"]}], ev)
+
+    assert got[0].claim_type is None
+
+
+def test_a_causal_claim_backed_by_propagation_is_typed_as_propagation():
+    """★`propagation[]` 이 뒷받침하면 claim ⑤ 다 — 자유 결합이 아니라
+    **우리가 계산한 것**이고, 검증 원천이 있다(설계서 §13-2)."""
+    ev = {"ev_a": _evidence("ev_a", "SK하이닉스에 공급 차질이 발생했다")}
+
+    got = claim_check.check(
+        [{"text": "SK하이닉스의 차질로 인해 엔비디아에 매출 상실 리스크가 있습니다",
+          "evidence_ids": ["ev_a"]}], ev,
+        propagation_targets=["엔비디아"])
+
+    assert got[0].claim_type == claim_check.TYPE_PROPAGATION
+
+
+def test_an_uncited_causal_claim_is_still_typed():
+    """★인용조차 없는 인과 주장이 가장 위험하다 — 화이트리스트가 원리적으로
+    못 잡는 자리다. 점수를 못 내도 **유형은 남긴다.**"""
+    got = claim_check.check(
+        [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+          "evidence_ids": []}], {})
+
+    assert got[0].status == "uncited"
+    assert got[0].claim_type == claim_check.TYPE_FREE_COMBINATION
+
+
+def test_free_combination_claims_are_counted_in_the_summary():
+    """★분포를 로그로 남길 수 있어야 한다 — strip 여부를 정하려면 발생률이 먼저다."""
+    ev = {"ev_a": _evidence("ev_a", "이천 공장에서 질소 누출 사고가 났다")}
+    checked = claim_check.check(
+        [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+          "evidence_ids": ["ev_a"]},
+         {"text": "이천 공장에서 질소 누출 사고가 발생했습니다",
+          "evidence_ids": ["ev_a"]}], ev)
+
+    got = claim_check.summarize(checked)
+
+    assert got["free_combination"] == 1
+
+
+def test_check_still_does_not_drop_or_judge_a_free_combination_claim():
+    """★**관측만 한다** — 유형을 붙였다고 문장을 버리거나 판정하지 않는다.
+    strip 여부는 발생률·오탐률 실측 뒤에 정한다."""
+    ev = {"ev_a": _evidence("ev_a", "이천 공장에서 질소 누출 사고가 났다")}
+
+    got = claim_check.check(
+        [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+          "evidence_ids": ["ev_a"]}], ev)
+
+    assert len(got) == 1
+    assert got[0].text == "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다"
+    assert not hasattr(got[0], "supported")   # 판정 필드를 두지 않는다
+    assert not hasattr(got[0], "verdict")
+
+
 def test_summary_reports_counts_and_scores_for_logging():
     """로그 한 줄로 분포를 남길 수 있어야 한다 — 20개 질문을 모을 도구다."""
     ev = {"ev_a": _evidence("ev_a", "질소 누출 사고")}

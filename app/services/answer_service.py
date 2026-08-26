@@ -17,7 +17,7 @@ from typing import Optional
 from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, MatchType,
                              Relation, RetrieveResponse, Source)
 from app.core.trace import trace_logger
-from app.services import claim_check
+from app.services import claim_check, material_consistency
 from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import RetrieveService
 from pipeline.llm import ask_json
@@ -77,6 +77,25 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    **인사이트(파급·전망·해석) 문장은 워크스페이스 기업을 하나 이상 주어나 영향
    대상으로 가져야 합니다** — 사용자가 담지도 않은 기업들끼리의 이야기는 이
    워크스페이스의 인사이트가 아닙니다.
+15. **관계 줄의 `symmetric=True` 는 그 화살표에 방향이 없다는 뜻입니다.**
+   협력·경쟁 관계는 저장 구조상 한쪽 방향으로 적혀 있을 뿐 실제로는 방향이
+   없습니다. "A 가 B 에" 처럼 **한쪽이 다른 쪽에 무엇을 한 것처럼 쓰지 말고**
+   "A 와 B 는 협력 관계" 처럼 대등하게 쓰세요. `symmetric=False` 면 화살표
+   방향이 실제 방향이므로 주체와 대상을 뒤집지 마세요.
+16. **사건 줄의 `role` 은 이 기업이 그 사건의 무엇인지를 말합니다.**
+   `subject` 는 당사자, `counterparty` 는 상대방, `mentioned` 는 기사에 **언급만
+   된 것**입니다. `role=mentioned` 인 사건을 이 기업이 겪은 일처럼 쓰지 마세요 —
+   당사자가 아닙니다.
+17. **「발생 시점 불명확」이라고 적힌 사건은 날짜를 단정하지 마세요.**
+   저희 사건 목록의 날짜와 근거 원문이 말하는 시점이 어긋난 경우입니다. 근거
+   원문이 말하는 시점을 쓰거나, 확실하지 않으면 **날짜를 아예 빼고** 사건만
+   서술하세요. 보도일을 발생일처럼 쓰지 마세요.
+   ★그 사건이 **기사의 주 사건이 아니라 배경으로 언급된 것**일 수 있습니다.
+   근거 원문을 읽고 무엇이 주 사건인지 확인한 뒤 쓰세요.
+18. **괄호로 「사실에서 뺐습니다」라고 적힌 줄은 저희가 격리한 사건입니다.**
+   라벨과 근거가 어긋나 확인된 사실로 다루지 않습니다. **그 사건을 일어난
+   일처럼 쓰지 마세요.** 근거 원문 자체는 [근거] 블록에 있으니, 원문이 실제로
+   말하는 내용만 인용하세요.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
@@ -180,7 +199,21 @@ def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozense
         lines.append("워크스페이스: " + " · ".join(workspace_names.values()))
     if retrieved.companies:
         lines.append("기업: " + ", ".join(f"{c.name}({c.key})" for c in retrieved.companies))
+    # ★⑥.5 가 낸 flag 로 **[확인된 사실] 안에서만** 격리한다(설계서 §10).
+    #   `retrieved` 는 손대지 않는다 — 근거 블록·`sources[]`·응답은 그대로다.
+    polarity = material_consistency.check_polarity(retrieved.events, retrieved.evidence)
+    temporal = material_consistency.check_temporal(retrieved.events, retrieved.evidence)
     for event in retrieved.events:
+        # ── 극성 flag — 사건 줄 자체를 빼되 **조용히 빼지 않는다** ────────
+        #   근거가 정반대를 말하고 있어 「그래프에 그렇게 적혀 있다」고 할 수 없다.
+        flag = polarity.get(event.event_id)
+        if flag is not None:
+            lines.append(
+                f"(사건 {event.event_id} 은 라벨과 근거가 어긋나 사실에서 뺐습니다 — "
+                f"라벨의 '{'·'.join(flag.label_words)}' 이 근거에 없고 "
+                f"'{'·'.join(flag.evidence_words)}' 이 있습니다. "
+                f"근거 원문은 [근거] 블록에 그대로 있습니다)")
+            continue
         risk = "위험사건" if event.is_risk else "일반"
         # ★날짜를 그냥 찍으면 LLM 이 **사건 발생일**로 읽는다. 실제로는 기사
         #   보도일이다(`news_loader.py:167,230` — `observed = published_at` 을
@@ -189,13 +222,30 @@ def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozense
         #   답했는데 근거 원문은 2015년 사고였다 — 환각이 아니라 우리가 그렇게
         #   말한 것이다.
         when = f"보도 {event.occurred_at}" if event.occurred_at else "보도일 미상"
+        # ── 시간 flag — **줄은 남기고 날짜만** 격리한다 ──────────────────
+        #   실패한 것은 날짜 귀속이지 사건의 존재가 아니다. 사건은 근거 원문에
+        #   실재하므로 줄을 통째로 빼면 실재하는 사건을 잃는다. 게다가 이 규칙은
+        #   **확정이 아니라 후보**다(§5-14 · 층 A 37건 중 확정 24).
+        when_flag = temporal.get(event.event_id)
+        if when_flag is not None:
+            years = "·".join(str(y) for y in when_flag.evidence_years)
+            when = (f"발생 시점 불명확 — 보도는 {event.occurred_at} 인데 "
+                    f"근거 원문은 {years}년을 말합니다")
+        # ★`role` 은 「당사자인가 그냥 언급인가」를 가르는 **유일한** 값이다
+        #   (설계서 §9-3 ⓑ). 안 실으면 `mentioned` 134건이 당사자 사건처럼 나간다.
         lines.append(f"사건 {event.event_id}: {event.name} ({event.event_type}, "
-                     f"{when}, {risk}) 근거: {', '.join(event.evidence_ids) or '없음'}")
+                     f"{when}, {risk}, role={event.role}) "
+                     f"근거: {', '.join(event.evidence_ids) or '없음'}")
     for relation in retrieved.relations:
+        # ★`symmetric` 은 「이 화살표가 진짜 방향인가」를 가른다(설계서 §9-3 ⓐ).
+        #   PARTNERS_WITH·COMPETES_WITH 1,615건은 Neo4j 가 무방향을 저장 못 해
+        #   **키 작은 쪽 → 큰 쪽으로 고정한 인공 방향**인데, 화살표만 찍으면
+        #   LLM 이 없는 방향을 만든다.
         lines.append(
             f"관계 {relation.edge_id}: {relation.source.name} --{relation.type.value}"
             f"({relation.subtype or '-'})--> {relation.target.name} "
-            f"(freshness={relation.freshness.value}, score={relation.score}"
+            f"(freshness={relation.freshness.value}, score={relation.score}, "
+            f"symmetric={relation.symmetric}"
             f"{_membership(relation, workspace_keys)}) "
             f"근거: {relation.evidence_id or '없음'}")
     # ★파급은 **프롬프트를 먹는다.** 실측(2026-08-23) 「SK하이닉스 안전사고 …」
@@ -226,8 +276,14 @@ def _evidence_block(retrieved: RetrieveResponse) -> str:
     for evidence in retrieved.evidence:
         if evidence.missing:
             continue
+        # ★`press` 를 안 실으면 「어느 언론이 보도했나」를 답할 수 없다
+        #   (설계서 §9-3). 값은 이미 `Evidence` 안에 있다.
+        #   ★신뢰 안 된 텍스트라 델리미터 중화를 거친다 — 속성값에 `"` 가 섞이면
+        #     태그가 깨지므로 따옴표도 함께 없앤다.
+        press = _neutralize_delimiters(evidence.press or "").replace('"', "'")
         blocks.append(
             f'<evidence id="{evidence.evidence_id}" source_type="{evidence.source_type}" '
+            f'press="{press}" '
             f'published_at="{evidence.published_at or ""}">\n'
             f'{_neutralize_delimiters(evidence.text)}\n</evidence>')
     return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
@@ -370,14 +426,19 @@ class AnswerService:
         #   여기는 **문장**이다. 대표 질문으로 분포를 모은 뒤에 정한다.
         claims = result.get("claims") or []
         if claims:
+            # ★파급 대상을 넘겨야 claim ⑤(우리가 계산한 파급)와 ⑥(자유 결합)이
+            #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
             checked = claim_check.check(
-                claims, {e.evidence_id: e for e in retrieved.evidence})
+                claims, {e.evidence_id: e for e in retrieved.evidence},
+                propagation_targets=[p.target for p in retrieved.propagation])
             summary = claim_check.summarize(checked)
             log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "
-                     "min=%s mean=%s max=%s scores=%s",
+                     "min=%s mean=%s max=%s propagation=%d free_combination=%d "
+                     "scores=%s",
                      summary["claims"], summary["uncited"], summary["no_text"],
                      summary["scored"], summary["min"], summary["mean"],
-                     summary["max"],
+                     summary["max"], summary["propagation"],
+                     summary["free_combination"],
                      [c.score for c in checked if c.score is not None])
 
         # ★`anchor_source` 는 LLM 과 무관한 **서버가 아는 결정론적 값**이라

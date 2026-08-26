@@ -30,7 +30,7 @@ from app.api.schemas import (AnchorSource, AskRequest, Event, Evidence, MatchTyp
                              Propagation, Relation, RelationEndpoint, RetrieveResponse)
 from app.core.trace import new_trace_id, trace_logger
 from app.services import (company_service, evidence_selector, query_understanding,
-                          relation_service, workspace_service)
+                          relation_selector, relation_service, workspace_service)
 from app.services.query_understanding import AnchorDecision
 from search.dto.search_query import SearchQuery
 from search.dto.search_request import SearchRequest
@@ -287,7 +287,8 @@ class RetrieveService:
         companies = _with_anchor_backstop(companies, decision)
         events = self._events_of(companies, request.question, query)
         propagation = self._propagation_of(events)
-        relations = self._relations_of(companies, set(request.workspace_keys))
+        relations = self._relations_of(companies, set(request.workspace_keys),
+                                       query, decision)
         # ★히트를 재료로 **안 써도 그 근거는 그대로 모은다.** 한 번 걸러 봤다가
         #   실측으로 되돌렸다 — 현황서 §8-6. 요지 둘:
         #     · SEMANTIC 히트는 애초에 근거를 안 들고 온다(실측 0건). 거를 게 없다.
@@ -383,7 +384,8 @@ class RetrieveService:
 
     # ── 관계 ────────────────────────────────────────────────────────────
     def _relations_of(self, companies: list[RelationEndpoint],
-                      workspace_keys: set[str]) -> list[Relation]:
+                      workspace_keys: set[str], query: SearchQuery,
+                      decision: AnchorDecision) -> list[Relation]:
         """`company_service.relations_of()` 로 채운다.
 
         ★검색이 이미 준 `SearchHit.relations`(=`SearchRelation`)를 그대로 쓰지
@@ -406,6 +408,11 @@ class RetrieveService:
 
         ★**hard filter 가 아니다.** 워크스페이스와 안 닿는 관계(Ring 3)도 남긴다 —
           순서만 뒤로 간다(설계서 §3).
+
+        ★**④a 관계 의도 선택은 링 안에서만 한다**(현황서 §5-4 · 완료조건 ⓐ).
+          `relation_selector` 가 질문이 물은 `edge_types`·`direction` 을 위로
+          올리는데, **링을 가로지르지는 않는다** — 링별 quota 냐 의도별 우선순위
+          냐는 아직 `[DECIDE]` 이고(현황서 §5-17·§7-3) 둘 다 재 본 적이 없다.
         """
         by_ring: dict[int, list[dict]] = {}
         seen: set[str] = set()
@@ -416,15 +423,24 @@ class RetrieveService:
                 seen.add(row["edge_id"])
                 by_ring.setdefault(_ring_of(row, workspace_keys), []).append(row)
 
-        # 링 안에서는 입력 순서(=점수순)가 남는다 — 같은 질문에 매번 다른 순서가
-        # 나오면 안 된다(`evidence_selector.select` 와 같은 규약).
-        ordered = [row for ring in sorted(by_ring) for row in by_ring[ring]]
+        # ★질문이 무슨 관계를 물었나 — 지금까지 `SearchQuery` 에 와 있는데도 한
+        #   번도 참조되지 않던 신호다(현황서 §5-4).
+        matched = relation_selector.matched_edge_types(query)
+        anchor_keys = {a.key for a in decision.anchors}
+        # 링 안에서는 의도 → 입력 순서(=점수순)가 남는다 — 같은 질문에 매번 다른
+        # 순서가 나오면 안 된다(`evidence_selector.select` 와 같은 규약).
+        ordered = [row
+                   for ring in sorted(by_ring)
+                   for row in relation_selector.order(
+                       by_ring[ring], matched=matched, direction=query.direction,
+                       anchor_keys=anchor_keys)]
         limit = _MAX_RELATIONS_PER_COMPANY * max(len(companies), 1)
         kept, cut = ordered[:limit], ordered[limit:]
 
-        log.info("relations.rings %s -> kept=%d cut=%d",
+        log.info("relations.rings %s -> kept=%d cut=%d matched=%s direction=%s",
                  {ring: len(rows) for ring, rows in sorted(by_ring.items())},
-                 len(kept), len(cut))
+                 len(kept), len(cut), sorted(matched),
+                 getattr(query.direction, "value", None))
         return [Relation(**row) for row in kept]
 
     # ── 근거 ────────────────────────────────────────────────────────────

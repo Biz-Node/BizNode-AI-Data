@@ -51,9 +51,11 @@ def _hit(entity_id, name):
                      source_score=1.0, sources=["chroma"])
 
 
-def _orchestrator(hits=(), *, mode=SearchMode.SEMANTIC, resolved=()):
+def _orchestrator(hits=(), *, mode=SearchMode.SEMANTIC, resolved=(),
+                  edge_types=None, direction=None):
     query = SearchQuery(raw_query="q", normalized_query="q", mode=mode,
-                        today=date(2026, 8, 25), resolved_entities=list(resolved))
+                        today=date(2026, 8, 25), resolved_entities=list(resolved),
+                        edge_types=edge_types, direction=direction)
     result = SearchResult(query="q", mode=mode, hits=list(hits), total=len(hits),
                           took_ms=1, cache_hit=False, used_semantic_fallback=False)
     orchestrator = MagicMock()
@@ -62,8 +64,8 @@ def _orchestrator(hits=(), *, mode=SearchMode.SEMANTIC, resolved=()):
 
 
 def _row(edge_id, src_key, src_name, tgt_key, tgt_name, *, tgt_label="Company",
-         src_label="Company", score=0.9):
-    return {"edge_id": edge_id, "evidence_id": None, "type": "SUPPLIES_TO",
+         src_label="Company", score=0.9, rel_type="SUPPLIES_TO"):
+    return {"edge_id": edge_id, "evidence_id": None, "type": rel_type,
             "subtype": None,
             "source": {"key": src_key, "name": src_name, "label": src_label},
             "target": {"key": tgt_key, "name": tgt_name, "label": tgt_label},
@@ -258,3 +260,79 @@ def test_ring_zero_survives_the_score_cap(wired):
         _row("e_ring0", _SAMSUNG, "삼성전자", _HYNIX, "SK하이닉스", score=0.01)]}
     _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
     assert retrieved.relations[0].edge_id == "e_ring0"
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ④a 관계 의도 선택 (§5-4 · 완료조건 ⓐ)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_the_asked_edge_type_comes_first_within_a_ring(wired):
+    """★완료조건 ⓐ — 「삼성전자가 납품하는 기업」에서 `relations[]` 가
+    `SUPPLIES_TO` 를 위에 싣는다.
+
+    지금까지 `edge_types` 는 `SearchQuery` 에 와 있는데도 **한 번도 참조되지
+    않았다**(grep 0회). 질문이 물은 엣지가 점수순 상위에 못 들면 빠지고, 그러면
+    LLM 이 관계를 근거 원문에서 읽어내야 한다(설계서 §10 규칙 위반)."""
+    wired["decision"] = _workspace_decision()
+    wired["relations"] = {_SAMSUNG: [
+        _row("e_partner", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
+             score=0.99, rel_type="PARTNERS_WITH"),
+        _row("e_supply", _SAMSUNG, "삼성전자", "01095722", "심텍",
+             score=0.10, rel_type="SUPPLIES_TO"),
+    ]}
+
+    _, retrieved = RetrieveService(
+        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve_for_ask(_request())
+
+    assert [r.edge_id for r in retrieved.relations] == ["e_supply", "e_partner"]
+
+
+def test_intent_does_not_beat_the_ring_order(wired):
+    """★링을 **가로질러** 의도를 우선할지는 아직 `[DECIDE]` 다(현황서 §5-17·§7-3) —
+    링별 quota 냐 의도별 우선순위냐를 **둘 다 재 본 적이 없다.** 실측 없이
+    그 결정을 코드로 못 박지 않는다. 의도는 링 **안에서만** 줄을 세운다."""
+    wired["decision"] = _workspace_decision()
+    wired["relations"] = {_SAMSUNG: [
+        # Ring 1 인데 질문이 물은 타입
+        _row("e_ring1_match", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
+             rel_type="SUPPLIES_TO"),
+        # Ring 0 인데 질문이 안 물은 타입
+        _row("e_ring0_other", _SAMSUNG, "삼성전자", _HYNIX, "SK하이닉스",
+             rel_type="COMPETES_WITH"),
+    ]}
+
+    _, retrieved = RetrieveService(
+        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve_for_ask(_request())
+
+    assert [r.edge_id for r in retrieved.relations] == [
+        "e_ring0_other", "e_ring1_match"]
+
+
+def test_relation_intent_is_a_no_op_when_the_query_asked_for_no_relation(wired):
+    """관계 키워드가 없는 질의 — 순서를 건드리지 않는다(hard filter 가 아니다)."""
+    wired["decision"] = _workspace_decision()
+    wired["relations"] = {_SAMSUNG: [
+        _row("e_a", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
+             rel_type="PARTNERS_WITH"),
+        _row("e_b", _SAMSUNG, "삼성전자", "01095722", "심텍",
+             rel_type="SUPPLIES_TO"),
+    ]}
+
+    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+
+    assert [r.edge_id for r in retrieved.relations] == ["e_a", "e_b"]
+
+
+def test_the_relation_cut_count_is_logged(wired, caplog):
+    """★완료조건 ⓓ — 잘라낸 관계 개수가 로그에 남는다. 조용히 자르면
+    「그게 전부」로 읽힌다([규칙 2])."""
+    wired["decision"] = _workspace_decision()
+    # 상한(_MAX_RELATIONS_PER_COMPANY × 기업 수)을 확실히 넘긴다.
+    wired["relations"] = {_SAMSUNG: [
+        _row(f"e_{i}", _SAMSUNG, "삼성전자", f"0777777{i}", f"밖{i}")
+        for i in range(rs_module._MAX_RELATIONS_PER_COMPANY * 2 + 5)]}
+
+    with caplog.at_level("INFO"):
+        RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+
+    assert "cut=5" in caplog.text

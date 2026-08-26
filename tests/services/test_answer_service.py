@@ -250,6 +250,169 @@ def test_system_prompt_forbids_padding_an_unknown_answer_with_speculation():
     assert "추측" in as_module._SYSTEM_PROMPT
 
 
+# ── §5-5: symmetric·role·press 노출 (2026-08-26) ────────────────────────
+# 설계서 §9-3 — 재료는 이미 RetrieveResponse 안에 있고 프롬프트가 안 쓸 뿐이었다.
+
+def test_fact_lines_exposes_symmetric_for_relations():
+    """★PARTNERS_WITH·COMPETES_WITH 는 Neo4j 가 무방향을 저장 못 해 인공 방향으로
+    고정돼 있다(설계서 §9-3 ⓐ). symmetric 이 프롬프트에 없으면 LLM 이 그 인공
+    방향을 진짜 방향으로 읽어 「A 가 B 에 협력한다」를 만든다."""
+    relation = Relation(
+        edge_id="5:a:1", evidence_id="ev_a", type="PARTNERS_WITH",
+        source=RelationEndpoint(key="00126380", name="삼성전자"),
+        target=RelationEndpoint(key="00301246", name="SFA반도체"),
+        symmetric=True)
+    retrieved = _retrieved(relations=[relation])
+
+    line = next(l for l in as_module._fact_lines(retrieved).splitlines()
+                if l.startswith("관계"))
+
+    assert "symmetric=True" in line
+
+
+def test_fact_lines_exposes_role_for_events():
+    """★role=mentioned 는 「당사자가 아니라 언급됐을 뿐」이라는 유일한 신호다
+    (설계서 §9-3 ⓑ). 안 실리면 남의 사건에 연루된 것처럼 말할 수 있다."""
+    event = Event(event_id="evt_1", name="이천 공장 질소 누출 사고",
+                 event_type="사고재해", is_risk=True, role="mentioned",
+                 occurred_at="2024-02-16", evidence_ids=["ev_a"])
+    retrieved = _retrieved()
+    retrieved.events.append(event)
+
+    line = next(l for l in as_module._fact_lines(retrieved).splitlines()
+                if "질소 누출" in l)
+
+    assert "mentioned" in line
+
+
+def test_evidence_block_exposes_press():
+    """★press 가 없으면 「어느 언론이 보도했나」를 답할 수 없다(설계서 §9-3)."""
+    evidence = Evidence(evidence_id="ev_a", text="원문", source_doc="doc",
+                        source_type="news", press="전자신문")
+    retrieved = _retrieved(evidence=[evidence])
+
+    prompt = as_module._build_user_prompt("q", retrieved)
+
+    assert 'press="전자신문"' in prompt
+
+
+def test_system_prompt_warns_symmetric_relations_have_no_inherent_direction():
+    """★실제 실패 소지: PARTNERS_WITH 는 방향이 없는데 화살표로 찍으면 LLM 이
+    없는 방향을 만든다(설계서 §9-3 ⓐ)."""
+    assert "symmetric" in as_module._SYSTEM_PROMPT
+    assert "방향" in as_module._SYSTEM_PROMPT
+
+
+def test_system_prompt_warns_mentioned_role_is_not_a_direct_party():
+    """★실제 실패 소지: role=mentioned 인 134건이 당사자 사건처럼 나갈 수 있다
+    (설계서 §9-3 ⓑ)."""
+    assert "mentioned" in as_module._SYSTEM_PROMPT
+    assert "당사자" in as_module._SYSTEM_PROMPT
+
+
+# ── ⑦ Context Builder — ⑥.5 flag 격리 (2026-08-26) ──────────────────────
+# 설계서 §10 — ⑥.5 는 flag 만 내고 **버리지 않는다.** 격리는 ⑦ 의 일이고,
+# 격리는 **[확인된 사실] 블록 안에서만** 일어난다.
+
+def _flagged_event(name, *, occurred_at="2024-10-29", evidence_ids=("ev_a",)):
+    return Event(event_id="evt_flagged", name=name, event_type="공급망",
+                 is_risk=True, role="subject", occurred_at=occurred_at,
+                 evidence_ids=list(evidence_ids))
+
+
+def _hbm3e_material():
+    """실측 사례(§5-12) — 라벨 「차질」 ↔ 근거 「시작」."""
+    retrieved = _retrieved(evidence=[_evidence(
+        "ev_a", text="2025년 HBM3E 12단 중심의 재편이 유력시되는 시장 수요 변화에 "
+                     "발맞춰 SK하이닉스는 이미 HBM3E 12단의 양산을 세계 최초로 시작했다.")])
+    retrieved.events.append(_flagged_event("HBM3E 대량 양산 차질"))
+    return retrieved
+
+
+def _nitrogen_material():
+    """실측 사례(§5-14) — 기사의 주 사건은 2024년 판결, 라벨은 2015년 배경절."""
+    retrieved = _retrieved(evidence=[_evidence(
+        "ev_a", text="2015년 SK하이닉스 이천 공장에서 발생한 질소가스 누출 사고로 "
+                     "인해 근로자 3명이 사망한 사건과 관련, SK하이닉스가 하청업체에 "
+                     "손해배상 청구 소송을 제기한 지 8년 만에 약 8억 원을 배상받게 됐다.")])
+    retrieved.events.append(
+        _flagged_event("이천 공장 질소 누출 사고", occurred_at="2024-02-16"))
+    return retrieved
+
+
+def test_polarity_flagged_event_is_kept_out_of_the_confirmed_facts():
+    """★극성이 뒤집힌 사건은 「그래프에 그렇게 적혀 있다」고 말할 수 없다 —
+    근거가 정반대를 말하고 있기 때문이다(§5-12)."""
+    facts = as_module._fact_lines(_hbm3e_material())
+
+    assert "HBM3E 대량 양산 차질" not in facts
+
+
+def test_polarity_flagged_event_says_why_it_was_left_out():
+    """★조용히 빼지 않는다([규칙 2]) — 빼면 「그런 사건이 없다」로 읽힌다."""
+    facts = as_module._fact_lines(_hbm3e_material())
+
+    assert "어긋나" in facts
+    assert "뺐습니다" in facts
+    assert "evt_flagged" in facts
+    # 무엇이 부딪혔는지도 남긴다 — 「어긋났다」만으로는 확인할 수 없다.
+    assert "차질" in facts and "시작" in facts
+
+
+def test_polarity_flag_does_not_touch_the_evidence_block():
+    """★⑥.5 는 근거를 **버리지 않는다.** 격리는 [확인된 사실] 안에서만 일어난다."""
+    prompt = as_module._build_user_prompt("q", _hbm3e_material())
+
+    assert "세계 최초로 시작했다" in prompt
+    assert '<evidence id="ev_a"' in prompt
+
+
+def test_temporal_flagged_event_keeps_its_line():
+    """★시간 flag 는 **오류 확정이 아니라 후보**다(§5-14 · 층 A 37건 중 확정 24).
+    사건 자체는 근거 원문에 실재한다 — 줄을 통째로 빼면 실재하는 사건을 잃는다."""
+    facts = as_module._fact_lines(_nitrogen_material())
+
+    assert "이천 공장 질소 누출 사고" in facts
+
+
+def test_temporal_flagged_event_loses_its_date():
+    """★실패한 것은 **날짜 귀속**이다 — 「2024년 2월 16일에 질소 누출 사고가
+    발생하여」라고 답했는데 근거 원문은 **2015년** 사고였다."""
+    facts = as_module._fact_lines(_nitrogen_material())
+
+    line = next(l for l in facts.splitlines() if "질소 누출" in l)
+
+    assert "보도 2024-02-16" not in line
+    assert "발생 시점 불명확" in line
+
+
+def test_temporal_flag_names_the_year_the_evidence_gave():
+    """★무엇과 어긋났는지 남긴다 — LLM 이 원문 연도를 쓸 수 있어야 한다."""
+    line = next(l for l in as_module._fact_lines(_nitrogen_material()).splitlines()
+                if "질소 누출" in l)
+
+    assert "2015" in line
+
+
+def test_an_unflagged_event_is_untouched():
+    """★flag 가 없으면 아무것도 바뀌지 않는다 — 실측상 대다수가 여기다."""
+    retrieved = _retrieved(evidence=[_evidence(
+        "ev_a", text="2024년 2월 이천 공장에서 화재가 발생했다.")])
+    retrieved.events.append(
+        _flagged_event("이천 공장 화재", occurred_at="2024-02-16"))
+
+    line = next(l for l in as_module._fact_lines(retrieved).splitlines()
+                if "화재" in l)
+
+    assert "보도 2024-02-16" in line
+    assert "발생 시점 불명확" not in line
+
+
+def test_system_prompt_explains_the_uncertain_date_marker():
+    """★프롬프트가 새 표기를 설명하지 않으면 LLM 이 제 마음대로 읽는다."""
+    assert "발생 시점 불명확" in as_module._SYSTEM_PROMPT
+
+
 # ── Step4a: claim 단위 관측 (2026-08-23) ────────────────────────────────
 
 def test_answer_schema_asks_for_claims_with_their_own_evidence_ids():
@@ -305,6 +468,61 @@ def test_ask_logs_the_claim_grounding_distribution(monkeypatch, caplog):
 
     assert "claim.grounding" in caplog.text
     assert "uncited=1" in caplog.text
+
+
+def test_ask_logs_the_free_combination_claim_count(monkeypatch, caplog):
+    """★claim 6번째 유형(§13-1 에 없던 자리)의 **발생률**을 로그로 모은다 —
+    strip 여부는 그 분포를 본 뒤에 정한다."""
+    retrieved = _retrieved(evidence=[_evidence(
+        "ev_a", text="2015년 이천 공장에서 발생한 질소가스 누출 사고로 인해 "
+                     "근로자 3명이 사망한 사건과 관련, 손해배상 소송을 제기했다")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "질소 누출 사고가 있었습니다.",
+        "evidence_ids": ["ev_a"],
+        "claims": [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+                    "evidence_ids": ["ev_a"]}]})
+
+    with caplog.at_level("INFO"):
+        as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+            AskRequest(question="q", workspace_keys=_WS_KEYS))
+
+    assert "free_combination=1" in caplog.text
+
+
+def test_ask_passes_propagation_targets_so_computed_impact_is_not_miscounted(monkeypatch):
+    """★`propagation[]` 이 뒷받침하는 인과는 claim ⑤ 다 — 자유 결합이 아니다.
+    대상을 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="공급 차질이 발생했다")])
+    retrieved.propagation.append(
+        Propagation(target="엔비디아", score=0.3, hops=2, stated=False, path=["a", "b"]))
+    captured = {}
+    monkeypatch.setattr(as_module.claim_check, "check",
+                        lambda claims, ev, **kw: captured.update(kw) or [])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "답", "evidence_ids": ["ev_a"],
+        "claims": [{"text": "차질로 인해 엔비디아에 리스크", "evidence_ids": ["ev_a"]}]})
+
+    as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
+
+    assert "엔비디아" in captured["propagation_targets"]
+
+
+def test_ask_does_not_drop_a_free_combination_claim_from_the_answer(monkeypatch):
+    """★**관측만 한다** — 유형을 붙였다고 문장을 지우지 않는다. 발생률·오탐률을
+    재기 전에 지우면 정상 답변을 훼손한다(Step4a 와 같은 규율)."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a", text="질소 누출 사고가 났다")])
+    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: {
+        "answer": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다.",
+        "evidence_ids": ["ev_a"],
+        "claims": [{"text": "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다",
+                    "evidence_ids": ["ev_a"]}]})
+
+    got = as_module.AnswerService(_retrieve_service_stub(retrieved)).ask(
+        AskRequest(question="q", workspace_keys=_WS_KEYS))
+
+    assert got.answer == "이 사고로 인해 생산에 영향을 미쳤을 가능성이 있습니다."
+    assert got.failed is False
 
 
 def test_ask_does_not_drop_a_low_overlap_claim_from_the_answer(monkeypatch):
