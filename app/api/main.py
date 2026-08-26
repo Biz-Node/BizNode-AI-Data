@@ -88,10 +88,17 @@ app = FastAPI(
     ],
 )
 
-# ★프로세스당 하나. 안에서 SearchOrchestrator 를 들고 있어(커넥션·캐시) 요청마다
-#   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
-#   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
-_retrieve_service = RetrieveService()
+# ★프로세스당 하나이되, 챗봇 요청이 들어올 때 처음 만든다. 그래프·기업 API는
+#   OpenAI 키가 필요 없으므로 Retrieve 의 임베딩 클라이언트 때문에 서버 전체가
+#   기동 실패해서는 안 된다. 테스트는 이 모듈 속성을 스텁으로 갈아끼운다.
+_retrieve_service: RetrieveService | None = None
+
+
+def _get_retrieve_service() -> RetrieveService:
+    global _retrieve_service
+    if _retrieve_service is None:
+        _retrieve_service = RetrieveService()
+    return _retrieve_service
 
 
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
@@ -501,7 +508,7 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     # ★이 라우트는 **어댑터다.** 로직은 RetrieveService 에 있다 — 추론 담당은
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
-    return await _retrieve_service.retrieve_async(body)
+    return await _get_retrieve_service().retrieve_async(body)
 
 
 @app.get("/health", tags=["운영"], summary="상태 확인")
