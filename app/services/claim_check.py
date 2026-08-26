@@ -29,10 +29,15 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence
+from types import MappingProxyType
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from pipeline.token_overlap import normalize_dates, overlap, sentence_tokens
+
+# ★`evidence_selector.Embed` 와 같은 모양이다 — 임베딩 구현에 묶이지 않는다.
+Embed = Callable[[list[str]], Sequence[Sequence[float]]]
 
 # 상태 셋 — **판정이 아니라 「점수를 낼 수 있었는가」의 구분**이다.
 STATUS_UNCITED = "uncited"    # 주장이 근거를 하나도 안 들었다
@@ -77,6 +82,16 @@ class ClaimCheck:
     # ★본문에는 없고 **기사 제목 suffix 에만** 있는 것들. 오귀속일 수도, 제목이
     #   주어를 정당하게 밝힌 것일 수도 있어 **갈라만 둔다**.
     title_only: list[str] = field(default_factory=list)
+    # ★주장 ↔ 든 근거의 **의미** 유사도. 낱말 겹침이 못 보는 의역·동의어를 받는다.
+    #   임베딩이 없거나 죽으면 `None` — 「못 쟀다」와 「0.0」은 다르다.
+    semantic: Optional[float] = None
+    # ★주장이 든 근거 ↔ **질문 의도**의 유사도. 「이 근거가 질문과 상관이 있나」다.
+    #   ★**판정에 쓰지 않는다** — 실측에서 순서가 뒤집혔다(`summarize` 주석).
+    intent_link: Optional[float] = None
+    # ★질문 의도와 **연결되는가** — `None` 은 「판정할 근거가 없다」(질문이
+    #   event_type 을 하나도 지목하지 않았거나, 든 근거의 출처를 모른다)이고
+    #   `False` 가 「연결 없음」이다. 셋을 섞으면 판정 불가가 차단으로 샌다.
+    intent_linked: Optional[bool] = None
 
 
 def _effect_clause(text: str) -> str:
@@ -209,10 +224,85 @@ def _attribution(text: str, texts: Sequence[str],
     return missing_all, title_only
 
 
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    """★`evidence_selector._cosine` 과 같은 식이다. 거기 것을 끌어다 쓰지 않는 이유는
+    이 모듈이 **순수 함수 묶음**이라 다른 서비스에 의존하지 않기 때문이다."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _semantic_scores(pairs: Sequence[tuple[str, str]], embed: Optional[Embed],
+                     ) -> list[Optional[float]]:
+    """(왼쪽, 오른쪽) 쌍마다 코사인. **실패하면 전부 `None`.**
+
+    ★한 번에 임베딩한다 — 쌍마다 부르면 왕복이 주장 수만큼 는다
+      (`evidence_selector.similarities` 와 같은 규약).
+
+    ★**임베딩이 죽어도 /ask 는 살아 있어야 한다.** 예외를 올리지 않고 `None` 을
+      준다 — 그러면 낱말 겹침만으로 관측이 이어진다.
+    """
+    usable = [i for i, (left, right) in enumerate(pairs)
+              if left.strip() and right.strip()]
+    if embed is None or not usable:
+        return [None] * len(pairs)
+    texts = [t for i in usable for t in pairs[i]]
+    try:
+        vectors = embed(texts)
+    except Exception:  # noqa: BLE001 — 관측이 답변을 막지 않는다
+        return [None] * len(pairs)
+    if len(vectors) != len(texts):
+        return [None] * len(pairs)
+    out: list[Optional[float]] = [None] * len(pairs)
+    for slot, i in enumerate(usable):
+        out[i] = round(_cosine(vectors[slot * 2], vectors[slot * 2 + 1]), 3)
+    return out
+
+
+def _intent_linked(evidence_ids: Sequence[str],
+                   event_types_by_evidence: Mapping[str, frozenset[str]],
+                   matched: frozenset[str]) -> Optional[bool]:
+    """든 근거가 **질문이 지목한 사건 종류**에서 왔는가. 못 정하면 `None`.
+
+    ★**왜 임베딩이 아니라 규칙 티어인가** — 실측(2026-08-26 · claim 23건)에서
+      「질문 의도 ↔ 근거 원문」 임베딩(`intent_link`)은 분포가 0.167~0.356 으로
+      좁고 **순서가 뒤집혀** 있었다. 가장 좋은 claim 이 0.17(최하위권)이고 질문과
+      무관한 claim 이 0.29(상위권)였다. `evidence_selector` 가 이미 **실험 ①의
+      실패**로 기록해 둔 것을 그대로 재현한 것이다.
+
+      같은 모듈이 **실험 ③에서 성공한 방식**은 짧은 것끼리 비교하는 것이었다 —
+      의도 ↔ **사건 라벨**. 그 산물이 `matched_event_types(intent)` 이고, 이미
+      `retrieve_service` 가 사건을 고를 때 쓴다. 여기서는 그것을 **주장 단위로
+      되짚기만** 한다.
+
+    ★`None` 을 `False` 와 섞지 않는다.
+
+          matched 가 비었다        질문이 사건 종류를 안 지목했다 → 판정 불가
+          출처를 모르는 근거뿐      관계·히트에서 온 근거다 → 판정 불가
+          출처 사건이 있다          그 종류가 matched 에 있나 → True / False
+
+      「판정 불가」를 「연결 없음」으로 떨어뜨리면 **관계 질의가 통째로 차단된다**
+      (「삼성전자에 납품하는 기업」은 사건이 아니라 관계가 답이다).
+    """
+    if not matched:
+        return None
+    types: set[str] = set()
+    for evidence_id in evidence_ids:
+        types |= event_types_by_evidence.get(evidence_id, frozenset())
+    if not types:
+        return None
+    return bool(types & matched)
+
+
 def check(claims: Sequence[Mapping[str, Any]],
           evidence_by_id: Mapping[str, Any],
           *, propagation_targets: Sequence[str] = (),
-          workspace_names: Sequence[str] = ()) -> list[ClaimCheck]:
+          workspace_names: Sequence[str] = (),
+          embed: Optional[Embed] = None,
+          intent: str = "",
+          event_types_by_evidence: Mapping[str, frozenset[str]] = MappingProxyType({}),
+          matched_event_types: frozenset[str] = frozenset()) -> list[ClaimCheck]:
     """주장마다 (상태, 겹침 점수, 없는 토큰, 유형). **통과/불통과를 내지 않는다.**
 
     한 주장이 근거를 여럿 들면 **합쳐서** 본다 — 나눠 재면 각 근거가 주장의
@@ -223,7 +313,16 @@ def check(claims: Sequence[Mapping[str, Any]],
 
     `workspace_names` 는 워크스페이스 기업 이름들이다 — 주장이 그중 하나를 부르면서
     든 근거 원문에는 그 이름이 없으면 **오귀속 의심**으로 센다.
+
+    `embed`·`intent` 를 주면 **두 축의 의미 유사도**를 더 잰다. 낱말 겹침이 못 보는
+    의역·동의어를 받기 위한 것이고, 둘은 **서로 다른 질문에 답한다.**
+
+        semantic      주장 ↔ 든 근거      「이 근거가 이 주장을 지지하나」
+        intent_link   질문 의도 ↔ 든 근거  「이 근거가 질문과 상관이 있나」
+
+    ★임베딩이 없거나 죽으면 둘 다 `None` 이다 — 「못 쟀다」와 「0.0」은 다르다.
     """
+    corpora: list[str] = []          # 주장마다 든 근거를 합친 것 — 의미 비교용
     out: list[ClaimCheck] = []
     for claim in claims:
         text = str(claim.get("text") or "")
@@ -232,14 +331,20 @@ def check(claims: Sequence[Mapping[str, Any]],
         # ★유형은 **점수를 못 내는 경우에도** 붙인다 — 인용조차 없는 인과 주장이
         #   가장 위험한데, 거기서 유형을 비우면 그 자리가 다시 안 보이게 된다.
         claim_type, effect_score = _classify(text, texts, propagation_targets)
+        linked = _intent_linked(evidence_ids, event_types_by_evidence,
+                                matched_event_types)
 
         if not evidence_ids:
+            corpora.append("")
             out.append(ClaimCheck(text, evidence_ids, STATUS_UNCITED,
-                                  claim_type=claim_type, effect_score=effect_score))
+                                  claim_type=claim_type, effect_score=effect_score,
+                                  intent_linked=linked))
             continue
         if not texts:
+            corpora.append("")
             out.append(ClaimCheck(text, evidence_ids, STATUS_NO_TEXT,
-                                  claim_type=claim_type, effect_score=effect_score))
+                                  claim_type=claim_type, effect_score=effect_score,
+                                  intent_linked=linked))
             continue
 
         # ★날짜 정규화는 **양쪽에 똑같이** 건다 — 한쪽만 걸면 맞을 것도 어긋난다.
@@ -250,10 +355,21 @@ def check(claims: Sequence[Mapping[str, Any]],
                                  normalize_dates(text),
                                  tokenizer=sentence_tokens)
         misattributed, title_only = _attribution(text, texts, workspace_names)
+        corpora.append("\n".join(texts))
         out.append(ClaimCheck(text, evidence_ids, STATUS_SCORED,
                               score=score, missing=missing,
                               claim_type=claim_type, effect_score=effect_score,
-                              misattributed=misattributed, title_only=title_only))
+                              misattributed=misattributed, title_only=title_only,
+                              intent_linked=linked))
+
+    # ★의미 유사도는 **전부 모아 한 번에** 잰다. 두 축을 한 번의 왕복으로 —
+    #   주장 벡터와 의도 벡터가 같은 corpus 벡터를 상대한다.
+    semantics = _semantic_scores([(c.text, corpus)
+                                  for c, corpus in zip(out, corpora)], embed)
+    links = _semantic_scores([(intent, corpus) for corpus in corpora], embed)
+    for check_result, semantic, link in zip(out, semantics, links):
+        check_result.semantic = semantic
+        check_result.intent_link = link
     return out
 
 
@@ -277,4 +393,36 @@ def summarize(checked: Sequence[ClaimCheck]) -> dict:
         #   `title_only` 는 제목 suffix 에만 있는 것이라 갈라 센다(§7-0 `[DECIDE]`).
         "misattributed": sum(1 for c in checked if c.misattributed),
         "title_only": sum(1 for c in checked if c.title_only),
+        # ★의미 유사도 — **관측만 한다.**
+        #
+        #   `intent_link` 로는 **차단하지 못한다**(실측 2026-08-26 · claim 23건).
+        #   분포가 0.167~0.356 으로 좁고 **순서가 뒤집혀 있다** — 가장 좋은 claim
+        #   (「D램 감산을 발표하며」 · overlap 0.86)이 0.17 로 최하위권이고 질문과
+        #   무관한 claim(「심텍 제품 품질 내부고발」 / 질문은 「생산 차질 위험」)이
+        #   0.29 로 상위권이었다. `evidence_selector` 가 이미 실패로 기록한
+        #   **실험 ①**(근거 원문을 질문과 직접 임베딩 비교)을 재현한 것이다.
+        #   연결성 판정은 `intent_linked`(사건 라벨 규칙 티어)가 맡는다.
+        "semantic_mean": _mean(c.semantic for c in checked),
+        "intent_link_mean": _mean(c.intent_link for c in checked),
+        # ★연결성 — `None`(판정 불가)을 따로 센다. 「연결 없음」과 섞으면 관계
+        #   질의(「삼성전자에 납품하는 기업」)가 통째로 차단된 것처럼 보인다.
+        "unlinked": sum(1 for c in checked if c.intent_linked is False),
+        "link_unknown": sum(1 for c in checked if c.intent_linked is None),
     }
+
+
+def _mean(values: Iterable[Optional[float]]) -> Optional[float]:
+    got = [v for v in values if v is not None]
+    return round(sum(got) / len(got), 3) if got else None
+
+
+def unlinked(checked: Sequence[ClaimCheck]) -> list[ClaimCheck]:
+    """질문 의도와 **연결이 없다고 판정된** 주장들. `None`(판정 불가)은 뺀다.
+
+    ★이 모듈에서 **유일하게 판정에 가까운 함수**다. 그래서 이름을 `unlinked` 로
+      두고 `supported`/`verdict` 같은 말을 쓰지 않았다 — 재는 것은 「질문이 지목한
+      사건 종류에서 온 근거인가」뿐이지 참·거짓이 아니다.
+
+    ★**지우는 것은 여기서 하지 않는다.** 호출측(`answer_service`)이 정한다.
+    """
+    return [c for c in checked if c.intent_linked is False]

@@ -139,6 +139,34 @@ def test_workspace_anchor_collects_from_the_workspace(wired):
     assert [c.key for c in retrieved.companies] == [_SAMSUNG, _HYNIX]
 
 
+def test_workspace_anchor_supplies_names_for_similarity_stripping(wired, monkeypatch):
+    """★**workspace 앵커 경로에서 `anchor_names` 가 비어 순위가 퇴행했다**
+    (2026-08-26 실측).
+
+    `decide_anchor()` 는 `resolved_entities` 가 있으면 `query` 로 가므로
+    `source=workspace` 는 **정의상 `resolved_entities` 가 0** 이다. 그런데
+    `anchor_names` 를 거기서만 읽어서 workspace 질의는 늘 `[]` 였고, 그러면
+    `evidence_selector` 가 실험 3회로 정한 「질문과 라벨 **양쪽에서** 기업명 제거」가
+    라벨 쪽에서 안 걸린다 — 모듈이 **실패로 기록한 실험 ②** 로 되돌아간다.
+
+    이름은 이미 손에 있다 — `decision.anchors` 가 그 워크스페이스 기업들이다.
+    """
+    seen: dict = {}
+
+    def _spy(events, *, intent, embed, anchor_names):
+        seen["anchor_names"] = list(anchor_names)
+        return {}
+
+    monkeypatch.setattr(
+        "app.services.retrieve_service.evidence_selector.similarities", _spy)
+    wired["decision"] = _workspace_decision()
+    orchestrator = _orchestrator([_hit("01234567", "무관한기업")])   # resolved 없음
+
+    RetrieveService(orchestrator).retrieve_for_ask(_request())
+
+    assert seen["anchor_names"] == ["삼성전자", "SK하이닉스"]
+
+
 def test_retrieve_route_still_uses_the_search_hits(wired):
     """★`/retrieve` 는 **무변경**이다(설계서 §14-5) — SEMANTIC 이 여기서는 살아 있다."""
     wired["decision"] = _query_decision(key="엔비디아", name="엔비디아")

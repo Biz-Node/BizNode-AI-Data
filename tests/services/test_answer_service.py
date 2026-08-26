@@ -489,6 +489,39 @@ def test_evidence_about_marks_plain_names_when_there_is_no_workspace():
     assert got["ev_a"] == "삼성전자 · SFA반도체"
 
 
+def test_event_types_by_evidence_maps_only_event_sourced_evidence():
+    """★연결성 판정의 재료다. 관계·히트에서만 온 근거는 여기 없고, 그건
+    「연결 없음」이 아니라 **판정 불가**다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a"), _evidence("ev_b")])
+    retrieved.events.append(_event_fact())          # evidence_ids=["ev_a"]
+
+    got = as_module._event_types_by_evidence(retrieved)
+
+    assert got == {"ev_a": frozenset({"사고재해"})}
+    assert "ev_b" not in got                        # 사건에서 오지 않았다
+
+
+def test_strip_claims_only_removes_sentences_present_verbatim():
+    """★`claims[].text` 는 LLM 이 답변을 쪼개며 다시 쓴 것이라 원문과 다를 수
+    있다. 비슷한 문장을 지우려 들면 멀쩡한 문장이 잘린다 — **못 찾으면 그대로 둔다.**"""
+    answer = "가는 있었다. 나는 없었다."
+    claims = [as_module.claim_check.ClaimCheck("나는 없었다.", [], "scored"),
+              as_module.claim_check.ClaimCheck("전혀 다른 문장", [], "scored")]
+
+    got, removed = as_module._strip_claims(answer, claims)
+
+    assert got == "가는 있었다."
+    assert removed == ["나는 없었다."]
+
+
+def test_stripping_unlinked_claims_is_off_by_default():
+    """★실측(2026-08-26)에서 **차단 대상 4건 중 1건이 오탐**이었다 — 「최근 인수
+    사례」의 삼성전자↔레인보우로보틱스 인수가 Event 라벨상 `사업확장` 이라
+    `자본거래` 에 안 걸렸다. 현황서 §8-6 이 「질문이 물은 바로 그 사례」라고 적어 둔
+    건이다. 오탐률을 더 재기 전에는 켜지 않는다."""
+    assert as_module._STRIP_UNLINKED_CLAIMS is False
+
+
 def test_system_prompt_tells_the_model_to_respect_evidence_about():
     """★규칙 14 가 「인사이트는 워크스페이스 기업을 주어로」라고 압박하므로,
     충돌 시 어느 쪽이 이기는지 프롬프트가 말해야 한다."""
