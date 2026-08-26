@@ -285,7 +285,7 @@ class RetrieveService:
         # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
         #   이미 앵커가 `companies` 라 무동작이다.
         companies = _with_anchor_backstop(companies, decision)
-        events = self._events_of(companies, request.question, query)
+        events = self._events_of(companies, request.question, query, decision)
         propagation = self._propagation_of(events)
         relations = self._relations_of(companies, set(request.workspace_keys),
                                        query, decision)
@@ -310,7 +310,8 @@ class RetrieveService:
 
     # ── 사건 ────────────────────────────────────────────────────────────
     def _events_of(self, companies: list[RelationEndpoint],
-                   question: str, query: SearchQuery) -> list[Event]:
+                   question: str, query: SearchQuery,
+                   decision: AnchorDecision) -> list[Event]:
         """**Event 노드 기준**으로 묶는다. 같은 사건에 여러 기업이 엮여 있으면
         기업마다 한 번씩 나오는데, 그걸 그대로 쌓으면 같은 사건을 여러 번 말한다.
 
@@ -325,7 +326,23 @@ class RetrieveService:
           질문이 부른 기업이 둘이면 둘 다 근거다. scope 밖 기업은 애초에
           `companies` 에 없으므로 섞이지 않는다.
         """
+        # ★**workspace 앵커 경로에서 이 목록이 비어 순위가 퇴행했다** (2026-08-26).
+        #
+        #   `decide_anchor()` 는 `resolved_entities` 가 **있으면** `query` 로 가므로,
+        #   `source=workspace` 는 **정의상 `resolved_entities` 가 0** 이다. 그런데
+        #   `anchor_names` 를 거기서만 읽어서 workspace 질의는 늘 `[]` 였다
+        #   (실측: 「납품 단가 압박」·「최근 인수 사례」·「생산 차질 위험」 셋 다).
+        #
+        #   그러면 `evidence_selector` 가 실험 3회로 정한 규칙 —「질문과 라벨
+        #   **양쪽에서** 앵커 기업명 제거」— 가 라벨 쪽에서 안 걸린다. 질문에는
+        #   기업명이 없고(그래서 workspace 로 떨어졌다) 라벨에는 있으니, 모듈이
+        #   **실패로 기록한 실험 ②**(「기업명이 든 라벨이 상위를 먹는다」)로
+        #   그대로 되돌아간다.
+        #
+        #   ★이름은 이미 손에 있다 — `decision.anchors` 가 그 워크스페이스 기업들이다.
         anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
+        if not anchor_names:
+            anchor_names = [a.name for a in decision.anchors if a.name]
         intent = evidence_selector.intent_of(question, anchor_names)
         matched = evidence_selector.matched_event_types(intent)
 

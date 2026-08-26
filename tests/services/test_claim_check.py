@@ -389,3 +389,86 @@ def test_summary_counts_misattributed_and_title_only_separately():
 
     assert got["misattributed"] == 1
     assert got["title_only"] == 1
+
+
+# ── 의미 유사도 · 연결성 (2026-08-26) ────────────────────────────────────
+
+def test_semantic_is_none_without_an_embedder():
+    """★임베딩이 없으면 `None` 이다 — 「못 쟀다」와 「0.0」은 다르다."""
+    ev = {"ev_a": _evidence("ev_a", "질소 누출 사고")}
+
+    got = claim_check.check([{"text": "질소 누출", "evidence_ids": ["ev_a"]}], ev)[0]
+
+    assert got.semantic is None and got.intent_link is None
+
+
+def test_semantic_survives_a_dead_embedder():
+    """★임베딩이 죽어도 /ask 는 살아 있어야 한다 — 예외를 올리지 않는다."""
+    def boom(_texts):
+        raise RuntimeError("embedding down")
+
+    ev = {"ev_a": _evidence("ev_a", "질소 누출 사고")}
+    got = claim_check.check([{"text": "질소 누출", "evidence_ids": ["ev_a"]}], ev,
+                            embed=boom, intent="사고")[0]
+
+    assert got.status == claim_check.STATUS_SCORED    # 겹침은 그대로 잰다
+    assert got.semantic is None
+
+
+def test_semantic_scores_the_claim_against_its_evidence():
+    """★주장과 근거가 같은 벡터면 1.0 이다."""
+    ev = {"ev_a": _evidence("ev_a", "질소 누출 사고")}
+    same = [1.0, 0.0, 0.0]
+
+    got = claim_check.check([{"text": "질소 누출", "evidence_ids": ["ev_a"]}], ev,
+                            embed=lambda texts: [same] * len(texts),
+                            intent="사고")[0]
+
+    assert got.semantic == 1.0
+
+
+def test_evidence_from_a_matched_event_type_is_linked():
+    """★질문이 지목한 사건 종류에서 온 근거다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"공급망"})}, frozenset({"공급망"})) is True
+
+
+def test_evidence_from_an_unmatched_event_type_is_unlinked():
+    """★실측 사례 — 질문은 「생산 차질 위험」인데 근거는 `품질` 사건이었다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"품질"})}, frozenset({"공급망"})) is False
+
+
+def test_link_is_unknown_when_the_question_names_no_event_type():
+    """★`None` 을 `False` 와 섞지 않는다 — 섞으면 판정 불가가 차단으로 샌다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"품질"})}, frozenset()) is None
+
+
+def test_link_is_unknown_for_relation_sourced_evidence():
+    """★관계·히트에서 온 근거는 출처 사건이 없다 — 「연결 없음」이 아니라 판정
+    불가다. 실측: 「삼성전자에 납품하는 기업」의 claim 5건이 전부 여기였다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {}, frozenset({"공급망"})) is None
+
+
+def test_unlinked_returns_only_the_decided():
+    """★`unlinked()` 는 판정된 것만 돌려준다 — 판정 불가를 차단 대상에 넣지 않는다."""
+    checked = [
+        claim_check.ClaimCheck("a", [], "scored", intent_linked=False),
+        claim_check.ClaimCheck("b", [], "scored", intent_linked=None),
+        claim_check.ClaimCheck("c", [], "scored", intent_linked=True),
+    ]
+
+    assert [c.text for c in claim_check.unlinked(checked)] == ["a"]
+
+
+def test_summary_separates_unlinked_from_unknown():
+    checked = [
+        claim_check.ClaimCheck("a", [], "scored", intent_linked=False),
+        claim_check.ClaimCheck("b", [], "scored", intent_linked=None),
+    ]
+
+    got = claim_check.summarize(checked)
+
+    assert got["unlinked"] == 1 and got["link_unknown"] == 1

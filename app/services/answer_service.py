@@ -17,9 +17,9 @@ from typing import Optional
 from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, MatchType,
                              Propagation, Relation, RetrieveResponse, Source)
 from app.core.trace import trace_logger
-from app.services import claim_check, material_consistency
+from app.services import claim_check, evidence_selector, material_consistency
 from app.services.query_understanding import AnchorDecision
-from app.services.retrieve_service import RetrieveService
+from app.services.retrieve_service import RetrieveService, _default_embed
 from pipeline.llm import ask_json
 
 log = trace_logger(__name__)
@@ -622,6 +622,45 @@ def _neutralize_delimiters(text: str) -> str:
 _UNLINKED_EVIDENCE = "미연결"
 
 
+def _event_types_by_evidence(retrieved: RetrieveResponse) -> dict[str, frozenset[str]]:
+    """근거 id → 그 근거가 달린 **사건들의 event_type**.
+
+    ★연결성 판정(`claim_check._intent_linked`)의 재료다. 관계·히트에서만 온
+      근거는 여기 없고, 그건 「연결 없음」이 아니라 **「판정 불가」**다.
+    """
+    out: dict[str, set[str]] = {}
+    for event in retrieved.events:
+        for evidence_id in event.evidence_ids:
+            out.setdefault(evidence_id, set()).add(event.event_type)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+# ★질문 의도와 연결이 없다고 판정된 주장을 답변에서 **뺄까.**
+#
+#   ★`False` 가 기본이다 — 지금은 **관측만** 한다. 이유는 실측이다(2026-08-26):
+#     claim 23건에서 「의도 ↔ 근거 원문」 임베딩은 순서가 뒤집혀 쓸 수 없었고,
+#     대신 쓰는 규칙 티어(`matched_event_types`)는 **아직 오탐률을 재지 않았다.**
+#     끄고 분포를 모은 뒤 켜는 것이 이 저장소의 방식이다(⑥.5 규칙을 327건 전수로
+#     고른 것과 같다). 켜려면 이 값만 `True` 로 바꾸면 된다.
+_STRIP_UNLINKED_CLAIMS = False
+
+
+def _strip_claims(answer: str, claims: list) -> tuple[str, list[str]]:
+    """답변에서 주장 문장을 빼고 (남은 답변, 실제로 뺀 문장) 을 돌려준다.
+
+    ★**문장이 답변 안에 그대로 있을 때만 뺀다.** `claims[].text` 는 LLM 이 답변을
+      쪼개며 다시 쓴 것이라 원문과 다를 수 있는데, 비슷한 문장을 지우려 들면
+      멀쩡한 문장이 잘린다. 못 찾으면 **아무것도 하지 않고 그 사실을 알린다.**
+    """
+    removed: list[str] = []
+    for claim in claims:
+        sentence = claim.text.strip()
+        if sentence and sentence in answer:
+            answer = answer.replace(sentence, "")
+            removed.append(sentence)
+    return " ".join(answer.split()), removed
+
+
 def _evidence_about(retrieved: RetrieveResponse, workspace_keys: set[str]) -> dict[str, str]:
     """근거 id → **이 근거가 `[사실]` 의 어느 줄에서 왔는가.**
 
@@ -834,24 +873,48 @@ class AnswerService:
         if claims:
             # ★파급 대상을 넘겨야 claim ⑤(우리가 계산한 파급)와 ⑥(자유 결합)이
             #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
+            # ★의도는 **재료를 고를 때 쓴 것과 같은 것**이어야 한다 — 다르면
+            #   「무엇으로 골랐나」와 「무엇으로 검사하나」가 어긋난다.
+            anchor_names = [a.name for a in decision.anchors if a.name]
+            intent = evidence_selector.intent_of(request.question, anchor_names)
             checked = claim_check.check(
                 claims, {e.evidence_id: e for e in retrieved.evidence},
                 propagation_targets=[p.target for p in retrieved.propagation],
                 # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고
                 #   워크스페이스 기업 중 하나로 귀속시키는」 실패를 센다.
-                workspace_names=list(decision.workspace_names.values()))
+                workspace_names=list(decision.workspace_names.values()),
+                embed=_default_embed, intent=intent,
+                event_types_by_evidence=_event_types_by_evidence(retrieved),
+                matched_event_types=evidence_selector.matched_event_types(intent))
             summary = claim_check.summarize(checked)
             log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "
                      "min=%s mean=%s max=%s propagation=%d free_combination=%d "
-                     "misattributed=%d title_only=%d names=%s scores=%s",
+                     "misattributed=%d title_only=%d semantic=%s intent_link=%s "
+                     "unlinked=%d link_unknown=%d names=%s scores=%s",
                      summary["claims"], summary["uncited"], summary["no_text"],
                      summary["scored"], summary["min"], summary["mean"],
                      summary["max"], summary["propagation"],
                      summary["free_combination"], summary["misattributed"],
-                     summary["title_only"],
+                     summary["title_only"], summary["semantic_mean"],
+                     summary["intent_link_mean"], summary["unlinked"],
+                     summary["link_unknown"],
                      sorted({n for c in checked
                              for n in (*c.misattributed, *c.title_only)}),
                      [c.score for c in checked if c.score is not None])
+
+            # ★연결성 없는 주장 — **기본은 관측만** 한다(`_STRIP_UNLINKED_CLAIMS`).
+            cut = claim_check.unlinked(checked)
+            if cut:
+                log.info("claim.unlinked count=%d strip=%s texts=%s",
+                         len(cut), _STRIP_UNLINKED_CLAIMS, [c.text for c in cut])
+            if cut and _STRIP_UNLINKED_CLAIMS:
+                stripped, removed = _strip_claims(answer, cut)
+                # ★다 지워 빈 답변이 되면 **되돌린다** — 「모른다」로 바꿀지는
+                #   문구 결정이 필요하고, 조용히 빈 답을 내는 것이 가장 나쁘다.
+                if stripped.strip():
+                    answer = stripped
+                log.info("claim.stripped removed=%d of=%d empty_guard=%s",
+                         len(removed), len(cut), not stripped.strip())
 
         # ★`anchor_source` 는 LLM 과 무관한 **서버가 아는 결정론적 값**이라
         #   실패 경로에도 그대로 실린다(설계서 §14-3).
