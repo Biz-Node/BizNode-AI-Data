@@ -96,6 +96,17 @@ _SYSTEM_PROMPT = """당신은 BizNode 기업 리스크 챗봇의 답변 작성�
    라벨과 근거가 어긋나 확인된 사실로 다루지 않습니다. **그 사건을 일어난
    일처럼 쓰지 마세요.** 근거 원문 자체는 [근거] 블록에 있으니, 원문이 실제로
    말하는 내용만 인용하세요.
+19. **`<evidence>` 의 `about` 은 그 근거가 [사실] 의 어느 줄에서 왔는지입니다.**
+   **`about` 에 이름이 적힌 기업이 그 근거로 말할 수 있는 기업입니다** — 거기
+   없는 기업을 그 근거로 말하지 마세요. 근거 원문에 어떤 이름이 스쳐 나온다고
+   해서 그 기업 이야기가 되는 것은 아닙니다.
+   - `about="사건 evt_…"` 면 [사실] 의 그 사건 줄을 보고 어느 기업 맥락인지
+     확인한 뒤 쓰세요.
+   - `about="미연결"` 은 검색에 걸려 들어왔을 뿐 [사실] 의 **어느 줄과도 이어지지
+     않은** 근거입니다. **워크스페이스 기업 이야기로 끌어오지 마세요** — 원문이
+     말하는 그 기업 이야기로만 쓰거나, 질문과 무관하면 쓰지 마세요.
+   ★14번과 충돌하면 **이 규칙이 이깁니다.** 워크스페이스 기업을 주어로 세우려고
+   남의 근거를 가져다 붙이는 것이 14번이 막으려던 것보다 나쁩니다.
 
 질문에 대한 답을 한국어 자연어 문장으로 작성하세요."""
 
@@ -359,7 +370,66 @@ def _neutralize_delimiters(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")
 
 
-def _evidence_block(retrieved: RetrieveResponse) -> str:
+# ★`[사실]` 의 어느 줄과도 이어지지 않은 근거에 붙는 표기. 검색 히트가 들고
+#   왔을 뿐인 근거다 — 실측(현황서 §8-6) 「납품 단가 압박」 38건 중 18건 ·
+#   「최근 인수 사례」 140건 중 58건이 **워크스페이스에 닿지 않는다.** 걸러 봤다가
+#   되돌린 것이 옳았지만(질문이 물은 사례가 사라졌다) **표기 없이** 들어오면
+#   LLM 이 워크스페이스 기업 이야기로 끌어 쓴다.
+_UNLINKED_EVIDENCE = "미연결"
+
+
+def _evidence_about(retrieved: RetrieveResponse, workspace_keys: set[str]) -> dict[str, str]:
+    """근거 id → **이 근거가 `[사실]` 의 어느 줄에서 왔는가.**
+
+    ★왜 필요한가 — `<evidence>` 태그에 **기업 속성이 없었다**(id·source_type·
+      press·published_at 뿐). 「이 근거가 누구 얘기냐」가 프롬프트에 없고, 있는
+      것은 사건·관계 줄의 `근거: ev_…` 라는 **역방향** 참조뿐이라 LLM 이 근거를
+      읽으며 위 줄들과 역매칭해야 했다. 그 사이에서 **근거가 실제로 말하는 기업이
+      아니라 워크스페이스 기업 중 하나로 귀속되는** 오답이 난다.
+
+    ★**표기만 한다 — 판정하지 않는다**(설계서 §12). 관계 줄의 `_membership`·파급
+      줄의 `_propagation_membership` 과 같은 종류의 결정론적 고리이고, 이제껏
+      **근거에만 없었다.**
+
+    ★**증명할 수 있는 것만 적는다.**
+
+          관계 근거   양끝 기업 이름 + 워크스페이스 소속   ← `Relation` 이 키를 들고 있다
+          사건 근거   사건 id 까지만                      ← ★`Event` 에 기업 키가 없다
+          그 밖       `미연결`                            ← 어느 줄도 참조하지 않는다
+
+      사건 근거를 기업까지 못 짚는 것은 `Event` 스키마에 기업 키가 없기 때문이다
+      (`_events_of()` 가 기업마다 조회하지만 DTO 가 그 출처를 잃는다). **지어내지
+      않고 사건 id 로 넘긴다** — 사건 줄이 `[사실]` 에 있으므로 LLM 이 그 줄에서
+      맥락을 읽을 수 있다.
+    """
+    about: dict[str, list[str]] = {}
+    for relation in retrieved.relations:
+        if not relation.evidence_id:
+            continue
+        marks = []
+        for endpoint in (relation.source, relation.target):
+            if workspace_keys:
+                inside = "워크스페이스" if endpoint.key in workspace_keys else "바깥"
+                marks.append(f"{endpoint.name}={inside}")
+            else:
+                marks.append(endpoint.name)
+        about.setdefault(relation.evidence_id, []).extend(marks)
+    for event in retrieved.events:
+        for evidence_id in event.evidence_ids:
+            about.setdefault(evidence_id, []).append(f"사건 {event.event_id}")
+
+    out: dict[str, str] = {}
+    for evidence in retrieved.evidence:
+        marks = about.get(evidence.evidence_id) or []
+        # 같은 기업이 여러 관계에 걸리면 한 번만 적는다 — 순서는 지킨다.
+        out[evidence.evidence_id] = (" · ".join(dict.fromkeys(marks)) if marks
+                                     else _UNLINKED_EVIDENCE)
+    return out
+
+
+def _evidence_block(retrieved: RetrieveResponse,
+                    about: Optional[dict[str, str]] = None) -> str:
+    about = about if about is not None else {}
     blocks = []
     for evidence in retrieved.evidence:
         if evidence.missing:
@@ -369,9 +439,13 @@ def _evidence_block(retrieved: RetrieveResponse) -> str:
         #   ★신뢰 안 된 텍스트라 델리미터 중화를 거친다 — 속성값에 `"` 가 섞이면
         #     태그가 깨지므로 따옴표도 함께 없앤다.
         press = _neutralize_delimiters(evidence.press or "").replace('"', "'")
+        # ★`about` 도 같은 중화를 거친다 — 기업·사건 이름은 뉴스 → LLM 추출 →
+        #   Neo4j 로 들어온 신뢰 안 된 텍스트다.
+        marks = _neutralize_delimiters(
+            about.get(evidence.evidence_id, _UNLINKED_EVIDENCE)).replace('"', "'")
         blocks.append(
             f'<evidence id="{evidence.evidence_id}" source_type="{evidence.source_type}" '
-            f'press="{press}" '
+            f'press="{press}" about="{marks}" '
             f'published_at="{evidence.published_at or ""}">\n'
             f'{_neutralize_delimiters(evidence.text)}\n</evidence>')
     return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
@@ -393,7 +467,7 @@ def _build_user_prompt(question: str, retrieved: RetrieveResponse,
             facts = f"{head}\n{note}\n{rest}" if rest else f"{head}\n{note}"
     return (f"질문: {question}\n\n"
             f"[사실]\n{facts}\n\n"
-            f"[근거]\n{_evidence_block(retrieved)}")
+            f"[근거]\n{_evidence_block(retrieved, _evidence_about(retrieved, workspace_keys))}")
 
 
 def _edge_id_for(evidence_id: str, relations: list[Relation]) -> Optional[str]:
@@ -518,15 +592,21 @@ class AnswerService:
             #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
             checked = claim_check.check(
                 claims, {e.evidence_id: e for e in retrieved.evidence},
-                propagation_targets=[p.target for p in retrieved.propagation])
+                propagation_targets=[p.target for p in retrieved.propagation],
+                # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고
+                #   워크스페이스 기업 중 하나로 귀속시키는」 실패를 센다.
+                workspace_names=list(decision.workspace_names.values()))
             summary = claim_check.summarize(checked)
             log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "
                      "min=%s mean=%s max=%s propagation=%d free_combination=%d "
-                     "scores=%s",
+                     "misattributed=%d title_only=%d names=%s scores=%s",
                      summary["claims"], summary["uncited"], summary["no_text"],
                      summary["scored"], summary["min"], summary["mean"],
                      summary["max"], summary["propagation"],
-                     summary["free_combination"],
+                     summary["free_combination"], summary["misattributed"],
+                     summary["title_only"],
+                     sorted({n for c in checked
+                             for n in (*c.misattributed, *c.title_only)}),
                      [c.score for c in checked if c.score is not None])
 
         # ★`anchor_source` 는 LLM 과 무관한 **서버가 아는 결정론적 값**이라

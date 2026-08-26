@@ -70,6 +70,13 @@ class ClaimCheck:
     # ★`None` 은 「인과를 주장하지 않았다」는 뜻이다 — 대다수가 여기다.
     claim_type: Optional[str] = None
     effect_score: Optional[float] = None   # 효과 절이 근거와 얼마나 겹치나
+    # ★주장이 이름을 부른 워크스페이스 기업 중, **든 근거 어디에도 그 이름이 없는**
+    #   것들. 오귀속 의심 신호다 — `missing` 토큰 안에 이미 들어 있지만 거기서는
+    #   다른 낱말들에 섞여 보이지 않는다.
+    misattributed: list[str] = field(default_factory=list)
+    # ★본문에는 없고 **기사 제목 suffix 에만** 있는 것들. 오귀속일 수도, 제목이
+    #   주어를 정당하게 밝힌 것일 수도 있어 **갈라만 둔다**.
+    title_only: list[str] = field(default_factory=list)
 
 
 def _effect_clause(text: str) -> str:
@@ -152,9 +159,60 @@ def _texts_of(evidence_ids: Sequence[str],
     return out
 
 
+# ★기사 제목 suffix — `pipeline/importer/news_loader.py:283` 이 **적재 시점에**
+#   붙인다: `f"{text}\n\n— 「{article_title}」 {article_url}"`. 뉴스 근거 전건이
+#   대상이고 DART 경로에는 안 붙는다.
+_TITLE_SUFFIX = "\n\n— 「"
+
+
+def _body_of(text: str) -> str:
+    """기사 제목 suffix 를 뺀 **추출된 본문**. suffix 가 없으면 그대로."""
+    return text.split(_TITLE_SUFFIX)[0]
+
+
+def _attribution(text: str, texts: Sequence[str],
+                 workspace_names: Sequence[str]) -> tuple[list[str], list[str]]:
+    """(오귀속 의심, 제목에만 있음) — 주장이 부른 워크스페이스 기업을 두 갈래로.
+
+    ★겨냥하는 실패 — 근거가 실제로 어느 기업을 말하는지 확인하지 않고 **워크스페이스
+      기업 중 하나로 귀속시키는 것**이다. 화이트리스트는 「id 가 재료 안에 있나」만
+      보므로 귀속이 틀려도 통과하고, 낱말 겹침은 오히려 **반대로** 작동한다 —
+      근거에 그 이름이 (다른 맥락으로라도) 있으면 점수가 올라간다.
+
+    ★**둘로 나누는 이유 — 기사 제목 suffix 가 탐지를 막는다.** 실측
+      (`ev_4fa6a58a5c293758`):
+
+          본문   「대부분의 투자는 M15x 공장의 HBM4 규격 … 생산 확대에 쓰일 것으로
+                  전망된다」            ← SK하이닉스가 **없다**
+          제목   「… 삼성전자 SK하이닉스 HBM에 투자 올인」   ← 여기 **있다**
+
+      한 덩어리로 보면 「원문에 있다」가 되어 오귀속이 그대로 통과한다. 그런데
+      제목만으로 주어를 확정할 수도 없다 — 이 기사는 두 회사를 함께 다룬다.
+      그래서 **판정하지 않고 갈라 센다.** 이 분포가 「제목 suffix 를 계속 실을까」
+      `[DECIDE]`(현황서 §7-0)에 필요한 데이터이기도 하다.
+
+    ★**여기서도 판정하지 않는다.** 이름이 없다고 곧 거짓이 아니다 — 별칭·약어·
+      대명사로 가리켰을 수 있다. 세는 것은 「의심」이지 「오류」가 아니다.
+
+    ★`about` 표기(`answer_service._evidence_about`)가 **예방**이고 이것이 **관측**이다.
+      둘은 서로를 대신하지 않는다.
+    """
+    bodies = [_body_of(t) for t in texts]
+    missing_all: list[str] = []
+    title_only: list[str] = []
+    for name in workspace_names:
+        if not name or name not in text:
+            continue
+        if any(name in body for body in bodies):
+            continue                                  # 본문이 말한다 — 정상
+        (title_only if any(name in t for t in texts) else missing_all).append(name)
+    return missing_all, title_only
+
+
 def check(claims: Sequence[Mapping[str, Any]],
           evidence_by_id: Mapping[str, Any],
-          *, propagation_targets: Sequence[str] = ()) -> list[ClaimCheck]:
+          *, propagation_targets: Sequence[str] = (),
+          workspace_names: Sequence[str] = ()) -> list[ClaimCheck]:
     """주장마다 (상태, 겹침 점수, 없는 토큰, 유형). **통과/불통과를 내지 않는다.**
 
     한 주장이 근거를 여럿 들면 **합쳐서** 본다 — 나눠 재면 각 근거가 주장의
@@ -162,6 +220,9 @@ def check(claims: Sequence[Mapping[str, Any]],
 
     `propagation_targets` 는 `RetrieveResponse.propagation` 의 대상 기업 이름들이다.
     인과 주장이 그중 하나를 가리키면 claim ⑤ 이고, 아니면 ⑥ 자유 결합이다.
+
+    `workspace_names` 는 워크스페이스 기업 이름들이다 — 주장이 그중 하나를 부르면서
+    든 근거 원문에는 그 이름이 없으면 **오귀속 의심**으로 센다.
     """
     out: list[ClaimCheck] = []
     for claim in claims:
@@ -188,9 +249,11 @@ def check(claims: Sequence[Mapping[str, Any]],
         score, missing = overlap(normalize_dates("\n".join(texts)),
                                  normalize_dates(text),
                                  tokenizer=sentence_tokens)
+        misattributed, title_only = _attribution(text, texts, workspace_names)
         out.append(ClaimCheck(text, evidence_ids, STATUS_SCORED,
                               score=score, missing=missing,
-                              claim_type=claim_type, effect_score=effect_score))
+                              claim_type=claim_type, effect_score=effect_score,
+                              misattributed=misattributed, title_only=title_only))
     return out
 
 
@@ -210,4 +273,8 @@ def summarize(checked: Sequence[ClaimCheck]) -> dict:
                            if c.claim_type == TYPE_PROPAGATION),
         "free_combination": sum(1 for c in checked
                                 if c.claim_type == TYPE_FREE_COMBINATION),
+        # ★오귀속 의심 — 주장이 부른 워크스페이스 기업이 든 근거 **본문**에 없다.
+        #   `title_only` 는 제목 suffix 에만 있는 것이라 갈라 센다(§7-0 `[DECIDE]`).
+        "misattributed": sum(1 for c in checked if c.misattributed),
+        "title_only": sum(1 for c in checked if c.title_only),
     }

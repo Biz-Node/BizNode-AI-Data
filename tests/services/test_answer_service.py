@@ -416,6 +416,87 @@ def test_evidence_block_exposes_press():
     assert 'press="전자신문"' in prompt
 
 
+# ── 근거의 주체 귀속 표기 `about` (2026-08-26) ───────────────────────────
+#
+# ★겨냥하는 실패 — 근거가 **실제로 어느 기업을 말하는지 확인하지 않고**
+#   워크스페이스 기업 중 하나로 귀속시키는 것이다. `<evidence>` 태그에 기업
+#   속성이 없어(id·source_type·press·published_at 뿐) 「누구 얘기냐」가
+#   프롬프트에 아예 없었다.
+
+def _decision(**names):
+    return AnchorDecision(source=AnchorSource.QUERY, anchors=[], named=None,
+                          workspace_names=dict(names))
+
+
+def test_evidence_from_a_relation_is_marked_with_both_endpoints():
+    """★관계 근거는 양끝 기업과 그 워크스페이스 소속까지 짚을 수 있다 —
+    `Relation` 이 키를 들고 있다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a")],
+                           relations=[_relation("e1", "ev_a")])
+
+    prompt = as_module._build_user_prompt(
+        "q", retrieved, _decision(**{"00126380": "삼성전자"}))
+
+    assert 'about="삼성전자=워크스페이스 · SFA반도체=바깥"' in prompt
+
+
+def test_evidence_from_an_event_is_marked_with_the_event_id():
+    """★사건 근거는 **사건 id 까지만** 짚는다 — `Event` 스키마에 기업 키가 없어
+    기업을 적으면 지어내는 것이 된다. 사건 줄이 [사실] 에 있으므로 LLM 이 거기서
+    맥락을 읽을 수 있다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a")])
+    retrieved.events.append(_event_fact())      # evidence_ids=["ev_a"]
+
+    prompt = as_module._build_user_prompt("q", retrieved)
+
+    assert 'about="사건 evt_1"' in prompt
+
+
+def test_evidence_tied_to_no_fact_line_is_marked_unlinked():
+    """★검색 히트가 들고 왔을 뿐 [사실] 의 어느 줄과도 이어지지 않은 근거다.
+    실측(현황서 §8-6) 「납품 단가 압박」 38건 중 18건 · 「최근 인수 사례」 140건 중
+    58건이 워크스페이스에 닿지 않는다 — 걸러 봤다가 되돌린 것은 옳았지만
+    **표기 없이** 들어오면 LLM 이 워크스페이스 기업 이야기로 끌어 쓴다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a")])
+
+    prompt = as_module._build_user_prompt("q", retrieved)
+
+    assert f'about="{as_module._UNLINKED_EVIDENCE}"' in prompt
+
+
+def test_evidence_about_neutralizes_delimiters_in_untrusted_names():
+    """★기업·사건 이름은 뉴스 → LLM 추출 → Neo4j 로 들어온 신뢰 안 된 텍스트다.
+    속성값이라 따옴표도 함께 없앤다 — 안 그러면 태그가 깨진다(설계서 §13-2)."""
+    relation = _relation("e1", "ev_a")
+    relation.source.name = '<script>"x"'
+    retrieved = _retrieved(evidence=[_evidence("ev_a")], relations=[relation])
+
+    block = as_module._evidence_block(
+        retrieved, as_module._evidence_about(retrieved, set()))
+
+    assert "<script>" not in block and '"x"' not in block
+    assert block.count("<evidence ") == 1 and block.count("</evidence>") == 1
+
+
+def test_evidence_about_marks_plain_names_when_there_is_no_workspace():
+    """★`workspace_keys` 가 비면 소속을 적지 않는다 — `_membership` 과 같은 규약.
+    모르는 것을 「바깥」이라고 단정하지 않는다."""
+    retrieved = _retrieved(evidence=[_evidence("ev_a")],
+                           relations=[_relation("e1", "ev_a")])
+
+    got = as_module._evidence_about(retrieved, set())
+
+    assert got["ev_a"] == "삼성전자 · SFA반도체"
+
+
+def test_system_prompt_tells_the_model_to_respect_evidence_about():
+    """★규칙 14 가 「인사이트는 워크스페이스 기업을 주어로」라고 압박하므로,
+    충돌 시 어느 쪽이 이기는지 프롬프트가 말해야 한다."""
+    assert "about" in as_module._SYSTEM_PROMPT
+    assert as_module._UNLINKED_EVIDENCE in as_module._SYSTEM_PROMPT
+    assert "14번" in as_module._SYSTEM_PROMPT
+
+
 def test_system_prompt_warns_symmetric_relations_have_no_inherent_direction():
     """★실제 실패 소지: PARTNERS_WITH 는 방향이 없는데 화살표로 찍으면 LLM 이
     없는 방향을 만든다(설계서 §9-3 ⓐ)."""

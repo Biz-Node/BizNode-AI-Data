@@ -312,3 +312,80 @@ def test_summary_reports_counts_and_scores_for_logging():
     assert got["uncited"] == 1
     assert got["scored"] == 1
     assert got["min"] == 1.0
+
+
+# ── 오귀속 관측 (2026-08-26) ─────────────────────────────────────────────
+#
+# ★겨냥하는 실패 — 근거가 실제로 어느 기업을 말하는지 확인하지 않고 **워크스페이스
+#   기업 중 하나로 귀속시키는 것**이다. 화이트리스트는 「id 가 재료 안에 있나」만
+#   보므로 귀속이 틀려도 통과하고, 낱말 겹침은 오히려 반대로 작동한다.
+
+_TITLE = "\n\n— 「D램·낸드 공급 부족, 삼성전자 SK하이닉스 HBM에 투자 올인」 https://x/1"
+
+
+def test_body_naming_the_company_is_not_suspicious():
+    """★본문이 그 기업을 말하면 아무것도 세지 않는다 — 정상 인용이다."""
+    ev = {"ev_a": _evidence("ev_a", "SK하이닉스 이천 공장에서 질소 누출 사고가 났다")}
+
+    got = claim_check.check(
+        [{"text": "SK하이닉스는 이천 공장에서 질소 누출 사고를 겪었다",
+          "evidence_ids": ["ev_a"]}], ev, workspace_names=["SK하이닉스"])[0]
+
+    assert got.misattributed == [] and got.title_only == []
+
+
+def test_workspace_company_absent_from_the_evidence_is_flagged():
+    """★주장이 워크스페이스 기업을 부르는데 든 근거 어디에도 그 이름이 없다."""
+    ev = {"ev_a": _evidence("ev_a", "삼성전자가 미국 테일러 공장을 짓는다")}
+
+    got = claim_check.check(
+        [{"text": "SK하이닉스는 미국 공장을 짓는다", "evidence_ids": ["ev_a"]}],
+        ev, workspace_names=["SK하이닉스"])[0]
+
+    assert got.misattributed == ["SK하이닉스"], got.missing
+    assert got.title_only == []
+
+
+def test_a_name_only_in_the_article_title_is_counted_separately():
+    """★**기사 제목 suffix 가 탐지를 막는다.** 실측(`ev_4fa6a58a5c293758`):
+    본문은 「대부분의 투자는 M15x 공장의 HBM4 규격 … 생산 확대에 쓰일 것으로
+    전망된다」로 기업명이 없는데 제목에 「삼성전자 SK하이닉스」가 있다. 한 덩어리로
+    보면 「원문에 있다」가 되어 오귀속이 그대로 통과한다.
+
+    ★그렇다고 제목만으로 주어를 확정할 수도 없다 — 이 기사는 두 회사를 함께 다룬다.
+    그래서 **판정하지 않고 갈라 센다**(현황서 §7-0 제목 suffix `[DECIDE]`)."""
+    ev = {"ev_a": _evidence(
+        "ev_a", "대부분의 투자는 M15x 공장의 HBM4 생산 확대에 쓰일 전망이다" + _TITLE)}
+
+    got = claim_check.check(
+        [{"text": "SK하이닉스는 M15x 공장에 HBM4 투자를 확대한다",
+          "evidence_ids": ["ev_a"]}], ev, workspace_names=["SK하이닉스"])[0]
+
+    assert got.title_only == ["SK하이닉스"]
+    assert got.misattributed == []       # 「어디에도 없다」와 섞지 않는다
+
+
+def test_attribution_is_silent_without_workspace_names():
+    """★이름을 안 주면 아무것도 세지 않는다 — 기존 호출부가 그대로 돈다."""
+    ev = {"ev_a": _evidence("ev_a", "삼성전자가 공장을 짓는다")}
+
+    got = claim_check.check(
+        [{"text": "SK하이닉스는 공장을 짓는다", "evidence_ids": ["ev_a"]}], ev)[0]
+
+    assert got.misattributed == [] and got.title_only == []
+
+
+def test_summary_counts_misattributed_and_title_only_separately():
+    """★분포를 갈라 남겨야 제목 suffix 를 계속 실을지 정할 수 있다."""
+    ev = {"ev_a": _evidence("ev_a", "삼성전자가 테일러 공장을 짓는다"),
+          "ev_b": _evidence("ev_b", "M15x 공장의 HBM4 생산 확대" + _TITLE)}
+
+    checked = claim_check.check(
+        [{"text": "SK하이닉스는 테일러 공장을 짓는다", "evidence_ids": ["ev_a"]},
+         {"text": "SK하이닉스는 HBM4 생산을 확대한다", "evidence_ids": ["ev_b"]}],
+        ev, workspace_names=["SK하이닉스"])
+
+    got = claim_check.summarize(checked)
+
+    assert got["misattributed"] == 1
+    assert got["title_only"] == 1
