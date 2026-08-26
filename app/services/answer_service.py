@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, MatchType,
-                             Relation, RetrieveResponse, Source)
+                             Propagation, Relation, RetrieveResponse, Source)
 from app.core.trace import trace_logger
 from app.services import claim_check, material_consistency
 from app.services.query_understanding import AnchorDecision
@@ -191,6 +191,86 @@ def _membership(relation: Relation, workspace_keys: set[str]) -> str:
     return f", {_mark(relation.source)}, {_mark(relation.target)}"
 
 
+def _propagation_membership(prop: Propagation, workspace_keys: set[str]) -> str:
+    """★파급 **대상**이 워크스페이스 안인가 — 관계 줄의 `_membership` 과 같은 표기.
+
+    규칙 14 가 「인사이트(파급·전망·해석) 문장은 워크스페이스 기업을 하나 이상
+    주어나 영향 대상으로 가져야 한다」고 요구하는데, **파급이야말로 인사이트의
+    주 재료**인데도 표기가 관계 줄에만 있었다. 실측(fixture
+    `ask_sk_hynix_production_disruption`): 프롬프트에 실린 파급 15줄 중 대상이
+    워크스페이스 안인 것은 **1건**뿐인데 LLM 은 그것을 알 방법이 없었다.
+
+    ★`key` 가 없으면 표기하지 않는다. 이름만 있고 노드가 없는 대상인데
+      (`Propagation.key` 는 그때 `null` 이다) 「바깥」이라고 적으면 **모르는 것을
+      아는 척하는 것**이 된다 — `_membership` 이 workspace_keys 가 비면 아무것도
+      적지 않는 것과 같은 이유다.
+    """
+    if not workspace_keys or prop.key is None:
+        return ""
+    inside = "워크스페이스" if prop.key in workspace_keys else "바깥"
+    return f", {prop.target}={inside}"
+
+
+def _select_propagation(
+        propagation: list[Propagation],
+        limit: int = _MAX_PROPAGATION_LINES,
+) -> tuple[list[Propagation], dict[str, int]]:
+    """사건별로 **공평하게** 나눠 담는다 — 뺀 몫은 사건 이름별로 돌려준다.
+
+    ★앞에서부터 자르면 **첫 사건이 예산을 통째로 먹는다.** 실측(fixture
+      `ask_sk_hynix_production_disruption`): 파급 135건이 3개 위험사건에 45건씩
+      고르게 있는데 상한 15줄을 첫 사건이 독점했고, 질문(「생산 차질을 일으킬
+      만한 일이 있었나?」)이 물은 바로 그 사건들 — 이천 공장 질소 누출 사고와
+      우시 공장 화재 — 의 파급은 **한 줄도 실리지 않았다.**
+
+    ★`_events_of()` 가 사건을 **기업마다 따로** 고르는 것과 같은 이유다. 전부
+      한 줄로 세워 자르면 「관련 없어서」가 아니라 「다른 사건이라서」 버린 것이
+      된다.
+
+    ★사건 안에서는 `stated=True` 가 먼저다 — 「기사가 직접 말한 것」이 「우리가
+      공급망으로 계산한 것」보다 먼저 잘릴 이유가 없다. 같은 실측에서 stated=True
+      3건 중 **2건이 잘리고** stated=False 14건이 자리를 차지했다.
+
+    ★그 밖에는 **입력 순서를 지킨다** — 같은 질문에 매번 다른 순서가 나오면 안
+      된다(`evidence_selector.select`·`relation_selector.order` 와 같은 규약).
+
+    ★사건 귀속은 `path[0]` 으로 읽는다. `Propagation` 에 `event_id` 가 없고
+      (`EdgePropagation` 에만 있다) `relation_service.event_impact()` 가
+      `propagate_risk(사건이름)` 의 경로를 그대로 싣기 때문이다 — 실측 135건이
+      정확히 3개 이름으로 갈렸다.
+    """
+    by_event: dict[str, list[Propagation]] = {}
+    for prop in propagation:
+        by_event.setdefault(prop.path[0] if prop.path else "", []).append(prop)
+
+    # 사건 안에서 `stated=True` 를 앞으로. 파이썬 정렬은 **안정 정렬**이라
+    # 나머지 순서는 입력 그대로 남는다.
+    for rows in by_event.values():
+        rows.sort(key=lambda p: not p.stated)
+
+    # 라운드로빈으로 **몫만** 정한다. 출력은 아래에서 사건별로 묶는다 — 줄이
+    # 사건을 오가며 번갈아 나오면 읽기 어렵다.
+    quota = dict.fromkeys(by_event, 0)
+    remaining = limit
+    while remaining > 0:
+        took = False
+        for origin, rows in by_event.items():
+            if quota[origin] >= len(rows):
+                continue
+            quota[origin] += 1
+            remaining -= 1
+            took = True
+            if remaining == 0:
+                break
+        if not took:      # 모든 사건이 바닥났다 — 상한에 못 미쳐도 끝이다
+            break
+
+    kept = [prop for origin, rows in by_event.items() for prop in rows[:quota[origin]]]
+    dropped = {origin: len(rows) - quota[origin]
+               for origin, rows in by_event.items() if len(rows) > quota[origin]}
+    return kept, dropped
+
+
 def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozenset(),
                 *, workspace_names: Optional[dict[str, str]] = None) -> str:
     lines: list[str] = []
@@ -252,14 +332,22 @@ def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozense
     #   한 질문에 45줄 넘게 붙었고 전부 `stated=False` 인 2홉 계산값이었다.
     #   위험사건 수는 `_MAX_RISK_EVENTS_FOR_PROPAGATION` 으로 막혀 있지만 사건
     #   하나가 수십 곳으로 번지므로 줄 수 자체를 막아야 한다. 조용히 자르지
-    #   않고 **몇 곳을 뺐는지 적는다** — 안 그러면 「그게 전부」로 읽힌다.
-    for prop in retrieved.propagation[:_MAX_PROPAGATION_LINES]:
+    #   않고 **무엇을 뺐는지 적는다** — 안 그러면 「그게 전부」로 읽힌다.
+    kept_propagation, dropped_propagation = _select_propagation(retrieved.propagation)
+    for prop in kept_propagation:
         lines.append(
-            f"파급: {prop.target} ({prop.hops}홉, stated={prop.stated}, "
+            f"파급: {prop.target} ({prop.hops}홉, stated={prop.stated}"
+            f"{_propagation_membership(prop, workspace_keys)}, "
             f"경로: {' → '.join(prop.path)})")
-    hidden = len(retrieved.propagation) - _MAX_PROPAGATION_LINES
-    if hidden > 0:
-        lines.append(f"(파급 {hidden}곳은 지면상 생략했습니다 — 없는 것이 아닙니다)")
+    if dropped_propagation:
+        # ★**사건별로** 적는다. 합계만 적으면 「골고루 조금씩 뺐다」와 「한 사건이
+        #   통째로 빠졌다」가 같아 보이는데, 둘은 답변에 전혀 다른 영향을 준다.
+        #   ★사건 이름은 신뢰 안 된 텍스트다 — 다만 바로 위 파급 경로 줄이 같은
+        #     문자열을 이미 싣고 있어 **새로 늘어나는 노출면은 없다**(§5-10 은
+        #     `_fact_lines` 보간값 전체를 한 번에 다루는 별건이다).
+        detail = " · ".join(f"{origin} {n}곳" for origin, n in dropped_propagation.items())
+        lines.append(f"(파급 {sum(dropped_propagation.values())}곳은 지면상 "
+                     f"생략했습니다 — {detail}. 없는 것이 아닙니다)")
     body = "\n".join(lines) if lines else "(찾은 사실 없음)"
     return f"{_match_type_note(retrieved.match_type)}\n{body}"
 

@@ -226,6 +226,126 @@ def test_propagation_lines_are_capped_and_the_cut_is_disclosed():
     assert any("7곳" in l for l in lines), lines[-3:]
 
 
+# ── 파급 상한을 사건별로 나눈다 (2026-08-26) ─────────────────────────────
+#
+# ★전부 fixture `ask_sk_hynix_production_disruption` 실측에서 나온 것이다.
+#   질문은 「SK하이닉스에 **생산 차질**을 일으킬 만한 일이 있었나?」였다.
+
+def _propagation(event_name, target, *, stated=False, hops=2, key=None):
+    """실측 파급과 같은 모양 — **`path[0]` 이 사건 이름**이다
+    (`relation_service.event_impact()` 가 `propagate_risk(사건이름)` 의 경로를
+    그대로 싣는다)."""
+    path = ([event_name, "IMPACTS(negative)", target] if hops == 1 else
+            [event_name, "IMPACTS(negative)", "SK하이닉스",
+             "SUPPLIES_TO(공급 차질)", target])
+    return Propagation(target=target, key=key, score=0.3, hops=hops,
+                       stated=stated, path=path)
+
+
+def test_propagation_is_shared_fairly_across_source_events():
+    """★실측: 파급 135건이 3개 위험사건에 **45건씩 고르게** 있는데 앞에서부터
+    자르니 상한 15줄을 **첫 사건이 통째로 먹었다.** 질문이 물은 바로 그
+    사건들(이천 공장 질소 누출 사고·우시 공장 화재)의 파급은 한 줄도 실리지
+    않았다 — 「관련 없어서」가 아니라 **「다른 사건이라서」** 버린 것이다.
+    `_events_of()` 가 사건을 기업마다 따로 고르는 것과 같은 이유다."""
+    events = ["HBM3E 대량 양산 차질", "이천 공장 질소 누출 사고", "우시 공장 화재"]
+    retrieved = _retrieved()
+    for name in events:
+        for i in range(45):
+            retrieved.propagation.append(_propagation(name, f"{name}_기업{i}"))
+
+    shown = [l for l in as_module._fact_lines(retrieved).splitlines()
+             if l.startswith("파급:")]
+
+    assert len(shown) == as_module._MAX_PROPAGATION_LINES
+    for name in events:
+        got = sum(1 for l in shown if name in l)
+        assert got == 5, f"{name}: {got}줄 — 사건마다 5줄이어야 한다"
+
+
+def test_propagation_keeps_reported_impact_when_the_cut_bites():
+    """★`stated=True` 는 「기사가 직접 말한 것」이라 「우리가 공급망으로 계산한
+    것」보다 먼저 잘릴 이유가 없다. 실측에서는 stated=True 3건 중 **2건이
+    잘리고** stated=False 14건이 자리를 차지했다."""
+    retrieved = _retrieved()
+    for name in ["사건A", "사건B", "사건C"]:
+        # 계산값을 앞에 둔다 — 입력 순서를 그대로 쓰면 보도값이 잘린다.
+        for i in range(20):
+            retrieved.propagation.append(_propagation(name, f"{name}_계산{i}"))
+        retrieved.propagation.append(
+            _propagation(name, "SK하이닉스", stated=True, hops=1))
+
+    kept, _dropped = as_module._select_propagation(retrieved.propagation)
+
+    assert sum(1 for p in kept if p.stated) == 3, [p.target for p in kept]
+
+
+def test_propagation_cut_message_names_each_source_event():
+    """★합계만 적으면 「골고루 조금씩 뺐다」와 「한 사건이 통째로 빠졌다」가 같아
+    보인다 — 둘은 답변에 전혀 다른 영향을 준다."""
+    retrieved = _retrieved()
+    for name in ["사건A", "사건B"]:
+        for i in range(20):
+            retrieved.propagation.append(_propagation(name, f"{name}_{i}"))
+
+    lines = as_module._fact_lines(retrieved).splitlines()
+    cut = [l for l in lines if "생략" in l]
+
+    assert len(cut) == 1, lines[-3:]
+    assert "사건A" in cut[0] and "사건B" in cut[0], cut[0]
+    assert "25곳" in cut[0], cut[0]      # 40건 중 15건만 실린다
+
+
+def test_propagation_line_marks_whether_the_target_is_in_the_workspace():
+    """★규칙 14 가 「인사이트 문장은 워크스페이스 기업을 하나 이상 주어나 영향
+    대상으로 가져야 한다」고 요구하는데 표기가 **관계 줄에만** 있었다. 실측: 실린
+    파급 15줄 중 대상이 워크스페이스 안인 것은 1건뿐인데 LLM 은 알 방법이 없었다."""
+    retrieved = _retrieved()
+    retrieved.propagation.append(
+        _propagation("사건A", "SK하이닉스", key="00164779", stated=True, hops=1))
+    retrieved.propagation.append(_propagation("사건A", "애플", key="00999999"))
+
+    shown = [l for l in as_module._fact_lines(retrieved, {"00164779"}).splitlines()
+             if l.startswith("파급:")]
+
+    assert "SK하이닉스=워크스페이스" in shown[0], shown[0]
+    assert "애플=바깥" in shown[1], shown[1]
+
+
+def test_propagation_membership_is_silent_when_the_target_has_no_key():
+    """★`key` 가 없으면(이름만 있고 노드가 없는 대상) 「바깥」이라고 적지 않는다 —
+    모르는 것을 아는 척하는 것이 된다."""
+    assert as_module._propagation_membership(
+        _propagation("사건A", "이름만있는곳", key=None), {"00164779"}) == ""
+
+
+def test_select_propagation_is_deterministic():
+    """★같은 질문에 매번 다른 순서가 나오면 안 된다
+    (`evidence_selector.select`·`relation_selector.order` 와 같은 규약)."""
+    retrieved = _retrieved()
+    for name in ["사건A", "사건B"]:
+        for i in range(20):
+            retrieved.propagation.append(_propagation(name, f"{name}_{i}"))
+
+    first, _ = as_module._select_propagation(retrieved.propagation)
+    second, _ = as_module._select_propagation(retrieved.propagation)
+
+    assert [p.target for p in first] == [p.target for p in second]
+
+
+def test_select_propagation_keeps_everything_when_under_the_cap():
+    """★상한보다 적으면 아무것도 빼지 않는다 — 「생략했습니다」가 거짓이 되면
+    안 된다."""
+    retrieved = _retrieved()
+    for name in ["사건A", "사건B"]:
+        retrieved.propagation.append(_propagation(name, f"{name}_1"))
+
+    kept, dropped = as_module._select_propagation(retrieved.propagation)
+
+    assert len(kept) == 2 and dropped == {}
+    assert "생략" not in as_module._fact_lines(retrieved)
+
+
 def test_system_prompt_forbids_inventing_causal_links():
     """★실제 실패: 「안전 문제는 노조 설립과 관련하여 … 배경이 될 수 있습니다」
     — 두 사실을 이어 준 근거가 하나도 없었다. 나란히 있다는 것은 인과가 아니다."""
