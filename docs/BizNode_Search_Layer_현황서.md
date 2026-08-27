@@ -4,8 +4,8 @@
 > 설계 근거·아키텍처는 **[설계서](BizNode_Search_Layer_설계.md)** 를 보세요. 이 둘이 짝입니다.
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
-마지막 갱신 **2026-08-26** · 브랜치 `yun` (미커밋)
-· 테스트 **644개** (642 passed · 2 xfailed = 알려진 결함 [§4-5](#4-5-동음이의-사명은-원리적으로-못-가른다)·[§5-15](#5-15-사명의-부분-토큰이-실존-기업으로-해소된다-todo))
+마지막 갱신 **2026-08-27** · 브랜치 `yun-phase0`
+· 테스트 **714개** (705 passed · 2 xfailed = 알려진 결함 [§4-5](#4-5-동음이의-사명은-원리적으로-못-가른다)·[§5-15](#5-15-사명의-부분-토큰이-실존-기업으로-해소된다-todo) · **7 failed** = [§5-26](#5-26-프롬프트를-고치면서-문구를-박아둔-테스트-7개가-깨졌다-todo))
 
 > 📌 **파일 이름이 `Search_Layer` 지만 내용은 검색 + 챗봇 둘 다입니다.** 예전에는
 > 「기술 부채 및 설계 검토 사항」이라는 세 번째 문서가 따로 있었는데, **2026-08-23 에
@@ -1414,6 +1414,32 @@ A 의 「조용히 자르지 않는 원칙」은 유지되며 **더 강해졌습
 
 ---
 
+### 5-26. 프롬프트를 고치면서 문구를 박아둔 테스트 7개가 깨졌다 `[TODO]`
+
+**2026-08-27 확인.** `yun` 브랜치의 커밋 `1b7fbaa`(「fix: 프롬프트 수정」)가
+`answer_service` 의 시스템 프롬프트를 고쳤는데, **그 프롬프트의 문구를 문자열로
+박아둔 테스트 7개**를 같이 고치지 않았습니다.
+
+| 깨진 테스트 | 찾는 문구 |
+|---|---|
+| `test_system_prompt_tells_model_to_hedge_semantic_matches` | `일 수 있습니다` |
+| `test_system_prompt_forbids_inventing_causal_links` | `나란히` |
+| `test_system_prompt_forbids_sentences_that_cannot_be_cited` | `인용할 수 없는 문장` |
+| `test_system_prompt_tells_the_model_facts_block_dates_are_report_dates` | `[사실] 블록의 날짜` |
+| `test_system_prompt_forbids_padding_an_unknown_answer_with_speculation` | `추측` |
+| `test_system_prompt_tells_the_model_to_respect_evidence_about` | `미연결` |
+| `test_system_prompt_tells_the_model_how_to_shape_each_answer` | `목록` |
+
+★**Phase 0 작업 이전부터 깨져 있었습니다.** `git stash` 로 작업분을 걷고 `HEAD`
+에서 돌려도 같은 7건이 실패합니다 — Phase 0 이 만든 회귀가 아닙니다.
+
+★**여기서 고치지 않았습니다.** 두 가지 중 어느 쪽인지가 갈립니다 — ⓐ 프롬프트가
+의도대로 바뀌었고 테스트 문구만 낡았다, ⓑ 프롬프트에서 **빠지면 안 되는 규칙이
+빠졌다**. ⓑ 라면 테스트를 고치는 것이 **결함을 지우는 일**이 됩니다. 프롬프트를
+고친 사람이 의도를 아는 쪽이라 넘깁니다.
+
+---
+
 ---
 
 ## 6. 다음 개발 순서
@@ -1966,6 +1992,60 @@ temporal flags  1   evt_news_77b13c5c182a  2024 vs (2015,)             ← §5-1
 
 ---
 
+### 8-9. evidence 청크 `source_type` 백필 (2026-08-27)
+
+ChromaDB `evidence` 컬렉션의 메타에 **출처 종류가 없었습니다.** `news_loader` 만
+`source_type` 을 넣고 `disclosure_loader`·`business_report_loader` 는 안 넣어서,
+청크만 보고는 「공시인가 보도인가」를 알 수 없었습니다.
+
+**진실 출처 — 엣지의 스칼라 `evidence_id`**
+
+```text
+엣지 source_type          news 8,384 · dart 2,563 · dart_filing 113 = 11,060
+evidence_id(스칼라) 보유   11,060건 → 유일 id 9,228개   (충돌 0건)
+Chroma evidence 청크       10,510개
+```
+
+★**`evidence_ids` 배열은 쓰지 않았습니다.** 배열까지 세면 유일 id 가 정확히
+10,510 이 되어 100% 덮이지만, 배열은 「이 청크의 출처」가 아니라 「이 관계를
+뒷받침하는 근거들」입니다. `batch/repair/edges.py` 의 `_CLUSTER` 가 같은 두 노드의
+엣지를 **`source_type` 구분 없이** 접으면서 배열을 합집합으로 만들기 때문입니다.
+
+| 실측 오염 | 건수 |
+|---|---|
+| 스칼라는 `news` 인데 배열은 `dart` 인 id | **39** |
+| 배열끼리도 값이 갈리는 id | **5** |
+
+**실행 결과**
+
+```text
+채운 청크        2,674   dart 2,561 · dart_filing 113
+이미 news 였던 것  6,554   news_loader 가 넣어 둔 것
+미매칭           1,282   그중 1,114 는 이미 news · 168 은 값 없음 — 건드리지 않음
+재실행 시 채울 것      0   멱등
+```
+
+★**재임베딩하지 않았습니다.** `collection.update(ids=, metadatas=)` 는
+`documents`·`embeddings` 를 넘기지 않으면 벡터를 다시 만들지 않습니다 — 갱신 뒤에도
+문서 원문과 1536차원 벡터가 그대로임을 확인했습니다. 기존 메타에 **병합**됩니다.
+
+**★청크 수와 엣지 수를 맞추려 하지 마세요 — 세는 대상이 다릅니다.**
+
+| `source_type` | 청크 | 유일 id | 엣지 |
+|---|---|---|---|
+| `news` | 7,668 | 6,554 | 8,384 |
+| `dart` | 2,561 | 2,561 | 2,563 |
+| `dart_filing` | 113 | 113 | 113 |
+| (값 없음) | 168 | — | — |
+
+엣지 11,060건이 유일 id 9,228개를 가리킵니다(한 근거가 여러 관계를 뒷받침).
+`news` 청크가 유일 id 보다 1,114 많은 것은 **미매칭 청크 중 `news_loader` 가 이미
+값을 넣어 둔 것**입니다. `/retrieve` 동작은 바뀌지 않습니다 — 백필된 2,674개 중
+`news` 엣지의 배열로 닿는 것이 **0건**이라, 이 청크들은 이전에도 fallback 을 타고
+`"dart"` 로 나가고 있었습니다.
+
+---
+
 ---
 
 ## 9. 실측 근거 없는 잠정치
@@ -2046,6 +2126,7 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-27 | ★**Phase 0 — LangGraph 이식 선행 정리 4건** (브랜치 `yun-phase0`, **LangGraph 코드는 한 줄도 없음**) | 도구 계층을 얹기 전에 **계약이 갈려 있던 자리**를 먼저 맞췄다. ① `Evidence`·`Source` 의 `source_type` 을 `Relation` 과 같은 **3값**으로(`dart_filing` 113건이 실재한다) ② ChromaDB `evidence` 10,510청크의 메타에 `source_type` **백필** — `VectorStore.update_metadata` 신설, **재임베딩 없음**, 2,674건 채움([§8-9](#8-9-evidence-청크-source_type-백필-2026-08-27)) ③ `company_service.business_overview_of()` 신설 — 사업보고서 「사업의 내용」 **원문** 조회(인용 가능한 유일한 재무계 텍스트) ④ `app/tools/dto.py` 신설 — 도구 반환 DTO 4종 **계약만**(구현 없음). 신설 `app/tools/` · `batch/repair/evidence_source_type.py` · 수정 `app/api/schemas.py`·`app/services/company_service.py`·`pipeline/vectorstore/{base,chroma_store}.py`. 테스트 644 → **714개**(705 passed · 2 xfailed · 7 failed=[§5-26](#5-26-프롬프트를-고치면서-문구를-박아둔-테스트-7개가-깨졌다-todo), Phase 0 이전부터 깨져 있던 것). ★**Neo4j 쓰기 없음 · `/ask`·`/retrieve` 동작 무변경 · `search/` 무수정** |
 | 2026-08-26 | ★**Evidence-grounded 보장 5단계 구현** (문서 아님 — **코드**) | **같은 실패가 실호출로 재현됐다** — 「HBM3E 대량 양산 차질」(§5-12) · 「2024-02-16 에 질소 누출 사고 발생」(§5-14) · 「이로 인해 생산에 영향」(§5-13)이 한 답변에 겹쳤다. 2026-08-23 에 프롬프트 규칙을 넣었는데도 재현됐으므로 **구조적 장치**로 갔다. ① `symmetric`·`role`·`press` 노출(§5-5 닫힘) ② `relation_selector` 신설(§5-4 닫힘 · ② 단계 ⓐⓓ 완료) ③ ⑥.5 `material_consistency` 신설 — 극성·시간 **두 규칙 분리** ④ ⑦ 이 `[확인된 사실]` **안에서만** 격리(극성=줄 제외 · 시간=날짜만) ⑤ claim **6번째 유형**(자유결합 Insight · 관측만). 테스트 581 → **644개**(642 passed · 2 xfailed) · **`search/` 무수정** → [§8-8](#8-8-재료-정합성-규칙-실측-2026-08-26) |
 | 2026-08-26 | ★**⑥.5 `[DECIDE]` 닫힘 — 규칙을 실측으로 골랐다** | 후보 둘을 같은 모집단에 재서 **1차 정책이 뒤집혔다.** 「라벨 부정어가 근거에 없다」만 쓰면 26/327(8.0%)이 걸리는데 **대부분 동의어 오탐**이었다(「지연」↔「늦어지고」·「사망사고」↔「숨진채 발견」). **반의어 조건**을 더해 4/327(1.2%) · precision 50% 로 좁혔다. 시간 규칙은 **배경절 표지어를 요구하지 않는다** — 층 A 39건 중 표지어가 같이 있는 건 9건뿐이라 곱하면 30건을 놓친다 → [§7-0](#7-0-architecture-freeze-가-남긴-것--decide-2건) |
 | 2026-08-26 | ★**실패 fixture 를 회귀 방지 케이스로 승격** | `ask_sk_hynix_production_disruption.observed.json` 은 2026-08-23 에 **관측 기록**으로 녹화한 것이었다. 같은 실패가 재현되자 `test_ask_grounding_regression.py` 로 못박았다 — 세 결함이 다시 나오면 테스트가 깨진다 |
