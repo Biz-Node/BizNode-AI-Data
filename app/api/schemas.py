@@ -247,7 +247,10 @@ class Evidence(BaseModel):
                   "목적·내용: BOC 등 계약제품에 대한 안정적인 생산 공급"])
     source_doc: str = Field(description="DART 접수번호 또는 기사 URL. **되짚을 수 있는 값**",
                             examples=["20260323000826"])
-    source_type: Literal["dart", "news"] = "dart"
+    # ★`Relation.source_type` 과 **같은 3값**이다. 여기만 2값이면 엣지에 실재하는
+    #   `dart_filing` 113건이 근거로 올라올 때 검증에서 튕긴다.
+    #   (`dart` 정기공시 · `dart_filing` 개별공시 · `news` 보도)
+    source_type: Literal["dart", "dart_filing", "news"] = "dart"
     press: Optional[str] = Field(None, description="기사면 언론사, 공시면 보고서 제목",
                                  examples=["전자신문"])
     published_at: Optional[str] = Field(None, examples=["2026-03-23"])
@@ -965,7 +968,9 @@ class Source(BaseModel):
     edge_id: Optional[str] = Field(None, description="근거가 관계에서 왔을 때만")
     text: str
     source_doc: str
-    source_type: Literal["dart", "news"] = "news"
+    # ★`Evidence.source_type` 을 그대로 물려받는다(`answer_service` 가 옮겨 담는다).
+    #   좁히면 근거에서 답변으로 넘어오는 길목에서만 값이 사라진다.
+    source_type: Literal["dart", "dart_filing", "news"] = "news"
     published_at: Optional[str] = Field(None, examples=["2026-03-23"])
 
 
