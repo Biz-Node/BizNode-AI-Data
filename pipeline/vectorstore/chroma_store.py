@@ -62,6 +62,19 @@ class ChromaStore(VectorStore):
             ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
         )
 
+    def update_metadata(
+        self,
+        collection: str,
+        ids: list[str],
+        metadatas: list[dict[str, Any]],
+    ) -> None:
+        """메타만 갱신 — `collection.update(ids=, metadatas=)` 는 임베딩을
+        다시 만들지 않는다(documents·embeddings 를 넘기지 않으므로).
+        """
+        if not ids:
+            return
+        self._col(collection).update(ids=ids, metadatas=metadatas)
+
     def get(self, collection: str, ids: list[str]) -> dict[str, Any]:
         return self._col(collection).get(ids=ids)
 
