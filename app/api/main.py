@@ -37,10 +37,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 
+from fastapi.concurrency import run_in_threadpool
+
 from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
 from app.core.trace import configure_logging
 from app.services.retrieve_service import RetrieveService
 from app.services.answer_service import AnswerService
+from app.graph.ask_graph import run_ask
+from app.graph.nodes.material import bind_service
 from app.services import (
     company_service,
     insight_service,
@@ -99,7 +103,13 @@ app = FastAPI(
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
 _retrieve_service = RetrieveService()
+# ★`AnswerService` 를 **지우지 않는다.** `/ask` 는 이제 그래프가 처리하지만,
+#   이쪽이 출력 대조의 **기준선**이다(`batch/audit/ask_graph_parity.py`).
+#   지우면 「그래프가 예전과 같은 답을 내는가」를 물을 수 없다.
 _answer_service = AnswerService(_retrieve_service)
+# 그래프도 **같은 인스턴스**를 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
+# 둘이 되어 커넥션·캐시가 갈린다.
+bind_service(_retrieve_service)
 
 
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
@@ -524,7 +534,15 @@ async def ask(body: AskRequest) -> AskResponse:
       근거를 담고 있다 — 답을 못 썼어도 근거는 보여줄 수 있다.
     - `missing=true` 였던 근거는 `sources` 에 오지 않는다.
     """
-    return await _answer_service.ask_async(body)
+    # ★실행 담당이 **LangGraph 로 넘어갔다**(Phase 1). 동작은 그대로다 —
+    #   재료 조립도 프롬프트도 후처리도 전부 같은 함수를 그대로 부른다.
+    #   실측(2026-08-27): 대표 질문 20개 전부 프롬프트·응답이 바이트까지 동일
+    #   (`batch/audit/ask_graph_parity.py`).
+    #
+    # ★그래프 노드는 전부 **sync** 다. 안이 Neo4j·PostgreSQL·OpenAI 왕복이라
+    #   이벤트루프에서 그냥 부르면 멈춘다 — `retrieve_async()` 와 같은 이유로
+    #   threadpool 로 내린다. `contextvars`(trace id)는 anyio 가 복사해 준다.
+    return await run_in_threadpool(run_ask, body)
 
 
 @app.get("/health", tags=["운영"], summary="상태 확인")

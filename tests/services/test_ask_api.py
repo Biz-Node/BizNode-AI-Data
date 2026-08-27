@@ -21,22 +21,24 @@ def client():
         yield c
 
 
-def _stub_service(payload: AskResponse):
-    from unittest.mock import MagicMock
+def _stub_graph(payload: AskResponse):
+    """`run_ask` 자리에 끼울 대역.
 
-    service = MagicMock()
-
-    async def _ask_async(body):
+    ★2026-08-27 — 라우트가 `AnswerService.ask_async()` 대신 **LangGraph** 를
+      부르게 바뀌었다(Phase 1). 이 파일이 보는 것은 예나 지금이나 **「라우트가
+      로직을 갖지 않고 위임하는가」** 하나라, 위임 대상 이름만 갈아 끼운다.
+      검사하는 것은 그대로다.
+    """
+    def _run_ask(body):
         return payload
 
-    service.ask_async = _ask_async
-    return service
+    return _run_ask
 
 
-def test_route_delegates_to_the_service(client, monkeypatch):
+def test_route_delegates_to_the_graph(client, monkeypatch):
     payload = AskResponse(answer="바꿔치기 답변", sources=[
         Source(evidence_id="ev_1", text="t", source_doc="d", source_type="news")])
-    monkeypatch.setattr(main_module, "_answer_service", _stub_service(payload))
+    monkeypatch.setattr(main_module, "run_ask", _stub_graph(payload))
 
     resp = client.post(_PATH, json={"question": "원래질문"})
 
@@ -57,7 +59,7 @@ def test_blank_question_is_422_not_500(client):
 
 def test_workspace_keys_are_accepted(client, monkeypatch):
     payload = AskResponse(answer="답")
-    monkeypatch.setattr(main_module, "_answer_service", _stub_service(payload))
+    monkeypatch.setattr(main_module, "run_ask", _stub_graph(payload))
 
     resp = client.post(_PATH, json={"question": "q", "workspace_keys": ["00126380"]})
 
