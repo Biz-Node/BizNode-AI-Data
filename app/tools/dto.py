@@ -59,6 +59,13 @@ ROLE_NOTE = {
 PER_NOTE_LOSS = "적자로 산출 불가"
 PER_NOTE_NO_FINANCIALS = "재무 미수집으로 산출 불가"
 
+# ★파급이 **보도된 것인가 계산된 것인가.** 섞어 말하면 추론을 사실로 파는 것이
+#   된다(설계서 §12 4등급). 실측(모트라스 파업): 124곳 = 보도 10 + 계산 114.
+STATED_NOTE = {
+    True: "기사가 직접 말한 파급 — 보도된 사실",
+    False: "공급망으로 계산한 파급 — 보도된 사실이 아니다",
+}
+
 # ★신선도 가중치. `pipeline/freshness.py` 의 `Freshness.confidence_factor` 와
 #   **같은 값이어야 한다.** 여기 적어 두는 것은 계약을 읽는 사람을 위해서지,
 #   계산을 두 벌 두려는 것이 아니다 — 계산은 `freshness.effective_confidence()`
@@ -74,8 +81,21 @@ FRESHNESS_WEIGHT = {"current": 1.0, "stale": 0.6, "expired": 0.3, "unknown": 0.7
 class RelationDTO(BaseModel):
     """관계 한 건. **엣지 속성을 그대로 펼치지 않는다.**"""
 
+    # ── 식별 — ★표기가 아니라 **되짚을 좌표**다 ────────────────
+    # 이것들이 없으면 근거를 관계에 되짚을 수 없어 `Source.edge_id` 가 비고,
+    # 워크스페이스 소속 표기(설계서 §12)도 붙일 수 없다. 둘 다 이미 나가 있는
+    # 계약이라 잃으면 응답이 후퇴한다.
+    edge_id: str = Field(
+        description="엣지 자체의 유일한 id(Neo4j elementId). ★`evidence_id` 를 "
+                    "쓰면 안 된다 — 한 근거가 여러 관계를 뒷받침해서 유일하지 "
+                    "않다(엣지 11,060건에 근거 9,228개)",
+        examples=["4:abc:123"])
     source: str = Field(description="출발 기업 이름", examples=["심텍"])
     target: str = Field(description="도착 기업 이름", examples=["SK하이닉스"])
+    source_key: str = Field(
+        description="출발 기업의 키. **표시용 이름이 아니라 식별자다**(설계서 §16-1)",
+        examples=["00152127"])
+    target_key: str = Field(description="도착 기업의 키", examples=["00164779"])
     edge_type: str = Field(examples=["SUPPLIES_TO"])
     subtype: Optional[str] = Field(None, description="근거에서 읽어낸 「무엇을」",
                                    examples=["반도체 PCB"])
@@ -174,6 +194,14 @@ class EventDTO(BaseModel):
                     "같은 사건이라도 기업마다 엮인 시점이 다를 수 있어 엣지에 있다",
         examples=["2026-06-11"])
 
+    # ★**이 기업이 이 사건에 엮인 근거만.** 같은 사건에 붙은 다른 기업의 근거는
+    #   들어 있지 않다 — 노드의 `evidence_ids` 는 모든 기업의 합집합이라, 그걸
+    #   쓰면 「SK하이닉스 노조」 질의에 현대오토에버 기사가 섞인다(2026-08-23).
+    evidence_ids: list[str] = Field(
+        default_factory=list,
+        description="이 기업의 `HAS_EVENT` 엣지에서 나온 근거 id",
+        examples=[["ev_1fdde758922d6de6"]])
+
     role: Literal["subject", "counterparty", "mentioned"] = Field(
         "subject", description="`HAS_EVENT` 엣지의 값")
     role_note: str = Field(
@@ -203,6 +231,42 @@ class EventDTO(BaseModel):
                     "담고 `timeline` 배열은 배열대로 둔다 — 둘은 서로를 대체하지 "
                     "않는다. 국면이 없으면 `None`",
         examples=["2026-04 파업 예고 → 2026-06 압수수색 → 2026-08 합의 (3국면)"])
+
+
+class PropagationDTO(BaseModel):
+    """리스크 파급 한 갈래. **질의 시점에 계산한 값이다.**
+
+    ★`stated` 를 **갈라 그려야 한다.** `true` 는 기사가 직접 말한 것, `false` 는
+      우리가 공급망으로 계산한 것이다. 섞으면 추론을 사실로 파는 것이 된다 —
+      실측(모트라스 파업): 124곳 = 보도 10 + 계산 114.
+
+    ★`RelationDTO` 와 달리 **`evidence_id` 가 없다.** 계산값에 근거 id 를
+      발급하면 `MarketDTO` 에서 막은 것과 같은 실수가 된다. 되짚을 좌표는
+      `event_id`(어느 사건에서 퍼졌나)와 `hops`(몇 다리 건넜나)다.
+    """
+
+    event_id: str = Field(
+        description="이 파급을 낳은 사건. **계산의 출발점 좌표다**",
+        examples=["evt_news_c915fa8bf141"])
+    target: str = Field(description="영향받는 기업 이름", examples=["현대차증권"])
+    key: Optional[str] = Field(
+        None, description="기업 키. **이름만 있고 노드가 없으면 `null`** — "
+                          "그때는 워크스페이스 소속을 판정하지 않는다",
+        examples=["00164779"])
+    score: float = Field(ge=0, le=1, examples=[0.297])
+
+    hops: int = Field(
+        description="1 = 보도된 것 · 2 이상 = 공급망으로 계산한 것", examples=[2])
+    stated: bool = Field(
+        description="기사가 **직접 말했나.** `false` 면 우리가 계산한 것이다")
+    stated_note: str = Field(
+        description="★`stated` 를 **문자열로도** 남긴다. `false` 라는 토큰만으로는 "
+                    "「우리가 계산한 추론」이라는 뜻이 전달되지 않는다. "
+                    "`STATED_NOTE[stated]` 를 그대로 쓴다",
+        examples=["공급망으로 계산한 파급 — 보도된 사실이 아니다"])
+    path: list[str] = Field(
+        default_factory=list,
+        description="파급이 지나온 경로. `hops` 와 길이가 맞아야 한다")
 
 
 # ══════════════════════════════════════════════════════════════════

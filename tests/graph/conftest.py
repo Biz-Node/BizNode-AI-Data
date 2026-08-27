@@ -15,9 +15,11 @@ from datetime import date
 
 import pytest
 
-from app.api.schemas import (Anchor, AnchorSource, AskRequest, Event, Evidence,
-                             Propagation, Relation, RelationEndpoint)
+from app.api.schemas import (Anchor, AnchorSource, AskRequest, Evidence,
+                             RelationEndpoint)
 from app.services.query_understanding import AnchorDecision
+from app.tools.dto import (DIRECTION_NOTE, ROLE_NOTE, SOURCE_NOTE, STATED_NOTE,
+                           EventDTO, PropagationDTO, RelationDTO)
 from search.dto.search_query import SearchQuery
 from search.dto.search_result import SearchResult
 from search.model.enums import SearchMode
@@ -32,18 +34,22 @@ def endpoint():
 
 
 @pytest.fixture
-def relation(endpoint):
-    return Relation(edge_id="e1", type="SUPPLIES_TO", subtype="공급",
-                    source=endpoint,
-                    target=RelationEndpoint(key=_HYNIX, name="SK하이닉스"),
-                    evidence_id="ev_rel", source_type="news")
+def relation():
+    """★1.5차부터 **도구가 만든 DTO** 다 — API 스키마 `Relation` 이 아니다."""
+    return RelationDTO(
+        edge_id="e1", source="삼성전자", target="SK하이닉스",
+        source_key=_SAMSUNG, target_key=_HYNIX,
+        edge_type="SUPPLIES_TO", subtype="공급", evidence_id="ev_rel",
+        source_type="news", source_note=SOURCE_NOTE["news"],
+        direction="directed", direction_note=DIRECTION_NOTE["directed"],
+        freshness="current", effective_confidence=0.9)
 
 
 @pytest.fixture
 def event():
-    return Event(event_id="evt_1", name="압수수색", event_type="규제수사",
-                 is_risk=True, role="subject", occurred_at="2026-06-11",
-                 evidence_ids=["ev_evt"])
+    return EventDTO(event_id="evt_1", name="압수수색", event_type="규제수사",
+                    is_risk=True, evidence_ids=["ev_evt"], role="subject",
+                    role_note=ROLE_NOTE["subject"], occurred_at="2026-06-11")
 
 
 @pytest.fixture
@@ -78,62 +84,79 @@ def request_():
 
 
 class FakeRetrieveService:
-    """노드가 부르는 메서드만 가진 대역. **무엇이 불렸는지 기록한다.**"""
+    """검색만 담당하는 대역 — 조회는 이제 **도구**가 한다(1.5차)."""
 
-    def __init__(self, *, query, result, events=(), propagation=(),
-                 relations=(), evidence=()):
-        self.calls: list[str] = []
+    def __init__(self, *, query, result, calls):
         self._query, self._result = query, result
-        self._events, self._propagation = list(events), list(propagation)
-        self._relations, self._evidence = list(relations), list(evidence)
-
         outer = self
 
         class _Orchestrator:
             def search(self, request):
-                outer.calls.append("search")
+                calls.append("search")
                 return outer._query, outer._result
 
         self._orchestrator = _Orchestrator()
 
-    def _events_of(self, companies, question, query, decision):
-        self.calls.append("_events_of")
-        return list(self._events)
 
-    def _propagation_of(self, events):
-        self.calls.append("_propagation_of")
-        return list(self._propagation)
+class FakeTools:
+    """도구 자리의 대역. **무엇이 불렸는지 기록한다.**
 
-    def _relations_of(self, companies, workspace_keys, query, decision):
-        self.calls.append("_relations_of")
-        return list(self._relations)
+    ★1.5차에서 이음매가 `RetrieveService._events_of` 등에서 **도구**로 옮겨졌다.
+      이 파일이 보는 것은 예나 지금이나 「노드가 순서대로 위임하는가」 하나다.
+    """
 
-    def _evidence_of(self, events, relations, result):
-        self.calls.append("_evidence_of")
-        return list(self._evidence)
+    def __init__(self, *, events, relations, propagation, evidence, calls):
+        self.events, self.relations = list(events), list(relations)
+        self.propagation, self.evidence = list(propagation), list(evidence)
+        self.calls = calls
+        self.scopes: list[frozenset] = []
+
+    def _note_scope(self):
+        from app.tools import scope
+
+        self.scopes.append(scope.allowed_keys())
+
+    def get_events(self, keys, intent, role="subject"):
+        self.calls.append("get_events")
+        self._note_scope()
+        return list(self.events)
+
+    def get_relations(self, keys, edge_types=None, direction=None):
+        self.calls.append("get_relations")
+        self._note_scope()
+        return list(self.relations)
+
+    def get_propagation(self, event_ids):
+        self.calls.append("get_propagation")
+        return list(self.propagation)
 
 
 @pytest.fixture
-def fake_service(query, result, event, relation, evidence):
-    return FakeRetrieveService(
-        query=query, result=result, events=[event], relations=[relation],
-        propagation=[Propagation(target="현대오토에버", key=None, score=0.3, hops=2,
-                                 stated=False, path=[])],
-        evidence=[evidence])
-
-
-@pytest.fixture
-def wired(monkeypatch, fake_service, decision):
+def wired(monkeypatch, query, result, event, relation, evidence, decision):
     """그래프가 대역만 보게 묶는다. `(그래프, 대역)` 을 돌려준다."""
     from app.graph import ask_graph as ask_graph_module
     from app.graph.nodes import material
 
-    monkeypatch.setattr(material, "_service", fake_service)
+    calls: list[str] = []
+    tools = FakeTools(
+        events=[event], relations=[relation],
+        propagation=[PropagationDTO(event_id="evt_1", target="현대오토에버", key=None,
+                                    score=0.3, hops=2, stated=False,
+                                    stated_note=STATED_NOTE[False], path=["a", "b"])],
+        evidence=[evidence], calls=calls)
+    tools.calls = calls
+
+    monkeypatch.setattr(material, "_service",
+                        FakeRetrieveService(query=query, result=result, calls=calls))
     monkeypatch.setattr(material.workspace_service, "names_of",
                         lambda keys: dict(decision.workspace_names))
     monkeypatch.setattr(material.query_understanding, "decide_anchor",
                         lambda question, resolved, names: decision)
-    return ask_graph_module.build_ask_graph(), fake_service
+    for name in ("get_events", "get_relations", "get_propagation"):
+        monkeypatch.setattr(material.graph_tools, name, getattr(tools, name))
+    monkeypatch.setattr(material.relation_service, "evidence_for_ids",
+                        lambda ids: [e.model_dump() for e in tools.evidence])
+    return ask_graph_module.build_ask_graph(), tools
 
 
 class FakeLLM:

@@ -12,10 +12,14 @@
 
 from __future__ import annotations
 
-from app.api.schemas import AnchorSource, RetrieveResponse
+from app.api.schemas import AnchorSource, Evidence
 from app.core.trace import trace_logger
 from app.graph.state import AskState
-from app.services import evidence_selector, query_understanding, workspace_service
+from app.services import (evidence_selector, query_understanding, relation_service,
+                          workspace_service)
+from app.services.retrieve_service import _MAX_LOGGED_EVIDENCE
+from app.tools import graph_tools
+from app.tools.scope import anchor_scope
 from app.services.retrieve_service import (RetrieveService, _anchor_companies,
                                            _companies_from,
                                            _hits_reflect_the_anchor,
@@ -180,47 +184,99 @@ def plan_material(state: AskState) -> AskState:
 # ══════════════════════════════════════════════════════════════════
 
 
-def fetch_events(state: AskState) -> AskState:
-    """사건. `RetrieveService._events_of()` 그대로다.
+def _scope_keys(state: AskState) -> list[str]:
+    """도구가 만질 수 있는 key — **서버가 정한 재료 범위**다.
 
-    ★저 메서드가 `anchor_names`·`intent` 를 **자기 안에서 다시 계산**하는데,
-      `plan_material` 이 쓴 것과 **같은 계산식**이라 값이 같다(그래서 출력이
-      안 바뀐다). 중복을 없애려면 `RetrieveService` 를 고쳐야 하는데 그건
-      Phase 1 범위 밖이다 — `/retrieve` 를 건드리지 않는다.
+    ★`companies` 와 앵커를 **합친다.** 앵커만 두면 `use_hits=True` 경로가
+      막힌다 — 그때 `companies` 는 검색 히트의 관계 상대이지 앵커가 아니다
+      (「삼성전자에 납품하는 기업」의 재료는 공급사들이다). 반대로 `companies`
+      만 두면 백스톱 이전 상태의 앵커를 못 쓴다.
+
+    ★**요청이 준 값이 아니다.** `workspace_keys` 를 그대로 넣지 않는다 —
+      범위는 「서버가 이 질문의 재료로 고른 것」이지 「사용자가 담아 둔 것」이
+      아니다. 넓히면 도구가 재료 밖 기업을 조회할 수 있게 된다.
     """
-    return {"events": _svc()._events_of(
-        state["companies"], state["request"].question,
-        state["query"], state["decision"])}
+    keys = [c.key for c in state["companies"]]
+    keys += [a.key for a in state["decision"].anchors]
+    return list(dict.fromkeys(k for k in keys if k))
+
+
+def _scope(state: AskState):
+    """도구가 읽을 **서버 쪽 문맥**을 세운다 — 범위 + 랭킹 문맥.
+
+    ★`workspace_keys`·`anchor_keys` 를 도구 인자로 넘기지 않는다. 링(ring)
+      순서와 방향 판정이 그 값을 쓰는데, 인자면 2차의 Agent 가 「워크스페이스는
+      필터가 아니라 랭킹 문맥」(설계서 §3)이라는 정책을 스스로 바꿀 수 있다.
+    """
+    return anchor_scope(
+        _scope_keys(state),
+        workspace_keys=state["request"].workspace_keys,
+        anchor_keys=[a.key for a in state["decision"].anchors],
+        anchor_names=state["anchor_names"])
+
+
+def fetch_events(state: AskState) -> AskState:
+    """사건. **도구가 만든다**(Phase 1.5).
+
+    ★`role=None` 을 넘긴다. 도구 기본값은 `"subject"` 지만(Agent 가 붙었을 때의
+      안전한 기본 — 「이 기업에 난 일」은 `subject` 만이다), 1차의 `_events_of()`
+      는 role 을 거르지 않았다. 여기서 거르면 **재료 집합이 달라져** 대조가
+      성립하지 않는다. 거를지는 사람이 정할 일이다.
+    """
+    with _scope(state):
+        return {"events": graph_tools.get_events(
+            [c.key for c in state["companies"]], state["intent"], role=None)}
 
 
 def fetch_propagation(state: AskState) -> AskState:
-    """파급. ★**사건이 있어야 계산된다** — 사건 노드 뒤에만 온다(설계서 §13)."""
-    return {"propagation": _svc()._propagation_of(state["events"])}
+    """파급. ★**사건이 있어야 계산된다** — 사건 노드 뒤에만 온다(설계서 §13).
+
+    ★`is_risk` 가 아닌 사건은 계산하지 않는다. 상한은 도구 안에 있다(원칙 ③).
+    """
+    risky = [e.event_id for e in state["events"] if e.is_risk]
+    return {"propagation": graph_tools.get_propagation(risky)}
 
 
 def fetch_relations(state: AskState) -> AskState:
-    """관계. 링(ring) 순서로 줄을 세운 뒤 자르는 규칙까지 그대로다(설계서 §3)."""
-    return {"relations": _svc()._relations_of(
-        state["companies"], set(state["request"].workspace_keys),
-        state["query"], state["decision"])}
+    """관계. **도구가 만든다**(Phase 1.5).
+
+    ★`edge_types` 는 **거르지 않고 순서만** 정한다 — 워크스페이스가 hard filter
+      가 아닌 것과 같은 이유다(설계서 §3).
+    """
+    query = state["query"]
+    with _scope(state):
+        return {"relations": graph_tools.get_relations(
+            [c.key for c in state["companies"]],
+            edge_types=query.edge_types,
+            direction=getattr(query.direction, "value", None))}
 
 
 def fetch_evidence(state: AskState) -> AskState:
-    """근거를 모으고 **`/retrieve` 와 같은 DTO 로 묶는다.**
+    """관계·사건·검색히트의 근거 id 를 **합집합으로 모아 한 번에** 조회한다.
+
+    셋을 다 모으는 이유는 출처가 셋이기 때문이다 — 관계에 달린 근거, 사건에
+    달린 근거, 검색이 짚어 준 근거. 어느 하나만 보면 답변이 인용할 수 있는
+    문장이 줄어든다.
 
     ★히트를 재료로 **안 써도 그 근거는 그대로 모은다.** 한 번 걸러 봤다가
-      실측으로 되돌렸다(현황서 §8-6).
+      실측으로 되돌렸다(현황서 §8-6) — 여기 든 근거의 절반가량이 워크스페이스에
+      닿아, 거르면 질문이 물은 사례를 버린다.
+
+    ★못 꺼낸 근거를 **조용히 빼지 않는다.** `missing=True` 로 남긴다 —
+      빼면 「근거가 없는 관계」로 읽힌다.
     """
-    evidence = _svc()._evidence_of(
-        state["events"], state["relations"], state["result"])
-    retrieved = RetrieveResponse(
-        question=state["request"].question,
-        match_type=_match_type_of(state["result"]),
-        anchors=state["decision"].anchors,
-        companies=state["companies"],
-        events=state["events"],
-        relations=state["relations"],
-        propagation=state["propagation"],
-        evidence=evidence,
-    )
-    return {"evidence": evidence, "retrieved": retrieved}
+    from_relations = [r.evidence_id for r in state["relations"] if r.evidence_id]
+    from_events = [eid for event in state["events"] for eid in event.evidence_ids]
+    from_hits = [ref["evidence_id"] for hit in state["result"].hits
+                 for ref in hit.evidence if ref.get("evidence_id")]
+    ids = from_relations + from_events + from_hits
+
+    evidence = [Evidence(**row) for row in relation_service.evidence_for_ids(ids)]
+
+    # 출처별로 갈라 남긴다 — 합계만 있으면 「근거가 왜 이것뿐인가」를 못 따진다.
+    log.info("evidence.collect from_relations=%d from_events=%d from_hits=%d "
+             "unique=%d -> fetched=%d missing=%d ids=%s",
+             len(from_relations), len(from_events), len(from_hits), len(set(ids)),
+             len(evidence), sum(1 for e in evidence if e.missing),
+             [e.evidence_id for e in evidence[:_MAX_LOGGED_EVIDENCE]])
+    return {"evidence": evidence, "match_type": _match_type_of(state["result"])}

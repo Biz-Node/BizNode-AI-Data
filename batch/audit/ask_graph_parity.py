@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from typing import Any, Optional
 from unittest.mock import patch
 
@@ -70,6 +71,40 @@ _CANNED = {
 _WORKSPACE = ["00126380", "00164779"]
 
 
+def _real_embed():
+    """진짜 임베더. **패치되기 전 값**을 그때그때 읽는다."""
+    from app.services import retrieve_service as rs
+
+    return rs._default_embed
+
+
+class EmbedCacheMiss(RuntimeError):
+    """대조 중 임베딩 캐시가 빗나갔다 — **결과를 믿을 수 없다.**"""
+
+
+class _SimsWatch:
+    """`similarities()` 가 **빈 dict** 를 돌려준 적이 있는지 지켜본다.
+
+    ★비면 `select()` 의 4단 정렬에서 **유사도 단계가 통째로 빠진다**
+      (`evidence_selector.py:146`). 그 실행의 사건 순서는 다른 규칙으로 정해진
+      것이라, 그걸 「1차와 같다/다르다」의 근거로 쓰면 안 된다.
+    """
+
+    def __init__(self) -> None:
+        self.empty = 0
+        self.calls = 0
+
+    def wrap(self, real):
+        def _similarities(events, *, intent, embed, anchor_names):
+            got = real(events, intent=intent, embed=embed, anchor_names=anchor_names)
+            self.calls += 1
+            # 사건이 없거나 의도가 없으면 애초에 안 부른다 — 그건 degrade 가 아니다.
+            if not got and events and intent.strip() and embed is not None:
+                self.empty += 1
+            return got
+        return _similarities
+
+
 class _CachedEmbed:
     """텍스트별로 **한 번만** 진짜 임베딩을 부르고 캐시한다.
 
@@ -78,19 +113,33 @@ class _CachedEmbed:
       흔들린 것을 그래프 회귀로 오독한다.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, strict: bool = False, real=None) -> None:
+        # ★진짜 임베더를 **생성 시점에 붙잡는다.** 호출 시점에 다시 import 하면,
+        #   이 캐시가 `retrieve_service._default_embed` 자리에 끼워져 있으므로
+        #   **자기 자신을 부른다**(실측: 재귀로 300회 넘게 돌고 캐시는 0 이었다).
+        self._real = real
         self._cache: dict[str, list[float]] = {}
         self.failures = 0
         self.calls = 0
+        self.hits = 0
+        self.misses = 0
+        # ★`strict` 면 **캐시에 없는 텍스트를 만나는 순간 멈춘다.** 실제 호출로
+        #   폴백하지 않는다 — 폴백하면 방어가 사라지고, 하필 그 한 번이 실패하면
+        #   1차와 똑같이 「도구화 회귀」로 오독된다.
+        self.strict = strict
 
     def __call__(self, texts: list[str]) -> list[list[float]]:
-        from app.services.retrieve_service import _default_embed
-
         missing = [t for t in dict.fromkeys(texts) if t not in self._cache]
+        self.hits += len(texts) - len(missing)
+        self.misses += len(missing)
+        if missing and self.strict:
+            raise EmbedCacheMiss(
+                f"임베딩 캐시 미스 {len(missing)}건 — 두 경로가 다른 텍스트를 "
+                f"임베딩하려 한다. 폴백하지 않고 멈춘다. 예: {missing[0][:60]!r}")
         if missing:
             self.calls += 1
             try:
-                for text, vector in zip(missing, _default_embed(missing)):
+                for text, vector in zip(missing, self._real(missing)):
                     self._cache[text] = vector
             except Exception:
                 # ★조용히 넘어가지 않는다. 캐시가 비면 `similarities()` 가
@@ -99,6 +148,12 @@ class _CachedEmbed:
                 self.failures += 1
                 raise
         return [self._cache[t] for t in texts]
+
+    def freeze(self) -> "_CachedEmbed":
+        """지금까지 채운 캐시를 그대로 물려받되 **미스를 금지하는** 사본."""
+        clone = _CachedEmbed(strict=True, real=self._real)
+        clone._cache = self._cache
+        return clone
 
 
 class _Recorder:
@@ -254,7 +309,9 @@ class _LogCapture:
 def compare_logs(question: str) -> dict:
     """완료 기준 ③ — 같은 순서·같은 내용 + trace id 가 노드 경계를 넘는가."""
     request = AskRequest(question=question, workspace_keys=list(_WORKSPACE))
-    embed = _CachedEmbed()
+    from app.services import retrieve_service as rs
+
+    embed = _CachedEmbed(real=rs._default_embed)
 
     with _LogCapture() as base_log:
         _run_service(request, embed)
@@ -292,6 +349,243 @@ def report_logs(row: dict) -> int:
             print("     ", line[:120])
     print("═" * 66)
     return 0 if row["same"] and row["trace_propagated"] else 1
+
+
+# ══════════════════════════════════════════════════════════════════
+#  재료 집합 대조 — ★완료 기준 ① (Phase 1.5)
+# ══════════════════════════════════════════════════════════════════
+#
+# ★**프롬프트 바이트 비교를 끈다.** 1.5차는 표기를 붙이므로 프롬프트가 달라지는
+#   것이 정상이다. 같아야 하는 것은 **무엇을 담았나**지 어떻게 썼나가 아니다.
+
+
+def _materials_of_service(request: AskRequest) -> dict:
+    """1차 기준선의 재료 — `RetrieveService.retrieve_for_ask()`."""
+    from app.services.retrieve_service import RetrieveService
+
+    _decision, retrieved = RetrieveService().retrieve_for_ask(request)
+    if retrieved is None:                      # unresolved — 재료를 안 만든다
+        return {"companies": set(), "events": set(), "relations": set(),
+                "evidence": set()}
+    return {
+        "companies": {c.key for c in retrieved.companies},
+        "events": {e.event_id for e in retrieved.events},
+        "relations": {(r.source.name, r.type.value, r.target.name)
+                      for r in retrieved.relations},
+        "evidence": {e.evidence_id for e in retrieved.evidence},
+    }
+
+
+def _materials_of_graph(request: AskRequest) -> tuple[dict, dict]:
+    """도구 경로의 재료 + 관측값(프롬프트 길이·role 분포)."""
+    from app.graph.ask_graph import build_ask_graph
+    from app.graph.nodes import answer as answer_nodes
+    from app.graph.state import initial_state
+
+    rec = _Recorder()
+    with patch.object(answer_nodes, "_llm", rec):
+        state = build_ask_graph().invoke(initial_state(request))
+
+    materials = {
+        "companies": {c.key for c in state.get("companies", [])},
+        "events": {e.event_id for e in state.get("events", [])},
+        "relations": {(r.source, r.edge_type, r.target)
+                      for r in state.get("relations", [])},
+        "evidence": {e.evidence_id for e in state.get("evidence", [])},
+    }
+    observed = {
+        "prompt_chars": len(rec.user or ""),
+        "roles": Counter(e.role for e in state.get("events", [])),
+    }
+    return materials, observed
+
+
+def _excluded_counts(request: AskRequest, companies) -> dict[str, int]:
+    """의심 표시로 **몇 건이 빠졌나** — 도구가 안 뺐다면 몇 건이 더 있었을까."""
+    from app.services import company_service
+    from app.tools import graph_tools
+
+    events_suspect = relations_suspect = 0
+    for company in companies:
+        norms = company_service.norm_names_by_keys([company])
+        for norm in norms.values():
+            events_suspect += sum(1 for r in company_service.events_of(norm)
+                                  if r.get("eventness_suspect"))
+            relations_suspect += sum(1 for r in company_service.relations_of(norm)
+                                     if r.get("verdict") in graph_tools._HIDE)
+    return {"eventness_suspect": events_suspect,
+            "grounding_suspect": relations_suspect}
+
+
+def compare_materials(question: str) -> dict:
+    """질문 하나 — 1차 재료 집합과 도구 경로 재료 집합을 비교한다."""
+    request = AskRequest(question=question, workspace_keys=list(_WORKSPACE))
+
+    # ★**임베더를 한 자리에서 갈아끼운다.** `retrieve_service._default_embed` 는
+    #   기준선(`_events_of`)과 도구(`graph_tools._embed()`)가 **둘 다** 늦게
+    #   읽는 이름이라, 여기만 바꾸면 두 경로가 같은 벡터를 본다.
+    #   `RetrieveService(embed=...)` 로는 도구 경로에 안 닿는다 — 도구는
+    #   서비스 인스턴스를 거치지 않는다.
+    #
+    # ★기준선을 먼저 돌려 캐시를 채우고, 도구 경로는 **얼린 캐시**로 돈다.
+    #   미스가 나면 폴백하지 않고 그 자리에서 멈춘다 — 그게 방어선이다.
+    from app.services import retrieve_service as rs
+
+    warm = _CachedEmbed(real=rs._default_embed)   # ★패치 **전에** 붙잡는다
+    watch = _SimsWatch()
+    real_similarities = evidence_selector.similarities
+    with patch.object(evidence_selector, "similarities", watch.wrap(real_similarities)):
+        with patch.object(rs, "_default_embed", warm):
+            base = _materials_of_service(request)
+        frozen = warm.freeze()
+        with patch.object(rs, "_default_embed", frozen):
+            graph, observed = _materials_of_graph(request)
+
+    diffs = {}
+    for key in ("companies", "events", "relations", "evidence"):
+        only_base = base[key] - graph[key]
+        only_graph = graph[key] - base[key]
+        if only_base or only_graph:
+            diffs[key] = {"only_base": sorted(only_base)[:8],
+                          "only_graph": sorted(only_graph)[:8],
+                          "n_only_base": len(only_base),
+                          "n_only_graph": len(only_graph),
+                          "_only_base_all": only_base, "_only_graph_all": only_graph}
+
+    expected, why = _classify(diffs)
+    return {
+        "question": question,
+        "base": base, "graph": graph, "diffs": diffs,
+        # ★「같다」와 「예상된 차이다」를 **가른다.** 합쳐 세면 의심 표시 제외로
+        #   줄어든 것과 도구화 회귀가 같아 보인다.
+        "materials_same": not diffs,
+        "expected_only": expected, "why": why,
+        "diff_summary": "; ".join(
+            f"{k}: 1차만 {v['n_only_base']} · 도구만 {v['n_only_graph']}"
+            for k, v in diffs.items()) or "동일",
+        "excluded": _excluded_counts(request, base["companies"]),
+        "prompt_chars": observed["prompt_chars"],
+        "roles": observed["roles"],
+        # ★대조의 전제 조건. 하나라도 어긋나면 이 행은 무효다.
+        "cache_hits": frozen.hits, "cache_misses": frozen.misses,
+        "sims_empty": watch.empty > 0, "sims_calls": watch.calls,
+    }
+
+
+def _classify(diffs: dict) -> tuple[bool, str]:
+    """차이가 **예상된 것뿐인가.** `(예상됨, 사유)`.
+
+    예상되는 것은 하나뿐이다 — `eventness_suspect` 제외와 **그로 인해 빈 자리로
+    올라온 사건**(상한이 기업당 10건이라 하나 빠지면 하나 올라온다), 그리고 그
+    사건들을 따라 달라지는 근거다.
+
+    ★기업·관계가 달라지면 **예상 밖**이다. 의심 표시 제외는 그 둘을 건드리지 않는다.
+    """
+    from app.core.database import neo4j_session
+
+    if not diffs:
+        return True, "차이 없음"
+    for key in ("companies", "relations"):
+        if key in diffs:
+            return False, f"{key} 가 달라졌다 — 의심 표시 제외로는 안 생기는 차이다"
+
+    ev = diffs.get("events")
+    if ev:
+        ids = sorted(ev["_only_base_all"] | ev["_only_graph_all"])
+        with neo4j_session() as s:
+            suspect = {r["id"] for r in s.run(
+                "MATCH (e:Event) WHERE e.event_id IN $ids AND "
+                "coalesce(e.eventness_suspect,false) RETURN e.event_id AS id", ids=ids)}
+        not_suspect = ev["_only_base_all"] - suspect
+        if not_suspect:
+            return False, (f"1차에만 있는 사건 중 의심 표시가 아닌 것 "
+                           f"{len(not_suspect)}건: {sorted(not_suspect)[:4]}")
+        promoted = ev["_only_graph_all"] & suspect
+        if promoted:
+            return False, f"의심 표시 사건이 도구 쪽에 올라왔다: {sorted(promoted)[:4]}"
+    return True, ("eventness_suspect 제외와 그로 인한 빈 자리 승격, "
+                  "그리고 그 사건들을 따라간 근거 차이뿐")
+
+
+def report_materials(rows: list[dict]) -> int:
+    """실측 요약. 반환값은 종료 코드 — 예상 밖 차이가 있으면 1."""
+    invalid = [r for r in rows if r["cache_misses"] or r["sims_empty"]]
+    same = [r for r in rows if r["materials_same"]]
+    expected = [r for r in rows if not r["materials_same"] and r["expected_only"]]
+    unexpected = [r for r in rows if not r["expected_only"]]
+
+    print("\n" + "═" * 72)
+    print(f"■ 재료 집합 대조 — 질문 {len(rows)}개  (프롬프트 바이트 비교는 끈다)")
+    print(f"   1차와 **완전히 동일**        {len(same):>3}")
+    print(f"   ★예상된 차이만 (의심 표시 제외) {len(expected):>3}")
+    print(f"   ❌예상 밖 차이               {len(unexpected):>3}")
+
+    for r in expected:
+        ev = r["diffs"].get("evidence", {})
+        e = r["diffs"].get("events", {})
+        print(f"\n   · {r['question']}")
+        print(f"       사건  1차에만 {e.get('n_only_base', 0)} {e.get('only_base', [])}")
+        print(f"             도구에만 {e.get('n_only_graph', 0)} {e.get('only_graph', [])}"
+              "   ← 빈 자리로 올라온 것")
+        if ev:
+            print(f"       근거  1차에만 {ev['n_only_base']} · 도구에만 "
+                  f"{ev['n_only_graph']}   ← 위 사건을 따라간 것")
+
+    for r in unexpected:
+        print(f"\n   ✗ {r['question']}  — {r['why']}")
+        for key, d in r["diffs"].items():
+            print(f"      {key}: 1차에만 {d['n_only_base']}건 {d['only_base']}")
+            print(f"      {' ' * len(key)}  도구에만 {d['n_only_graph']}건 {d['only_graph']}")
+
+    # ── 의심 표시 제외 — 예상된 차이 ──────────────────────────
+    print("\n■ 의심 표시로 뺀 건수 (★예상된 차이)")
+    print(f"   {'질문':38}{'eventness':>11}{'grounding':>11}")
+    tot_e = tot_g = 0
+    for r in rows:
+        e, g = r["excluded"]["eventness_suspect"], r["excluded"]["grounding_suspect"]
+        tot_e += e
+        tot_g += g
+        if e or g:
+            print(f"   {r['question'][:36]:38}{e:>11}{g:>11}")
+    print(f"   {'합계':38}{tot_e:>11}{tot_g:>11}")
+    print("   ★`grounding` 이 **0 인 것이 정상**이다 — `company_service._relation()`")
+    print("     이 이미 같은 `_HIDE` 를 적용해 도구까지 오지 않는다(2026-08-28 실측:")
+    print("     suspect 507건 중 449건이 Service 에서 빠지고 wrong_type 58건만 남는데,")
+    print("     그 58건은 두 경로 모두 **의도적으로** 남긴다). 0 이 아니면 위쪽 규칙이")
+    print("     바뀐 것이므로 그때 이 줄이 알려 준다.")
+
+    # ── 프롬프트 길이 — 완료 기준 ② ──────────────────────────
+    chars = [r["prompt_chars"] for r in rows if r["prompt_chars"]]
+    if chars:
+        print("\n■ 프롬프트 길이 (표기가 붙어 늘어난다)")
+        print(f"   최대 {max(chars):,}자 · 평균 {sum(chars)//len(chars):,}자 · "
+              f"최소 {min(chars):,}자")
+        print(f"   과거 터진 지점 34,430자 대비 최대치 여유: "
+              f"{34430 - max(chars):+,}자")
+
+    # ── role 분포 — fetch_events 가 role=None 을 넘기는 근거 ──
+    roles = Counter()
+    for r in rows:
+        roles.update(r["roles"])
+    print(f"\n■ 사건 role 분포: {dict(roles)}")
+    print("   ★`fetch_events` 는 `role=None`(전부)을 넘긴다. 도구 기본값인")
+    print("     `subject` 로 거르면 위 subject 외 건수만큼 재료가 줄어든다.")
+
+    # ── 전제 조건 ────────────────────────────────────────────
+    hits = sum(r["cache_hits"] for r in rows)
+    misses = sum(r["cache_misses"] for r in rows)
+    print(f"\n■ 대조 전제 조건")
+    print(f"   임베딩 캐시  히트 {hits:,} · 미스 {misses:,}   "
+          f"{'✅ 미스 0' if misses == 0 else '❌ 미스가 있다 — 결과 무효'}")
+    print(f"   유사도 정렬이 빠진 실행: {sum(1 for r in rows if r['sims_empty'])}건 / "
+          f"similarities 호출 {sum(r['sims_calls'] for r in rows)}회   "
+          f"{'✅ 없음' if not invalid else '❌ 있다 — 해당 행 무효'}")
+    print("═" * 72)
+    if invalid:
+        print(f"★전제가 깨진 질문 {len(invalid)}개 — 이 대조 결과는 무효다: "
+              f"{[r['question'] for r in invalid]}")
+        return 1
+    return 0 if not unexpected else 1
 
 
 def _first_diff(a: Optional[str], b: Optional[str]) -> str:
@@ -363,9 +657,19 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=len(QUESTIONS))
     ap.add_argument("--question", help="질문 하나만 돌린다")
+    ap.add_argument("--materials", action="store_true",
+                    help="재료 집합을 1차와 비교한다(Phase 1.5 완료 기준 ①)")
     ap.add_argument("--logs", action="store_true",
                     help="로그 순서·내용과 trace id 전파를 대조한다(완료 기준 ③)")
     args = ap.parse_args()
+
+    if args.materials:
+        questions = [args.question] if args.question else QUESTIONS[:args.limit]
+        rows = []
+        for i, question in enumerate(questions, 1):
+            print(f"[{i}/{len(questions)}] {question}")
+            rows.append(compare_materials(question))
+        return report_materials(rows)
 
     if args.logs:
         return report_logs(compare_logs(args.question or QUESTIONS[11]))
@@ -377,7 +681,7 @@ def main() -> int:
     rows, failures = [], 0
     for i, question in enumerate(questions, 1):
         print(f"[{i}/{len(questions)}] {question}")
-        embed = _CachedEmbed()
+        embed = _CachedEmbed(real=_real_embed())
         try:
             rows.append(compare(question, embed))
         except Exception as exc:

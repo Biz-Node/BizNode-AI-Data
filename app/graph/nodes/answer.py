@@ -17,12 +17,11 @@ from app.graph.state import AskState
 from app.llm.adapter import LLMAdapter, LangChainAdapter
 from app.llm.schemas import AskAnswer
 from app.services import claim_check, evidence_selector
+from app.graph import prompt
 from app.services.answer_service import (_NO_WORKSPACE_MESSAGE, _SAFE_FALLBACK,
                                          _SAFE_MESSAGE, _STRIP_UNLINKED_CLAIMS,
-                                         _SYSTEM_PROMPT, _build_user_prompt,
-                                         _event_types_by_evidence,
-                                         _fallback_sources, _no_material,
-                                         _sources_from, _unresolved_message)
+                                         _SYSTEM_PROMPT, _no_material,
+                                         _unresolved_message)
 from app.services.retrieve_service import _default_embed
 
 log = trace_logger(__name__)
@@ -44,16 +43,26 @@ def bind_llm(adapter: LLMAdapter) -> None:
 
 
 def build_prompt(state: AskState) -> AskState:
-    """사용자 프롬프트를 조립한다. `_build_user_prompt()` 그대로다."""
-    retrieved = state["retrieved"]
-    user = _build_user_prompt(state["request"].question, retrieved, state["decision"])
+    """사용자 프롬프트를 조립한다. **DTO 를 읽는 `app/graph/prompt.py` 가 쓴다.**
+
+    ★`answer_service._build_user_prompt()` 를 쓰지 않는다 — 저쪽은 API 스키마
+      객체를 읽고 표기가 없다. 고치면 `AnswerService.ask()`(대조 기준선)가 같이
+      움직인다(현황서 §5-28).
+    """
+    decision = state["decision"]
+    user = prompt.build_user_prompt(
+        state["request"].question,
+        match_type=state["match_type"], companies=state["companies"],
+        events=state["events"], relations=state["relations"],
+        propagation=state["propagation"], evidence=state["evidence"],
+        anchor_source=decision.source, workspace_names=decision.workspace_names)
 
     # ★프롬프트는 **길이만** 남긴다 — 본문에 시스템 지시문과 근거 원문이 통째로
     #   들어 있어, 그대로 찍으면 로그가 근거 사본이 된다(설계서 §13-2).
     log.info("llm.request match_type=%s companies=%d relations=%d evidence=%d "
              "prompt_chars=%d",
-             retrieved.match_type.value, len(retrieved.companies),
-             len(retrieved.relations), len(retrieved.evidence), len(user))
+             state["match_type"].value, len(state["companies"]),
+             len(state["relations"]), len(state["evidence"]), len(user))
     return {"user_prompt": user}
 
 
@@ -81,13 +90,15 @@ def verify_sources(state: AskState) -> AskState:
       방어(델리미터 + 시스템 프롬프트)만 걸고, 이 화이트리스트 검증을 실질적
       2차 방어선으로 삼는다.
     """
-    retrieved, result = state["retrieved"], state["llm_result"]
+    result = state["llm_result"]
+    evidence, relations = state["evidence"], state["relations"]
     answer = result.get("answer", "")
     cited = result.get("evidence_ids", [])
     # 빈 답변도 실패로 취급한다(설계서 §13-5). 실패면 필터링 근거가 없으니
     # missing 만 뺀 원본 전부를 돌려준다.
     failed = bool(result.get("failed")) or not answer.strip()
-    sources = _fallback_sources(retrieved) if failed else _sources_from(cited, retrieved)
+    sources = (prompt.fallback_sources(evidence, relations) if failed
+               else prompt.sources_from(cited, evidence, relations))
     accepted = [source.evidence_id for source in sources]
 
     # ★「최종 근거가 어디서 만들어졌는가」에 답하는 줄이다. `dropped` 는 LLM 이
@@ -121,18 +132,17 @@ def check_claims(state: AskState) -> AskState:
     if not claims:
         return {}
 
-    retrieved, decision = state["retrieved"], state["decision"]
-    intent = state["intent"]
+    decision, intent = state["decision"], state["intent"]
     checked = claim_check.check(
-        claims, {e.evidence_id: e for e in retrieved.evidence},
+        claims, {e.evidence_id: e for e in state["evidence"]},
         # ★파급 대상을 넘겨야 claim ⑤(우리가 계산한 파급)와 ⑥(자유 결합)이
         #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
-        propagation_targets=[p.target for p in retrieved.propagation],
+        propagation_targets=[p.target for p in state["propagation"]],
         # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고 워크스페이스
         #   기업 중 하나로 귀속시키는」 실패를 센다.
         workspace_names=list(decision.workspace_names.values()),
         embed=_default_embed, intent=intent,
-        event_types_by_evidence=_event_types_by_evidence(retrieved),
+        event_types_by_evidence=prompt.event_types_by_evidence(state["events"]),
         matched_event_types=evidence_selector.matched_event_types(intent))
     summary = claim_check.summarize(checked)
     log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "

@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from typing import Any, Optional, TypedDict
 
-from app.api.schemas import (AskRequest, AskResponse, Event, Evidence, Propagation,
-                             Relation, RelationEndpoint, RetrieveResponse, Source)
+from app.api.schemas import (AskRequest, AskResponse, Evidence, MatchType,
+                             RelationEndpoint, Source)
 from app.services.query_understanding import AnchorDecision
+from app.tools.dto import EventDTO, PropagationDTO, RelationDTO
 from search.dto.search_query import SearchQuery
 from search.dto.search_result import SearchResult
 
@@ -74,12 +75,18 @@ class AskState(TypedDict, total=False):
     intent: str
 
     # ── fetch_* 노드 ──────────────────────────────────────────
-    events: list[Event]
-    propagation: list[Propagation]
-    relations: list[Relation]
+    # ★1.5차부터 **도구가 만든 DTO** 다(`app/tools/dto.py`). API 스키마의
+    #   `Event`·`Relation`·`Propagation` 이 아니다 — 그것들은 표기가 없어서
+    #   LLM 이 `score=0.9`·`stated=False`·`role=mentioned` 를 제 뜻대로 읽는다.
+    #   재료 자체는 1차와 **같다**(`ask_graph_parity.py --materials`).
+    events: list[EventDTO]
+    propagation: list[PropagationDTO]
+    relations: list[RelationDTO]
+    # ★근거만은 API 스키마 그대로다 — `Source` 로 그대로 옮겨 담기고
+    #   `claim_check`·`material_consistency` 가 이 모양을 읽는다.
     evidence: list[Evidence]
-    # 위 넷을 담은 `/retrieve` 와 **같은 DTO**. `_build_user_prompt` 가 이걸 받는다.
-    retrieved: RetrieveResponse
+    # 검색이 어느 경로로 답했나. `[사실]` 첫 줄이 이걸 쓴다.
+    match_type: MatchType
 
     # ── build_prompt · generate 노드 ──────────────────────────
     user_prompt: str

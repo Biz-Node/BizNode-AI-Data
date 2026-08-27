@@ -109,7 +109,8 @@ def find_by_names(names: list[str]) -> Optional[dict]:
 
 _BY_KEY_Q = """
 MATCH (c:Company) WHERE c.corp_code IN $k OR c.norm_name IN $k
-RETURN coalesce(c.corp_code, c.norm_name) AS key, c.name AS name
+RETURN coalesce(c.corp_code, c.norm_name) AS key, c.name AS name,
+       c.norm_name AS norm_name
 """
 
 
@@ -129,6 +130,25 @@ def names_by_keys(keys: list[str]) -> dict[str, str]:
         return {}
     with neo4j_session() as s:
         return {r["key"]: r["name"] for r in s.run(_BY_KEY_Q, k=unique)}
+
+
+def norm_names_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → **`norm_name`.** 그래프에 없는 key 는 빠진다.
+
+    ★`names_by_keys()` 와 **같은 질의**를 쓴다(컬럼 하나만 더 읽는다) — 조회를
+      두 벌 두지 않는다. 저쪽은 표시용 `name` 을, 여기는 **식별용 `norm_name`**
+      을 준다. 설계서 §16-1 의 식별 우선순위(`corp_code` → `norm_name`)에서
+      `name` 은 식별에 쓰지 않는다.
+
+    ★도구 계층(`app/tools/`)이 「조용한 0건」을 실패로 바꾸는 데 쓴다.
+      `events_of()` 는 못 찾은 key 에 예외가 아니라 빈 목록을 주기 때문이다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["norm_name"] for r in s.run(_BY_KEY_Q, k=unique)
+                if r["norm_name"]}
 
 
 _NON_COMPANY_Q = """
@@ -208,6 +228,23 @@ def _relation(src: dict, tgt: dict, etype: str, p: dict,
         "score": score,
         "corroboration": corr,
         "source_type": p.get("source_type") or "news",
+        # ★아래 둘은 **API 응답에 안 나간다.** `Relation`·`CompanyDetail` 이
+        #   pydantic 기본값(`extra="ignore"`)이라 모델을 지나며 떨어진다 —
+        #   실제로 `/retrieve`·`/companies/{key}`·`/companies/{key}/relations`
+        #   전부 `Relation(**row)` 를 거친다. 도구 계층(`app/tools/`)만 이 raw
+        #   dict 를 직접 읽는다.
+        #
+        #   `confidence` — `score` 는 corroboration 보정과 wrong_type 벌점까지
+        #   곱한 뒤 1.0 에서 잘린 값이라 **되돌릴 수 없다.** `RelationDTO.
+        #   effective_confidence`(= confidence × 신선도 가중치)를 만들려면
+        #   원래 값이 필요하다.
+        "confidence": conf,
+        #   `verdict` — 근거 검증 판정(`supported`/`wrong_type`/…). **원시
+        #   `grounding_suspect` 가 아니라 이 값을 싣는다.** 의심 표시가 붙어도
+        #   `wrong_type` 은 **관계 자체는 실재**하므로 남기고 점수만 깎는 것이
+        #   이 저장소의 규칙이고(`graph_service._HIDE` 와 같다), 원시 플래그를
+        #   실으면 도구가 그 규칙을 모른 채 `wrong_type` 까지 지운다.
+        "verdict": _verdict(p),
         "refresh_cycle_days": int(cycle) if cycle is not None else None,
         "days_since": fr.days_since,
         "days_until_refresh": left,
@@ -410,7 +447,8 @@ def relations_of(key: str, *, limit: Optional[int] = None,
 _EVENT_Q = """
 MATCH (c:Company)-[h:HAS_EVENT]->(e:Event)
 WHERE c.corp_code = $k OR c.norm_name = $k
-RETURN properties(e) AS e, properties(h) AS h
+OPTIONAL MATCH (e)-[i:IMPACTS]->(c)
+RETURN properties(e) AS e, properties(h) AS h, i.sign AS sign
 ORDER BY coalesce(h.occurred_at, e.last_seen) DESC
 """
 
@@ -466,6 +504,15 @@ def events_of(key: str) -> list[dict]:
             "name": e.get("name") or "",
             "event_type": e.get("event_type") or "기타",
             "is_risk": bool(e.get("is_risk")),
+            # ★`Event` 가 pydantic 기본값(`extra="ignore"`)이라 **API 응답에는
+            #   안 나간다.** 사건이 아닌 것으로 보이는 83건에 붙은 표시로
+            #   (ERD §「표시만 하고 안 지운다」), 도구 계층만 이걸 읽어 뺀다.
+            "eventness_suspect": bool(e.get("eventness_suspect")),
+            # ★사건의 **극성** — `IMPACTS` 엣지에 있다(negative/positive/neutral).
+            #   `HAS_EVENT` 1,062건 중 711건이 짝을 갖는다(2026-08-28 실측).
+            #   한 (기업,사건) 쌍에 `IMPACTS` 는 최대 1개라 행이 불어나지 않는다.
+            #   `Event` 가 `extra="ignore"` 라 **API 응답에는 안 나간다.**
+            "sign": row.get("sign"),
             "role": h.get("role") or "subject",
             "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
             "article_count": int(e.get("article_count") or 1),

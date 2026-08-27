@@ -23,7 +23,7 @@ _PRODUCES = {
     "fetch_events": ("events",),
     "fetch_propagation": ("propagation",),
     "fetch_relations": ("relations",),
-    "fetch_evidence": ("evidence", "retrieved"),
+    "fetch_evidence": ("evidence", "match_type"),
     "build_prompt": ("user_prompt",),
     "generate": ("llm_result",),
     "verify_sources": ("answer", "failed", "sources"),

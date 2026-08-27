@@ -101,7 +101,12 @@ def test_occurred_at_is_optional_because_it_comes_from_the_edge():
 # ══════════════════════════════════════════════════════════════════
 
 def _rel(**kw):
-    base = dict(source="심텍", target="SK하이닉스", edge_type="SUPPLIES_TO",
+    # ★`edge_id`·`source_key`·`target_key` 는 1.5차에서 더해진 **식별** 필드다
+    #   (표기가 아니다). 없으면 근거를 관계에 되짚을 수 없어 `Source.edge_id` 가
+    #   비고, 워크스페이스 소속 표기도 못 붙인다 — 둘 다 이미 나가 있는 계약이다.
+    base = dict(edge_id="e1", source="심텍", target="SK하이닉스",
+                source_key="00152127", target_key="00164779",
+                edge_type="SUPPLIES_TO",
                 source_type="news", source_note=dto.SOURCE_NOTE["news"],
                 direction="directed", direction_note=dto.DIRECTION_NOTE["directed"],
                 effective_confidence=0.9)
@@ -170,6 +175,18 @@ def test_effective_confidence_is_bounded():
 # ══════════════════════════════════════════════════════════════════
 #  BusinessOverviewDTO
 # ══════════════════════════════════════════════════════════════════
+
+def test_relation_dto_keeps_the_identity_fields():
+    """★1.5차 추가 — 되짚을 좌표가 DTO 에 남아 있어야 한다.
+
+    `edge_id` 가 없으면 `Source.edge_id` 가 전부 `null` 이 되고,
+    `source_key`·`target_key` 가 없으면 워크스페이스 소속 표기(설계서 §12)가
+    사라진다. 둘 다 표기가 아니라 **식별**이다.
+    """
+    for field in ("edge_id", "source_key", "target_key"):
+        assert field in RelationDTO.model_fields, field
+    assert "evidence_ids" in EventDTO.model_fields
+
 
 def test_business_overview_dto_keeps_source_doc():
     """★`source_doc` 이 rcept_no 라, 나중에 `Evidence` 로 승격할 때 필요하다."""

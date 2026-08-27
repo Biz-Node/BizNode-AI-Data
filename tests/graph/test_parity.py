@@ -34,4 +34,6 @@ def test_material_set_matches_the_phase1_baseline(question):
 
     assert row["cache_misses"] == 0, "임베딩 캐시 미스 — 대조 결과를 믿을 수 없다"
     assert not row["sims_empty"], "유사도 정렬이 빠진 실행이 있다 — 결과 무효"
-    assert row["materials_same"], row["diff_summary"]
+    # ★「같다」가 아니라 「예상된 차이뿐이다」를 본다 — 의심 표시 제외로
+    #   줄어든 것과 도구화 회귀를 합쳐 세면 안 된다.
+    assert row["expected_only"], f"{row['why']} / {row['diff_summary']}"

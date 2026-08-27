@@ -88,6 +88,6 @@ def test_resolved_path_runs_every_fetch(wired, fake_llm, request_):
     graph, service = wired
     graph.invoke({"request": request_})
 
-    assert service.calls == ["search", "_events_of", "_propagation_of",
-                             "_relations_of", "_evidence_of"]
+    assert service.calls == ["search", "get_events", "get_propagation",
+                             "get_relations"]
     assert fake_llm.calls == 1
