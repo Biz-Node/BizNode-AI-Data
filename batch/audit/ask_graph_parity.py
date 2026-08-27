@@ -363,16 +363,20 @@ def _materials_of_service(request: AskRequest) -> dict:
     """1차 기준선의 재료 — `RetrieveService.retrieve_for_ask()`."""
     from app.services.retrieve_service import RetrieveService
 
-    _decision, retrieved = RetrieveService().retrieve_for_ask(request)
+    from app.services.answer_service import _build_user_prompt
+
+    decision, retrieved = RetrieveService().retrieve_for_ask(request)
     if retrieved is None:                      # unresolved — 재료를 안 만든다
         return {"companies": set(), "events": set(), "relations": set(),
-                "evidence": set()}
+                "evidence": set(), "prompt_chars": 0}
     return {
         "companies": {c.key for c in retrieved.companies},
         "events": {e.event_id for e in retrieved.events},
         "relations": {(r.source.name, r.type.value, r.target.name)
                       for r in retrieved.relations},
         "evidence": {e.evidence_id for e in retrieved.evidence},
+        # ★1차 프롬프트 길이 — 표기가 얼마나 늘렸는지 재려면 기준선이 필요하다.
+        "prompt_chars": len(_build_user_prompt(request.question, retrieved, decision)),
     }
 
 
@@ -441,6 +445,7 @@ def compare_materials(question: str) -> dict:
         with patch.object(rs, "_default_embed", frozen):
             graph, observed = _materials_of_graph(request)
 
+    base_chars = base.pop("prompt_chars", 0)
     diffs = {}
     for key in ("companies", "events", "relations", "evidence"):
         only_base = base[key] - graph[key]
@@ -464,7 +469,7 @@ def compare_materials(question: str) -> dict:
             f"{k}: 1차만 {v['n_only_base']} · 도구만 {v['n_only_graph']}"
             for k, v in diffs.items()) or "동일",
         "excluded": _excluded_counts(request, base["companies"]),
-        "prompt_chars": observed["prompt_chars"],
+        "prompt_chars": observed["prompt_chars"], "base_prompt_chars": base_chars,
         "roles": observed["roles"],
         # ★대조의 전제 조건. 하나라도 어긋나면 이 행은 무효다.
         "cache_hits": frozen.hits, "cache_misses": frozen.misses,
@@ -555,13 +560,37 @@ def report_materials(rows: list[dict]) -> int:
     print("     바뀐 것이므로 그때 이 줄이 알려 준다.")
 
     # ── 프롬프트 길이 — 완료 기준 ② ──────────────────────────
-    chars = [r["prompt_chars"] for r in rows if r["prompt_chars"]]
-    if chars:
-        print("\n■ 프롬프트 길이 (표기가 붙어 늘어난다)")
-        print(f"   최대 {max(chars):,}자 · 평균 {sum(chars)//len(chars):,}자 · "
-              f"최소 {min(chars):,}자")
-        print(f"   과거 터진 지점 34,430자 대비 최대치 여유: "
-              f"{34430 - max(chars):+,}자")
+    pairs = [(r["base_prompt_chars"], r["prompt_chars"]) for r in rows
+             if r["prompt_chars"]]
+    if pairs:
+        deltas = [g - b for b, g in pairs if b]
+        ratios = [g / b for b, g in pairs if b]
+        base_max = max(b for b, _ in pairs)
+        graph_max = max(g for _, g in pairs)
+        print("\n■ 프롬프트 길이 — 표기가 붙어 늘어난다 (완료 기준 ②)")
+        print(f"   {'':10}{'1차':>12}{'1.5차':>12}{'증가':>12}")
+        print(f"   {'최대':10}{base_max:>12,}{graph_max:>12,}"
+              f"{graph_max - base_max:>+12,}")
+        print(f"   {'평균':10}{sum(b for b, _ in pairs)//len(pairs):>12,}"
+              f"{sum(g for _, g in pairs)//len(pairs):>12,}"
+              f"{sum(deltas)//len(deltas):>+12,}")
+        print(f"   증가율  평균 {sum(ratios)/len(ratios):.2f}배 · "
+              f"최대 {max(ratios):.2f}배")
+        # ★34,430 은 과거 한 번 터졌던 지점이다. **표기가 넘긴 것이 아님**을
+        #   가려서 적는다 — 1차에서 이미 넘고 있었는지가 핵심이다.
+        over_graph = [r["question"] for r in rows if r["prompt_chars"] > 34430]
+        over_base = [r["question"] for r in rows if r["base_prompt_chars"] > 34430]
+        print(f"\n   ★과거 터진 지점 34,430자 — 1.5차 최대 {graph_max:,}자 "
+              f"({34430 - graph_max:+,})")
+        print(f"     넘는 질문   1차 {len(over_base)}개 → 1.5차 {len(over_graph)}개")
+        if len(over_graph) == len(over_base):
+            print("     ★**표기가 넘긴 것이 아니다.** 1차에서 이미 같은 질문들이 "
+                  "넘고 있었고,")
+            print(f"       표기가 더한 것은 최대 {graph_max - base_max:,}자"
+                  f"({(graph_max / base_max - 1) * 100:.1f}%)뿐이다.")
+        newly = sorted(set(over_graph) - set(over_base))
+        if newly:
+            print(f"     ★표기 때문에 새로 넘은 질문 {len(newly)}개: {newly}")
 
     # ── role 분포 — fetch_events 가 role=None 을 넘기는 근거 ──
     roles = Counter()
