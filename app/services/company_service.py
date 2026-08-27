@@ -246,6 +246,58 @@ def _financials(cur, corp_code: str, limit: int = 3) -> list[dict]:
     return out
 
 
+_OVERVIEW_Q = """SELECT corp_code, bsns_year, overview_text, products_text, source_doc
+                 FROM business_overview WHERE corp_code = %s"""
+
+
+def business_overview_of(key: str, *, year: Optional[int] = None) -> Optional[dict]:
+    """사업보고서 「사업의 내용」 **원문.** 없으면 `None`.
+
+    ★`company_profiles` 와 갈라 두는 이유 — 저쪽은 **우리가 쓴 요약**이라
+      인용하면 우리 문장을 근거로 삼는 셈이 된다. 이 표는 사업보고서 본문
+      그대로라 **챗봇이 인용할 수 있는 유일한 재무계 텍스트**다.
+      (실측 2026-08-27: 64행 · 기업 64곳 · 전부 2025년 · `products_text` 는 63행)
+
+    ★`source_doc` 을 **반드시 함께 준다.** 이 값이 DART 접수번호라, 나중에
+      이 텍스트를 `Evidence` 로 승격할 때 되짚을 출처가 된다. 지금은 승격하지
+      않는다 — 여기까지가 조회다.
+
+    `company_detail` 안에서 `overview_text` 만 최신 1건 읽는 자리는 그대로
+    둔다. 저기는 화면 블록 채우기고, 여기는 인용 재료를 통째로 꺼내는 입구다.
+
+    Args:
+        key: `corp_code` 이거나 `norm_name`.
+        year: 사업연도. 주지 않으면 **가장 최근 연도**.
+    """
+    with neo4j_session() as s:
+        node = _node(s, key)
+    corp = (node or {}).get("corp_code")
+    if not corp:
+        return None
+
+    sql, params = _OVERVIEW_Q, [corp]
+    if year is None:
+        sql += " ORDER BY bsns_year DESC LIMIT 1"
+    else:
+        sql += " AND bsns_year = %s"
+        params.append(year)
+    with postgres_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+    if not row:
+        return None
+
+    code, bsns_year, overview_text, products_text, source_doc = row
+    # `character(8)`·`character(14)` 는 고정폭이라 공백이 붙어 나올 수 있다.
+    return {
+        "corp_code": code.strip() if code else None,
+        "bsns_year": int(bsns_year),
+        "overview_text": overview_text,
+        "products_text": products_text,
+        "source_doc": source_doc.strip() if source_doc else None,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════
 #  시장 — 저장하지 않고 조회할 때 계산한 값을 읽는다
 # ══════════════════════════════════════════════════════════════════
