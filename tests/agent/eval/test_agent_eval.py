@@ -35,15 +35,9 @@ from app.api.schemas import AnchorSource
 from app.graph import budget
 from app.tools import agent_tools, citation
 from tests.agent.eval.cases import CASES, REQUIRED_COVERAGE, AgentEvalCase
-from tests.agent.eval.runner import CaseRun, run_all
+from tests.agent.eval.runner import CaseRun
 
 pytestmark = pytest.mark.needs_llm
-
-
-@pytest.fixture(scope="session")
-def runs() -> dict[str, CaseRun]:
-    """★케이스마다 **한 번만** 돌린다 — 세션 스코프인 이유가 비용이다."""
-    return run_all()
 
 
 def _params() -> list:
