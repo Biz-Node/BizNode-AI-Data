@@ -61,10 +61,18 @@ _MAX_EVENTS_PER_COMPANY = 10
 
 def _default_embed(texts: list[str]):
     """지연 로딩 — 임포트 시점에 OpenAI 클라이언트를 만들지 않는다. 테스트는
-    이 이름을 monkeypatch 해서 끈다(`None` 이면 유사도 없이 규칙만 쓴다)."""
+    이 이름을 monkeypatch 해서 끈다(`None` 이면 유사도 없이 규칙만 쓴다).
+
+    ★**영속 캐시를 거친다**(2026-08-28). OpenAI 임베딩은 같은 입력에 같은 벡터를
+      보장하지 않고, 편차가 배치 크기에 붙어 있다(150건에서 2.1e-03). 그러면
+      가까이 붙은 두 사건의 순위가 실행마다 뒤집혀 **기준선이 흔들린다** —
+      평가셋 점수 차이를 무엇에 귀속시킬지 못 정하게 된다.
+      까닭과 실측은 `app/services/embedding_cache.py` 에 적어 뒀다.
+    """
+    from app.services.embedding_cache import embed_with_cache
     from pipeline.vectorstore.chroma_store import get_store
 
-    return get_store().embed(texts)
+    return embed_with_cache(texts, lambda missing: get_store().embed(missing))
 
 
 def _merge_evidence_ids(target: Event, other: Event) -> None:

@@ -159,10 +159,47 @@ def test_recent_events_win_when_risk_and_similarity_tie():
 
 
 def test_selection_is_stable_for_identical_events():
-    """동점이면 입력 순서를 지킨다 — 같은 질문에 매번 다른 답이 나오면 안 된다."""
+    """★동점이면 **`event_id` 사전순**으로 확정한다(2026-08-28 변경).
+
+    전에는 「입력 순서를 지킨다」였다. 그런데 입력 순서는
+    `company_service.events_of()` 가 준 Neo4j 행 순서이고, 그 `ORDER BY
+    coalesce(h.occurred_at, e.last_seen)` 에는 **동점 해소가 없다** — 실측에서는
+    안정적이었지만 계약이 아니라 관측일 뿐이라, 언제 바뀌어도 이상하지 않은
+    것에 결정성을 기대고 있었다.
+    """
     events = [_event(f"e{i}", "같은 사건", "사업확장") for i in range(4)]
     kept, _ = sel.select(events, matched=frozenset(), sims={}, limit=2)
     assert [e.event_id for e in kept] == ["e0", "e1"]
+
+
+def test_full_ties_no_longer_depend_on_the_input_order():
+    """★**입력 순서를 뒤집어도 같은 결과**여야 한다 — 그게 전과 달라진 점이다."""
+    ids = ["e3", "e1", "e0", "e2"]
+    events = [_event(i, "같은 사건", "사업확장") for i in ids]
+    kept, _ = sel.select(events, matched=frozenset(), sims={}, limit=2)
+
+    assert [e.event_id for e in kept] == ["e0", "e1"]
+
+    reversed_input = [_event(i, "같은 사건", "사업확장") for i in reversed(ids)]
+    kept2, _ = sel.select(reversed_input, matched=frozenset(), sims={}, limit=2)
+    assert [e.event_id for e in kept2] == ["e0", "e1"]
+
+
+def test_the_tiebreak_never_outranks_a_real_signal():
+    """★**정렬 기준을 바꾼 것이 아니다.** `event_id` 는 위 네 신호가 **전부
+    같을 때만** 보인다 — 유사도·위험·최신·규칙 티어를 이기면 안 된다."""
+    # 사전순으로는 z9 가 뒤인데, 유사도가 높으므로 앞에 서야 한다
+    events = [_event("a1", "낮은 유사도", "사업확장"),
+              _event("z9", "높은 유사도", "사업확장")]
+    kept, _ = sel.select(events, matched=frozenset(),
+                         sims={"a1": 0.10, "z9": 0.90}, limit=2)
+    assert [e.event_id for e in kept] == ["z9", "a1"]
+
+    # 규칙 티어도 마찬가지
+    events = [_event("a1", "티어 없음", "사업확장"),
+              _event("z9", "티어 있음", "분쟁소송")]
+    kept, _ = sel.select(events, matched=frozenset({"분쟁소송"}), sims={}, limit=2)
+    assert [e.event_id for e in kept] == ["z9", "a1"]
 
 
 # ── 유사도 계산 ──────────────────────────────────────────────────────────

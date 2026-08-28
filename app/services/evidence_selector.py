@@ -161,11 +161,24 @@ def select(
 
     약한 신호부터 차례로 정렬한다(파이썬 정렬은 안정적이라 뒤 정렬이 이긴다):
 
-        최신순 → 위험사건 → 유사도 → 규칙 티어
+        event_id → 최신순 → 위험사건 → 유사도 → 규칙 티어
 
-    동점이면 입력 순서가 남는다 — 같은 질문에 매번 다른 답이 나오면 안 된다.
+    ★**맨 아래가 `event_id` 다**(2026-08-28). 전에는 「동점이면 입력 순서가
+      남는다」였는데, 입력 순서는 `company_service.events_of()` 가 준 Neo4j 행
+      순서이고 그 `ORDER BY` 에는 **동점 해소가 없다.** 실측에서는 안정적이었지만
+      계약이 아니라 관측일 뿐이라, 언제든 바뀔 수 있는 것에 결정성을 기대고
+      있었다. 이제 모든 신호가 같으면 `event_id` 사전순으로 확정된다.
+
+      ★**정렬 기준을 바꾼 것이 아니다.** 위 네 신호의 우선순위와 방향은 그대로고,
+        넷이 **전부 같을 때만** 이 키가 보인다. 실행 간 재현성만 는다.
+
+      ★이것만으로는 부족하다. 순위를 실제로 흔든 것은 동점이 아니라 **임베딩
+        값의 흔들림**이었고(`embedding_cache.py`), 그건 값이 달라서 정렬이
+        매번 다르게 **확정**되던 것이다. 이 키는 캐시가 못 막는 자리 —
+        캐시 미스·임베딩 실패로 `sims` 가 비어 진짜 동점이 되는 경우 — 를 맡는다.
     """
     ordered = list(events)
+    ordered.sort(key=lambda e: e.event_id)
     ordered.sort(key=lambda e: e.occurred_at or "", reverse=True)
     ordered.sort(key=lambda e: not e.is_risk)
     ordered.sort(key=lambda e: -sims.get(e.event_id, 0.0))
