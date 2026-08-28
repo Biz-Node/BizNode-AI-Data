@@ -98,6 +98,7 @@ app = FastAPI(
     ],
 )
 
+
 # ★프로세스당 하나. 안에서 SearchOrchestrator 를 들고 있어(커넥션·캐시) 요청마다
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
@@ -114,6 +115,7 @@ _retrieve_service = RetrieveService()
 # 그래프는 위 인스턴스를 **그대로** 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
 # 둘이 되어 커넥션·캐시가 갈린다.
 bind_service(_retrieve_service)
+
 
 
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
@@ -228,7 +230,7 @@ def events_of(key: str) -> list[Event]:
 #   대체할 수 없다.
 @app.get("/companies/{key}/news", response_model=list[NewsItem], tags=["기업"],
          summary="근거가 된 기사 전체")
-def news_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[NewsItem]:
+def news_of(key: str, limit: int = Query(20, ge=1, le=1000)) -> list[NewsItem]:
     """근거가 된 기사 목록. 상세는 **10건**까지.
 
     **본문은 없다**(저작권). 제목·언론사·발행일·링크까지다. 인용이 필요하면
@@ -239,7 +241,7 @@ def news_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[NewsItem]:
 
 @app.get("/companies/{key}/filings", response_model=list[Filing], tags=["기업"],
          summary="DART 공시 전체")
-def filings_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[Filing]:
+def filings_of(key: str, limit: int = Query(20, ge=1, le=1000)) -> list[Filing]:
     """DART 공시 목록. 상세는 **10건**까지. **시드 64곳에만 있다.**"""
     return [Filing(**f) for f in company_service.filings_of(key, limit=limit)]
 
@@ -523,7 +525,7 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     # ★이 라우트는 **어댑터다.** 로직은 RetrieveService 에 있다 — 추론 담당은
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
-    return await _retrieve_service.retrieve_async(body)
+    return await _get_retrieve_service().retrieve_async(body)
 
 
 @app.post("/ask", response_model=AskResponse, tags=["챗봇"],
