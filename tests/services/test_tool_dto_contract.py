@@ -196,3 +196,45 @@ def test_business_overview_dto_keeps_source_doc():
                             source_doc="20260310002820")
     assert b.source_doc == "20260310002820"
     assert b.products_text is None       # 없는 행이 실재한다 — ''로 바꾸지 않는다
+
+
+# ══════════════════════════════════════════════════════════════════
+#  provenance — 「어떻게 손에 들어왔나」의 자리
+# ══════════════════════════════════════════════════════════════════
+
+def test_provenance_defaults_to_direct_on_both_dtos():
+    """★기본값이 `direct` 여야 **기존 코드가 안 깨진다.** 1.5차의 도구는
+    provenance 를 넘기지 않는다 — 넘겨야 한다면 그건 회귀다."""
+    assert _rel().provenance == dto.PROVENANCE_DIRECT
+    e = EventDTO(event_id="evt_1", name="압수수색", event_type="규제수사",
+                 role="subject", role_note=dto.ROLE_NOTE["subject"])
+    assert e.provenance == dto.PROVENANCE_DIRECT
+
+
+def test_provenance_allows_only_the_two_declared_values():
+    """★`explored` 는 **2차에서 쓸 자리**다. 타입에 미리 넣어 두는 것은 값을
+    미리 만드는 것이 아니라, 2차가 스키마를 고치지 않아도 되게 하는 것이다."""
+    assert dto.PROVENANCE_DIRECT == "direct"
+    assert dto.PROVENANCE_EXPLORED == "explored"
+    assert _rel(provenance="explored").provenance == "explored"
+    with pytest.raises(ValidationError):
+        _rel(provenance="guessed")
+
+
+def test_propagation_has_no_provenance():
+    """★파급은 **언제나 계산값**이라 구별할 두 경로가 없다. `stated` 가 이미
+    「보도된 것 vs 계산한 것」을 가르므로 provenance 를 얹으면 축이 둘이 된다."""
+    from app.tools.dto import PropagationDTO
+
+    assert "provenance" not in PropagationDTO.model_fields
+
+
+def test_graph_tools_never_emit_explored_yet():
+    """★1.5차에는 **탐색 경로가 없다.** 도구가 `explored` 를 만들면 그건
+    이 단계에서 만들지 않기로 한 기능이 들어온 것이다."""
+    import inspect
+
+    from app.tools import graph_tools
+
+    source = inspect.getsource(graph_tools)
+    assert "explored" not in source, "탐색 로직이 도구에 들어왔다 — 2차 작업이다"

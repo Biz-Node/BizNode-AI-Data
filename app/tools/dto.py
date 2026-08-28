@@ -59,6 +59,14 @@ ROLE_NOTE = {
 PER_NOTE_LOSS = "적자로 산출 불가"
 PER_NOTE_NO_FINANCIALS = "재무 미수집으로 산출 불가"
 
+# ★**어떻게 손에 들어온 사실인가.** 직접 조회한 것과 Agent 가 탐색으로 발견한
+#   것을 구별하지 못하면, 「우리가 찾아간 것」과 「우리가 물어본 것」이 같은
+#   무게로 읽힌다. 지금은 `direct` 하나뿐이고 `explored` 는 2차에서 쓴다 —
+#   **값을 미리 만들어 두는 것이 아니라 자리를 미리 비워 두는 것**이다.
+PROVENANCE_DIRECT = "direct"
+PROVENANCE_EXPLORED = "explored"
+
+
 # ★파급이 **보도된 것인가 계산된 것인가.** 섞어 말하면 추론을 사실로 파는 것이
 #   된다(설계서 §12 4등급). 실측(모트라스 파업): 124곳 = 보도 10 + 계산 114.
 STATED_NOTE = {
@@ -162,6 +170,15 @@ class RelationDTO(BaseModel):
                     "구별이 안 된다",
         examples=["0.72%"])
 
+    # ── 출처 경로 ──────────────────────────────────────────────
+    provenance: Literal["direct", "explored"] = Field(
+        "direct",
+        description="★**어떻게 손에 들어왔나.** `direct` 는 서버가 정한 재료 "
+                    "범위에서 직접 조회한 것, `explored` 는 2차 Agent 가 탐색으로 "
+                    "발견한 것이다. 지금은 `direct` 뿐이다 — 탐색 경로가 아직 "
+                    "없으므로 `explored` 를 만드는 코드도 없다",
+        examples=["direct"])
+
 
 # ══════════════════════════════════════════════════════════════════
 #  사건
@@ -231,6 +248,15 @@ class EventDTO(BaseModel):
                     "담고 `timeline` 배열은 배열대로 둔다 — 둘은 서로를 대체하지 "
                     "않는다. 국면이 없으면 `None`",
         examples=["2026-04 파업 예고 → 2026-06 압수수색 → 2026-08 합의 (3국면)"])
+
+    # ── 출처 경로 ──────────────────────────────────────────────
+    provenance: Literal["direct", "explored"] = Field(
+        "direct",
+        description="★**어떻게 손에 들어왔나.** `direct` 는 서버가 정한 재료 "
+                    "범위에서 직접 조회한 것, `explored` 는 2차 Agent 가 탐색으로 "
+                    "발견한 것이다. 지금은 `direct` 뿐이다 — 탐색 경로가 아직 "
+                    "없으므로 `explored` 를 만드는 코드도 없다",
+        examples=["direct"])
 
 
 class PropagationDTO(BaseModel):
