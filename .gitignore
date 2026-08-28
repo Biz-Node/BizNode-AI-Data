@@ -10,6 +10,10 @@ documents/
 run_chroma.py
 docs/superpowers/
 
+# 에이전트 작업 계획 — **내가 무엇을 하고 있나**의 기록이지 코드가 아니다.
+# (planning-with-files 가 `.planning/<날짜>-<이름>/` 에 task_plan·findings·progress
+#  세 파일을 둔다. 세션마다·병렬 작업마다 하나씩 생긴다.)
+.planning/
 
 # DB 덤프 — 팀원에게 **파일로 직접** 넘기는 것이지 저장소에 올리는 게 아니다.
 # (2026-08-08: 89MB. GitHub는 100MB 파일을 거부하고, 한번 커밋되면 이력에 남아
