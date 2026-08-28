@@ -80,8 +80,12 @@ class Observation:
     ring_kept: Counter = field(default_factory=Counter)
     relations_kept: int = 0
     relations_cut: int = 0
-    # edge_id → ring. ★인용된 관계의 링을 되짚으려고 둔다.
+    # edge_id → ring. ★인용된 관계의 링을 되짚으려고 둔다. 겸해서 **중복 계수를
+    #   막는 열쇠**다 — 여기 이미 있으면 그 관계는 다시 안 센다.
     ring_by_edge: dict[str, int] = field(default_factory=dict)
+    # kept 로 센 edge_id. ★`ring_by_edge` 와 따로 둔다 — 「봤다」와 「남았다」는
+    #   다른 사건이고, 한 관계가 본 뒤에 잘릴 수도 있다.
+    _kept_edges: set[str] = field(default_factory=set)
 
     # ── 인용 ──────────────────────────────────────────────────
     # **최종 답변이 인용한** 관계의 링 분포. 도구가 본 분포와 다를 수 있고,
@@ -189,22 +193,52 @@ def record_rings(by_ring: Mapping[int, Sequence], kept: Sequence,
 
     ★`kept` 는 원시 row 리스트다(`_relation_dto` 로 만들기 전). `edge_id` 와
       링을 짝지어 둬야 나중에 **인용된 관계의 링**을 되짚을 수 있다.
+
+    ★**`edge_id` 로 중복을 접는다 — 「관계 몇 개」이지 「호출 × 관계」가 아니다.**
+
+      이 함수는 `get_relations` **호출마다** 불린다. 접지 않고 더하면 Agent 가
+      같은 기업으로 도구를 두 번 부를 때 같은 관계가 두 번 세어진다. 그런데
+      **몇 번 부를지는 LLM 이 정한다** — 그러면 링 수치가 랭킹이 아니라 도구
+      선택에 흔들리고, 「링 분포가 왜 달라졌나」에 답할 수 없게 된다.
+
+      실측(2026-08-28): 같은 20 케이스에서 `get_relations` 호출이 7회였던 실행과
+      3회였던 실행이 있었고, 그 사이 `ring_seen` R1 이 754 → 746, R3 가 63 → 50
+      으로 움직였다. 랭킹은 그 사이 **링 안 순서만** 바뀌었는데(41bb1bb),
+      `relation_selector.order()` 는 길이를 보존하므로 링별 **개수**를 바꿀 수
+      없다 — 즉 그 움직임은 전부 이 중복 계수 탓이었다.
+
+      ★`app/services/embedding_cache.py` 가 임베딩 값에 대해 막아 둔 것과 **같은
+        종류의 귀속 문제**다. 2차의 완료 기준이 평가셋 점수라, 점수 차이를
+        무엇에 귀속시킬지 못 정하면 기준 자체가 성립하지 않는다.
     """
     seen = _BUCKET.get()
     if seen is None:
         return
     for ring, rows in by_ring.items():
-        seen.ring_seen[ring] += len(rows)
         for row in rows:
             edge_id = row.get("edge_id")
-            if edge_id:
-                seen.ring_by_edge[str(edge_id)] = ring
+            if not edge_id:
+                continue
+            edge_id = str(edge_id)
+            if edge_id in seen.ring_by_edge:
+                continue                      # 이미 본 관계 — 두 번 세지 않는다
+            seen.ring_by_edge[edge_id] = ring
+            seen.ring_seen[ring] += 1
     for row in kept:
         edge_id = row.get("edge_id")
-        ring = seen.ring_by_edge.get(str(edge_id)) if edge_id else None
-        if ring is not None:
-            seen.ring_kept[ring] += 1
-    seen.relations_kept += len(kept)
+        if not edge_id:
+            continue
+        edge_id = str(edge_id)
+        if edge_id in seen._kept_edges:
+            continue                          # 같은 관계가 두 호출에서 남았다
+        ring = seen.ring_by_edge.get(edge_id)
+        if ring is None:
+            continue
+        seen._kept_edges.add(edge_id)
+        seen.ring_kept[ring] += 1
+        seen.relations_kept += 1
+    # ★`cut` 은 접지 않는다 — 같은 관계가 한 호출에서 남고 다른 호출에서 잘릴 수
+    #   있어 「어느 쪽이 참인가」가 없다. 자른 **횟수**로 읽어야 하는 값이다.
     seen.relations_cut += cut_count
 
 
