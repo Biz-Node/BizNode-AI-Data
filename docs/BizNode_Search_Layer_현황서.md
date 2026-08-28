@@ -2655,6 +2655,98 @@ Agent 가 재료를 고르므로 그 전제가 만료됐습니다. 완료 기준
 raw row 를 먹여 비교하는 것이라 **그대로 유효합니다** — 도구를 안 바꿨기 때문입니다.
 
 
+### 8-18. 링 정렬 상속 조사 — 세 단계 중 두 단계만 남았다 (2026-08-28 · Phase 2)
+
+1.5차가 `retrieve_service._relations_of` 의 세 단계를 `get_relations` 도구로 옮겼습니다.
+**Agent 배선 뒤에도 그 셋이 남아 있는지** 코드로 확인했습니다. ★조사만 했고 **고치지
+않았습니다** — 순서가 바뀌면 자르는 지점이 바뀌고, 그러면 Phase 8 의 기준선이 또
+움직입니다.
+
+| 확인 항목 | 결과 | 근거 |
+|---|---|---|
+| ① `_ring_of` 를 거치나 | **거친다** | `app/tools/graph_tools.py:167` — `by_ring.setdefault(_ring_of(row, set(ctx.workspace_keys)), []).append(row)`. 함수를 새로 쓰지 않고 `retrieve_service._ring_of` 를 **import 해 그대로** 씁니다(`graph_tools.py:34`) |
+| ② 링 로그가 찍히나 | **찍힌다 · 이름이 다르다** | `graph_tools.py:189` 가 `tools.relations rings %s -> kept=%d cut=%d matched=%s direction=%s` — 링별 분포·kept·cut 이 다 있습니다. 다만 문자열이 `relations.rings` 가 **아닙니다.** 그 이름은 `retrieve_service.py:465` 에 남아 `/retrieve` 만 찍습니다 → ★**`/ask` 로그를 `relations.rings` 로 grep 하면 0건입니다** |
+| ③ 자르기가 정렬 뒤인가 | **뒤다** | `graph_tools.py:183-186` — `ordered` 를 다 만든 뒤 `ordered[:limit]`. `limit = _MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)` 이고 상수는 `retrieve_service` 것을 그대로 import 합니다 |
+| ④ `workspace_keys` 가 도구까지 오나 | **온다** | `agent_loop.py:100` 이 `state["request"].workspace_keys` 를 `anchor_scope(workspace_keys=...)` 에 싣고 `graph_tools.py:167` 이 `ctx.workspace_keys` 로 읽습니다. **빌 수 없습니다** — `guard_workspace` 가 빈 워크스페이스를 `halt_no_material` 로 보냅니다(`material.py:62·69`) |
+
+**★빠진 것은 링이 아니라 「링 안의 의도 정렬」입니다.**
+
+```
+1.5차 배선   fetch_relations → get_relations(keys,
+                                 edge_types=query.edge_types,
+                                 direction=query.direction)     ← 실어 보냈다
+2차 배선     agent_tools.get_relations(keys) → get_relations(keys)  ← 둘 다 안 보낸다
+```
+
+`agent_tools.py:108-110` 이 `keys` 만 넘깁니다. `graph_tools.get_relations` 는 두 인자를
+여전히 받지만 기본값 `None` 이 들어가고, 그래서:
+
+    matched = frozenset(edge_types or ())            graph_tools.py:181  → 빈 집합
+    if not matched: return ordered                   relation_selector.py:83-85
+
+`relation_selector.order()` 가 **아무것도 안 바꾸고 돌려줍니다.** 링 분류 · 링 순
+줄세우기 · 정렬 뒤 자르기는 살아 있고, **링 안에서 질문이 물은 엣지를 위로 올리는
+단계만** 무력화됐습니다.
+
+**★왜 이렇게 됐나.** 도구 4원칙 ①(「무엇을 중요하게 볼지」를 LLM 이 정하면 그건 재료
+범위를 고르는 것이다)을 지키느라 `edge_types`·`direction` 을 Agent 인자에서 뺐는데
+(`tests/graph/test_agent_loop.py:47` 이 그 제거를 묶습니다), `get_events` 의 `intent` 와
+달리 **`ToolContext` 로 옮겨 싣지 않았습니다.** 서버가 정한 값을 실어 보내는 자리가
+비어 있습니다 — 뺀 것까지는 맞고, 옮기는 것을 안 했습니다.
+
+**★영향 규모.** `edge_types` 는 `QueryRouter` 의 **결정론적 키워드 규칙**이 채웁니다
+(`search/service/query_router.py:87-99` — LLM 이 아닙니다). Search Layer 평가셋 20질의를
+라우터에 그대로 먹여 보니 **12건(60%)에서 `edge_types` 가 잡혔습니다**:
+
+    삼성전자가 납품하는 기업은?     SUPPLIES_TO · outgoing
+    삼성전자에 납품하는 기업은?     SUPPLIES_TO · incoming
+    SK하이닉스를 제소한 기업        SUES · incoming
+    삼성전자를 규제한 기관          REGULATES
+
+즉 `/ask` 질문의 상당수에서 **「무슨 관계를 물었나」가 순서에 반영되지 않습니다.**
+
+**★단, §5-4 이전으로 되돌아간 것은 아닙니다.** 2026-08-25 실측이 걱정한 「점수순으로
+먼저 자르면 Ring 0 이 통째로 사라진다」(삼성전자 526건에서 Ring 0 이 137·225·414번째)는
+링 분류가 살아 있어 **일어나지 않습니다.** 잃은 것은 **링 안의 우선순위**이고, 링
+안에서는 입력 순서(=점수순)가 그대로 남습니다.
+
+**★고치는 데 필요한 것** (이번에 하지 않았습니다):
+
+1. `ToolContext` 에 `edge_types: tuple[str, ...]` · `direction: Optional[str]` 두 자리
+2. `agent_loop._scope_of()` 가 `state["query"]` 에서 실어 보내기 — `intent` 와 같은 방식
+3. `agent_tools.get_relations` 가 `ctx.edge_types`·`ctx.direction` 을 `graph_tools` 로 넘기기
+4. 도구 시그니처·Agent 인자는 **그대로** — 4원칙 ① 을 깨지 않습니다
+
+★고친 뒤에는 **Phase 8 을 다시 재야 합니다.** 순서가 바뀌면 자르는 지점이 바뀌고
+재료가 바뀝니다. 링 우선이냐 의도 우선이냐(§5-17·§7-3 의 `[DECIDE]`)는 그 데이터를
+보고 정합니다.
+
+---
+
+### 8-19. provenance 관통 확인 (2026-08-28 · Phase 2 · 작업 F)
+
+1.75차가 `RelationDTO`·`EventDTO` 에 넣은 `provenance` 가 **도구에서 프롬프트 조립까지
+끊기지 않는지** 확인했습니다. 탐색 도구가 없으므로 값은 여전히 **`direct` 하나**입니다.
+
+| 구간 | 결과 | 근거 |
+|---|---|---|
+| 도구가 값을 붙이나 | 붙는다 | `graph_tools._relation_dto`·`_event_dto` 가 인자를 안 주고 DTO 기본값 `"direct"` 를 씁니다(`dto.py:174·253`) |
+| Agent 가 읽는 tool result | 살아 있다 | `agent_tools._dump()` 가 `model_dump(exclude_none=True)` 인데 `"direct"` 는 `None` 이 아니라 **안 쓸려 나갑니다** |
+| State 에 담기는 DTO | 살아 있다 | `_guard()` 가 **두 갈래로** 내보냅니다 — JSON(Agent 용)과 DTO(`_record` → `_COLLECTED` → State). 문자열만 지키면 마감 단계가 값을 잃습니다 |
+| `evidence_validation` | 살아 있다 | `_dedup_relations` 는 객체 그대로, `_dedup_events` 는 `model_copy(update={"evidence_ids": ...})` 라 나머지 필드가 보존됩니다 |
+| `build_prompt` 가 받는 DTO | 살아 있다 | `evidence_validation` 이 `{"relations", "events"}` 로 State 에 넣고 `answer.build_prompt` 가 그대로 `prompt.build_user_prompt` 에 넘깁니다 |
+| 프롬프트 **글자** | ★**안 나온다 (의도)** | 노출 여부는 아직 정하지 않았습니다. 문구를 바꾸면 2차 완료 기준인 평가셋의 **측정 대상이 하나 늘어납니다** |
+
+**★끊긴 구간은 없었습니다** — 이을 것이 없었습니다. `tests/graph/test_provenance.py` 7건이
+위 여섯 줄을 **양방향으로** 묶습니다(State·DTO 는 들고 간다 / 프롬프트 글자로는 안 샌다).
+한쪽만 묶으면 다음 사람이 어느 쪽이 의도인지 모릅니다.
+
+**★`explored` 를 쓰는 코드가 생기면 테스트가 깨집니다.** `app/` 전체를 훑어 그 문자열이
+`tools/dto.py`(정의 자리) 밖에 나타나면 실패합니다 — 탐색 도구(`explore_impact`)가 생길
+때 **그 테스트를 같이 고치는 것**이 「값을 늘렸다」는 신호입니다.
+
+---
+
 ## 9. 실측 근거 없는 잠정치
 
 **전부 조정 여지로 남겨 둔 값입니다.** 트래픽·품질 실측 후 정합니다.
@@ -2733,6 +2825,7 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-28 | ★**Phase 2 — 링 정렬 상속 조사(조사만) · 작업 F provenance 관통** (브랜치 `yun-phase2`) | **코드 동작을 바꾸지 않습니다.** ① ★**링 정렬 상속 조사** — 1.5차의 세 단계 중 **링 분류·링 순 줄세우기·정렬 뒤 자르기는 살아 있고**, **링 안의 의도 정렬만 무력화**됐습니다. `agent_tools.get_relations(keys)` 가 `edge_types`·`direction` 을 안 넘겨 `matched` 가 빈 집합이 되고, `relation_selector.order()` 가 `if not matched: return ordered` 로 그대로 돌려줍니다. 도구 4원칙 ① 을 지키느라 Agent 인자에서는 뺐는데 `get_events` 의 `intent` 와 달리 **`ToolContext` 로 옮겨 싣지 않은** 자리입니다. 실측: `QueryRouter` 의 결정론적 규칙이 Search 평가셋 20질의 중 **12건(60%)에서 `edge_types` 를 채웁니다.** ★**고치지 않았습니다** — 순서가 바뀌면 자르는 지점이 바뀌어 Phase 8 기준선이 또 움직입니다. 링 우선 vs 의도 우선(§5-17·§7-3)은 그 데이터를 보고 정합니다 → [§8-18](#8-18-링-정렬-상속-조사--세-단계-중-두-단계만-남았다-2026-08-28--phase-2). ★로그 이름이 `relations.rings` → **`tools.relations rings`** 로 바뀌었습니다(`/ask` 기준). ② **작업 F**: `provenance` 가 도구 → tool result → `evidence_validation` → `build_prompt` 까지 **끊긴 데 없이** 갑니다 — 이을 것이 없었습니다. 값은 `direct` 하나 그대로. ★**프롬프트 글자로는 안 냅니다**(노출 여부 미정 — 문구를 바꾸면 평가셋 측정 대상이 하나 는다). `tests/graph/test_provenance.py` **7건**이 그 둘을 **양방향**으로 묶습니다 → [§8-19](#8-19-provenance-관통-확인-2026-08-28--phase-2--작업-f). 테스트 940 → **947 passed** · 기존 실패 7건 그대로 · **신규 0**. ★평가셋 미실행(OpenAI 호출 없음) · `tests/search/eval/`·평가셋 문서 무수정 · 링 정렬·랭킹 정책·예산 4값 무수정 |
 | 2026-08-28 | ★**Phase 2 진행 — 작업 0·A·B** (브랜치 `yun-phase2`) | **이 단계부터 출력 대조가 성립하지 않는다** — 완료 기준이 평가셋 점수로 바뀐다. ① **작업 0**: `embedding_cache.model` → **`embedding_model`** 개명(`vector_chunks` 와 이름 통일 — 모델 교체 시 재임베딩 대상과 버릴 캐시를 같은 값으로 고른다). 런타임 DDL·`02_schema.sql`·**신규 마이그레이션**(`batch/repair/embedding_cache_column.py`, 516행 보존·멱등) 세 곳 동시 수정. **폴백 정책을 용도별로 분리** — 운영 `/ask` 는 직접 계산, 평가·대조는 `EMBED_CACHE_STRICT=1` 로 **즉시 정지**(`EmbeddingCacheMiss`). ★운영 경로 비결정성은 **고치지 않고** 알려진 한계로 명시 → [§8-13](#8-13-기준선-비결정성의-뿌리--임베딩-값-드리프트-2026-08-28--phase-175). ★문서의 표 개수가 이미 틀려 있었다 — 5곳이 「27표」였으나 실측 **26표 + 뷰 1**이고 ERD 가 등재한 25개 중 빠진 하나가 정확히 `embedding_cache` 였다. 26으로 정정. ② **작업 A**: Agent 도구 **5종** — `search_news`·`search_dart`(`app/tools/search_tools.py`) · `get_business_overview`·`get_filings`·`get_market`(`app/tools/company_tools.py`). 1.5차 4원칙 그대로. ★두 검색 도구는 **같은 evidence 컬렉션**을 `source_type` 메타로만 가른다(실측: news 7,668 · dart 2,561 · dart_filing 113 · **없음 168** — 168건은 0차가 추측하지 않고 남긴 것이라 **두 도구 모두에 안 잡힌다**). ★기업 필터에 `corp_code`·`norm_name` **두 형태를 다** 넣는다 — 메타에 섞여 있어 한 형태만 쓰면 근거 절반이 조용히 사라진다. `get_market` 에 **`evidence_id` 없음**(계산 좌표만). 신설 DTO `EvidenceHitDTO`·`FilingDTO` — ★citation 필드는 두지 않는다(계약 2). ③ **작업 B**: **`search_news` 만** citation 승격. 규칙을 `app/tools/citation.py` 한 곳에 두고 시스템 프롬프트 `[자료의 한계]` 절이 같은 말을 하게 했다 → [§8-16](#8-16-citation-승격의-비대칭--왜-사업개요는-인용할-수-없나-2026-08-28--phase-2). ④ **작업 C·D·E**: **Agent 루프**(`agent ⇄ run_tools` → `evidence_validation`). ★앵커 해소는 **Agent 앞의 결정론 노드**로 남기고 `UNRESOLVED` 면 Agent 를 아예 안 부른다. ★도구 인자를 원본보다 **좁혔다**(`intent`·`edge_types`·`direction`·`year` 제거 — 서버가 `ToolContext` 로 넣는다). ★총량 예산을 **누적치로** 센다(계약 4) — 인자 길이만 막으면 반복 호출로 우회된다. 소진되면 예외가 아니라 **마감으로 전이**한다(`recursion_limit` 에 기대면 답변이 아예 안 나간다). ★`get_propagation` 은 도구로 열지 않고(계약 1) `evidence_validation` **뒤**의 결정론 노드로 남겼다 — 빼면 파급 재료가 통째로 사라진다 → [§8-17](#8-17-agent-루프--무엇을-넘겼고-무엇을-안-넘겼나-2026-08-28--phase-2). 테스트 836 → **940 passed** · 기존 실패 7건 그대로 · 신규 0. ★`test_parity.py`(1차 재료 대조, `needs_db`)의 전제는 **만료**됐다 — 완료 기준이 평가셋 점수다. `test_retrieve_parity.py`(계약 6)는 조립 함수를 비교하므로 **그대로 유효**하다. ★평가셋 측정(작업 완료 기준)은 아직 · `/retrieve`·`pipeline/llm.py`·`search/`·`langchain-openai` 핀 무수정 |
 | 2026-08-28 | ★**Phase 1.75 — 기준선을 고정한다** (브랜치 `yun-phase175`) | **기능을 만들지 않는다.** 2차의 완료 기준이 평가셋 점수인데 기준선이 실행마다 흔들려 점수 차이를 귀속시킬 수 없었다 — 그것만 고친다. ① ★**비결정성의 뿌리는 동점이 아니라 임베딩 값 드리프트**였다(실측 4단계). OpenAI 임베딩이 같은 입력에 같은 벡터를 안 주고 편차가 배치 크기에 붙어 있다(150건에서 2.1e-03 · 코사인 최대 4.4e-03). 반올림으로는 못 막아(버킷보다 큰 드리프트) **영속 캐시**로 값을 고정하고, 캐시가 못 막는 진짜 동점에 **`event_id` tiebreak** 을 더했다 → [§8-13](#8-13-기준선-비결정성의-뿌리--임베딩-값-드리프트-2026-08-28--phase-175). ② ★**도구가 공유 사건의 근거 병합을 잃고 있었다** — `_merge_evidence_ids()` 가 이미 고쳐 둔 버그를 도구화가 되돌렸고, `_classify()` 가 `evidence` diff 를 안 봐서 대조가 못 잡았다. 둘 다 고치고 두 사본 동일성 테스트를 신설 → [§8-14](#8-14-두-사본의-동일성을-테스트로-강제-2026-08-28--phase-175). ③ 프롬프트 조립 사본 통합(`app/llm/prompt.py`) — **바이트 무변경**(40개 sha256 동일). `[사실]` 렌더링은 의도적으로 다르므로 안 옮긴다. 테스트를 **먼저 이관**했다(운영 렌더러에 직접 테스트가 0건이었다) → [§8-15](#8-15-프롬프트-조립-사본-통합-2026-08-28--phase-175). ④ `RelationDTO`·`EventDTO` 에 **provenance 자리**(값은 전부 `direct`, 탐색 로직 없음). ⑤ `embedding_cache` 표를 **`infra/postgres/init/02_schema.sql` 에 반영** — 런타임 DDL 만 있어 스키마 정본에서 빠져 있었다. 통째 재덤프는 pg_dump 빌드 차이로 서식 잡음 1,000줄이 섞여 표 하나 분량만 넣고, 빈 DB 적재 대조로 검증했다(컬럼 231 · 제약 26 · 인덱스 52 · 뷰 1, **차이 0**). 실측: 20질문 × 4회 **흔들림 0** · `--materials` **예상 밖 0** · 761 → **836 passed** · 기존 실패 7건 그대로 · 신규 0. ★Agent·새 도구·새 재료 없음 · `/retrieve`·`pipeline/llm.py`·`search/`·상한값·`langchain-openai` 핀 무수정 |
 | 2026-08-28 | ★**Phase 1.5 정리 — 불필요한 인자·State 필드 제거** (브랜치 `yun-phase15`) | **기능 추가가 아니다** — 최종 Agent 구조에서 LLM 이 불필요한 판단을 하지 않게 하고, State 에 흐르지 않는 값을 두지 않게 한다. 다섯 자리: ① `get_events` 의 `role` **검색 인자** 제거(`EventDTO.role`·`role_note` 는 유지 — 「거르기」와 「표기하기」를 가른다) ② `AskState.use_hits` 제거(write-only, 판정 결과는 `companies` 출처로 드러난다) ③ `AskState.backstop` 제거(★로직·조건·결과는 그대로) ④ `match_type` 생성을 `fetch_evidence` → **`search`** 로 이동(`result.mode` 만 보는 값이라 검색이 끝난 자리에서 확정된다) ⑤ `main._answer_service` 인스턴스 제거(★클래스는 유지 — 대조 기준선). 실측: 재료 **예상 밖 차이 0건**(변경 전과 같은 판정) · 761 passed · 기존 실패 7건 그대로 · 신규 0 → [§8-12](#8-12-구조-정리--불필요한-인자state-필드-제거-2026-08-28--phase-15). ★대조 스크립트의 **1차 기준선 열에 실행 간 흔들림**이 있음을 확인(원본 코드 2회 실행이 서로 다름) — 회귀로 오독하지 않도록 §8-12 에 기록. ★`/retrieve`·`RetrieveService`·`pipeline/llm.py`·`search/`·`get_propagation`·Finance/News 도구·Agent 루프·상한값 무수정 |
