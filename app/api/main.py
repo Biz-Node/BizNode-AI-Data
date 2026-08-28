@@ -525,7 +525,7 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     # ★이 라우트는 **어댑터다.** 로직은 RetrieveService 에 있다 — 추론 담당은
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
-    return await _get_retrieve_service().retrieve_async(body)
+    return await _retrieve_service.retrieve_async(body)
 
 
 @app.post("/ask", response_model=AskResponse, tags=["챗봇"],
