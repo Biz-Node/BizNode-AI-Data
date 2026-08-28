@@ -213,7 +213,7 @@ def events_of(key: str) -> list[Event]:
 #   대체할 수 없다.
 @app.get("/companies/{key}/news", response_model=list[NewsItem], tags=["기업"],
          summary="근거가 된 기사 전체")
-def news_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[NewsItem]:
+def news_of(key: str, limit: int = Query(20, ge=1, le=1000)) -> list[NewsItem]:
     """근거가 된 기사 목록. 상세는 **10건**까지.
 
     **본문은 없다**(저작권). 제목·언론사·발행일·링크까지다. 인용이 필요하면
@@ -224,7 +224,7 @@ def news_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[NewsItem]:
 
 @app.get("/companies/{key}/filings", response_model=list[Filing], tags=["기업"],
          summary="DART 공시 전체")
-def filings_of(key: str, limit: int = Query(20, ge=1, le=100)) -> list[Filing]:
+def filings_of(key: str, limit: int = Query(20, ge=1, le=1000)) -> list[Filing]:
     """DART 공시 목록. 상세는 **10건**까지. **시드 64곳에만 있다.**"""
     return [Filing(**f) for f in company_service.filings_of(key, limit=limit)]
 
