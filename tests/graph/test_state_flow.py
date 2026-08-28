@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from app.api.schemas import AnchorSource
-from app.graph.ask_graph import _SEQUENCE
+from app.graph.ask_graph import _AFTER_LOOP
 from app.graph.state import AskState
 
 # 각 노드가 **채워야 하는** 키. 노드를 지난 뒤 이게 없으면 배선이 끊긴 것이다.
@@ -23,11 +23,17 @@ _PRODUCES = {
     #   정해지는 값이라 검색이 끝난 자리에서 확정된다 — 전에는 `fetch_evidence`
     #   가 만들었는데 그 노드는 근거를 모으는 자리다.
     "search": ("query", "result", "match_type"),
-    "plan_material": ("companies", "anchor_names", "intent"),
-    "fetch_events": ("events",),
+    # ★`plan_material` 이 **탐색 예산을 연다**(2차) — 카운터가 0 인 시점이
+    #   Agent 앞 마지막 결정론 노드 하나로 고정된다.
+    "plan_material": ("companies", "anchor_names", "intent",
+                      "tool_calls_used", "events_used", "propagations_used",
+                      "hops_used", "budget_exhausted"),
+    # ── Agent 루프 (2차) — `fetch_events`·`fetch_relations`·`fetch_evidence`
+    #    자리를 대신한다
+    "agent": ("messages",),
+    "run_tools": ("tool_results",),
+    "evidence_validation": ("relations", "events", "evidence"),
     "fetch_propagation": ("propagation",),
-    "fetch_relations": ("relations",),
-    "fetch_evidence": ("evidence",),
     "build_prompt": ("user_prompt",),
     "generate": ("llm_result",),
     "verify_sources": ("answer", "failed", "sources"),
@@ -77,16 +83,39 @@ def test_check_claims_changes_nothing(monkeypatch, wired, fake_llm, request_):
 def test_sequence_matches_the_wired_nodes(wired):
     """`_SEQUENCE` 와 실제 배선이 어긋나지 않는지 — 순서가 곧 계약이다.
 
-    ★파급은 **사건 뒤**여야 하고(설계서 §13) 근거는 관계·사건 뒤여야 한다.
-      순서가 뒤집히면 빈 입력으로 조회가 돌아 조용히 0건이 된다.
+    ★파급은 **사건 뒤**여야 한다(설계서 §13). 2차에서는 사건을 `evidence_validation`
+      이 합쳐 놓으므로 `fetch_propagation` 이 그 뒤에 온다 — 순서가 뒤집히면
+      빈 입력으로 조회가 돌아 조용히 0건이 된다.
     """
     graph, _ = wired
     edges = {(e.source, e.target) for e in graph.get_graph().edges}
 
-    for before, after in zip(_SEQUENCE, _SEQUENCE[1:]):
+    for before, after in zip(_AFTER_LOOP, _AFTER_LOOP[1:]):
         assert (before, after) in edges, f"{before} → {after} 배선이 없다"
-    assert _SEQUENCE.index("fetch_events") < _SEQUENCE.index("fetch_propagation")
-    assert _SEQUENCE.index("fetch_relations") < _SEQUENCE.index("fetch_evidence")
+    assert (_AFTER_LOOP.index("evidence_validation")
+            < _AFTER_LOOP.index("fetch_propagation")), "파급은 사건이 합쳐진 뒤다"
+
+
+def test_the_agent_loop_is_wired_as_a_loop(wired):
+    """★`agent ⇄ run_tools` 가 **양방향**이어야 한다. 한쪽만 있으면 도구를 한 번
+    부르고 끝나거나(→ 재료 부족) 영영 안 끝난다."""
+    graph, _ = wired
+    edges = {(e.source, e.target) for e in graph.get_graph().edges}
+
+    assert ("plan_material", "agent") in edges
+    assert ("agent", "run_tools") in edges
+    assert ("run_tools", "agent") in edges
+    assert ("agent", "evidence_validation") in edges
+
+
+def test_the_agent_is_never_reached_without_an_anchor(wired):
+    """★`resolve_anchor` 는 **Agent 앞**에 있고 `UNRESOLVED` 면 `halt_no_material`
+    로 빠진다. 이 순서가 「TSMC 를 물었는데 삼성전자로 답하는」 오답을 막는다."""
+    graph, _ = wired
+    edges = {(e.source, e.target) for e in graph.get_graph().edges}
+
+    assert ("resolve_anchor", "halt_no_material") in edges
+    assert ("resolve_anchor", "agent") not in edges, "앵커를 건너뛰고 Agent 로 갈 수 없다"
 
 
 def test_anchor_source_survives_to_the_response(wired, fake_llm, request_):

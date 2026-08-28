@@ -171,8 +171,48 @@ class FakeTools:
         return list(self.propagation)
 
 
+class FakeChat:
+    """Agent 자리의 대역 — **무엇을 부를지 미리 정해 둔 각본**대로 답한다.
+
+    ★진짜 모델을 쓰면 테스트가 LLM 의 기분에 걸린다. 여기서 보려는 것은
+      「루프가 도는가 · 예산이 자르는가 · 결과가 State 로 옮겨지는가」다.
+    """
+
+    def __init__(self, plans=None):
+        # 각 턴에 낼 tool_calls 목록. 다 쓰면 빈 손으로 답해 루프가 끝난다.
+        self.plans = [list(p) for p in (plans if plans is not None else [[
+            {"name": "get_relations", "args": {"keys": [_SAMSUNG]},
+             "id": "c1", "type": "tool_call"},
+            {"name": "get_events", "args": {"keys": [_SAMSUNG]},
+             "id": "c2", "type": "tool_call"},
+        ]])]
+        self.calls = 0
+        self.seen: list = []
+
+    def invoke(self, messages):
+        from langchain_core.messages import AIMessage
+
+        self.calls += 1
+        self.seen.append(list(messages))
+        calls = self.plans.pop(0) if self.plans else []
+        return AIMessage(content="" if calls else "재료를 다 모았습니다",
+                         tool_calls=calls)
+
+
 @pytest.fixture
-def wired(monkeypatch, query, result, event, relation, evidence, decision):
+def fake_chat(monkeypatch):
+    """기본 각본 — 한 바퀴 돌고 끝낸다."""
+    from app.graph.nodes import agent_loop as agent_node
+
+    chat = FakeChat()
+    monkeypatch.setattr(agent_node, "_chat", chat)
+    # ToolNode 는 진짜를 쓴다 — 도구 바인딩·스코프 전달까지 함께 보려는 것이다
+    monkeypatch.setattr(agent_node, "_TOOL_NODE", None)
+    return chat
+
+
+@pytest.fixture
+def wired(monkeypatch, query, result, event, relation, evidence, decision, fake_chat):
     """그래프가 대역만 보게 묶는다. `(그래프, 대역)` 을 돌려준다."""
     from app.graph import ask_graph as ask_graph_module
     from app.graph.nodes import material
@@ -195,6 +235,11 @@ def wired(monkeypatch, query, result, event, relation, evidence, decision):
     for name in ("get_events", "get_relations", "get_propagation"):
         monkeypatch.setattr(material.graph_tools, name, getattr(tools, name))
     monkeypatch.setattr(material.relation_service, "evidence_for_ids",
+                        lambda ids: [e.model_dump() for e in tools.evidence])
+    # ★`evidence_validation` 은 자기 모듈에서 `relation_service` 를 본다
+    from app.graph.nodes import agent_loop as agent_node
+
+    monkeypatch.setattr(agent_node.relation_service, "evidence_for_ids",
                         lambda ids: [e.model_dump() for e in tools.evidence])
     return ask_graph_module.build_ask_graph(), tools
 

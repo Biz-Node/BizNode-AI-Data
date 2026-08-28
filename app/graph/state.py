@@ -12,13 +12,17 @@
   값**만 담는다. 상한은 모듈 상수라 요청마다 달라질 이유가 없고, State 에 두면
   「누가 언제 바꿨나」를 노드마다 따져야 한다.
 
-★리듀서(`Annotated` + `operator.add`)를 쓰지 않는다. Phase 1 은 전 노드 순차라
-  같은 키에 두 노드가 동시에 쓰는 일이 없다 — 리듀서는 그 경합을 푸는 도구다.
+★리듀서는 **`messages` 하나에만** 쓴다(2차). 나머지는 전 노드 순차라 같은 키에
+  두 노드가 동시에 쓰는 일이 없다 — 리듀서는 그 경합을 푸는 도구다. `messages`
+  는 `agent` 와 `run_tools` 가 **번갈아 덧붙이는** 값이라 예외다. `add_messages`
+  가 id 로 중복을 접어 주므로 직접 이어 붙이지 않는다.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional, TypedDict
+from typing import Annotated, Any, Optional, TypedDict
+
+from langgraph.graph.message import add_messages
 
 from app.api.schemas import (AskRequest, AskResponse, Evidence, MatchType,
                              RelationEndpoint, Source)
@@ -79,6 +83,27 @@ class AskState(TypedDict, total=False):
     #     검사하나」가 처음으로 같아진다.
     anchor_names: list[str]
     intent: str
+
+    # ── agent ⇄ run_tools 노드 (2차) ──────────────────────────
+    # ★Agent 대화. `agent` 가 고르고 `run_tools` 가 결과를 붙인다.
+    messages: Annotated[list, add_messages]
+
+    # ★도구가 만든 DTO 를 **도구 이름별로** 쌓아 둔다. `evidence_validation`
+    #   이 이걸 읽어 재료와 근거로 마감한다.
+    #
+    #   ★문자열(Agent 가 본 것)을 다시 파싱하지 않는다 — 같은 사실을 두 번
+    #     만드는 것이고, 두 벌은 반드시 갈린다.
+    tool_results: dict[str, list[Any]]
+
+    # ── 탐색 총량 예산 (계약 4번) ─────────────────────────────
+    # ★상한은 `app/graph/budget.py` 의 **모듈 상수**다. 여기 있는 것은
+    #   「이번 요청에서 얼마나 썼나」 — 흐르는 값이라 State 가 맞다.
+    tool_calls_used: int
+    events_used: int
+    propagations_used: int
+    hops_used: int
+    # 소진돼서 도구를 덜 부른 채 마감했나. ★예외가 아니라 **표시**다
+    budget_exhausted: bool
 
     # ── fetch_* 노드 ──────────────────────────────────────────
     # ★1.5차부터 **도구가 만든 DTO** 다(`app/tools/dto.py`). API 스키마의

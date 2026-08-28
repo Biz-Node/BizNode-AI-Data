@@ -40,6 +40,11 @@ class ToolContext:
     #   고친 퇴행). 이름이지만 **식별에 쓰는 값이 아니라** 문자열 제거용이고,
     #   서버가 정한 앵커에서만 온다 — 도구가 이름을 해소하는 것이 아니다.
     anchor_names: tuple[str, ...] = ()
+    # ★사건 순위를 정하는 **질문 의도**. `get_events` 가 쓴다.
+    #   Agent 인자로 두면 「무엇을 중요하게 볼지」를 LLM 이 정하게 되는데,
+    #   그건 재료 범위를 고르는 것과 같다(4원칙 ①). 서버가 `plan_material`
+    #   에서 정한 값을 여기 실어 보낸다.
+    intent: str = ""
 
 
 _SCOPE: ContextVar[Optional[ToolContext]] = ContextVar("tool_scope", default=None)
@@ -48,13 +53,15 @@ _SCOPE: ContextVar[Optional[ToolContext]] = ContextVar("tool_scope", default=Non
 @contextmanager
 def anchor_scope(keys: Iterable[str], *, workspace_keys: Iterable[str] = (),
                  anchor_keys: Iterable[str] = (),
-                 anchor_names: Iterable[str] = ()):
+                 anchor_names: Iterable[str] = (),
+                 intent: str = ""):
     """이 블록 안에서 도구가 만질 수 있는 key 와 랭킹 문맥을 정한다."""
     token = _SCOPE.set(ToolContext(
         allowed=frozenset(k for k in keys if k),
         workspace_keys=frozenset(k for k in workspace_keys if k),
         anchor_keys=frozenset(k for k in anchor_keys if k),
-        anchor_names=tuple(n for n in anchor_names if n)))
+        anchor_names=tuple(n for n in anchor_names if n),
+        intent=intent))
     try:
         yield
     finally:

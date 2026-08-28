@@ -19,6 +19,7 @@ from app.services import (evidence_selector, query_understanding, relation_servi
                           workspace_service)
 from app.services.retrieve_service import _MAX_LOGGED_EVIDENCE
 from app.tools import graph_tools
+from app.graph import budget
 from app.tools.scope import anchor_scope
 from app.services.retrieve_service import (RetrieveService, _anchor_companies,
                                            _companies_from,
@@ -191,8 +192,11 @@ def plan_material(state: AskState) -> AskState:
         anchor_names = [a.name for a in decision.anchors if a.name]
     intent = evidence_selector.intent_of(request.question, anchor_names)
 
+    # ★탐색 예산을 **여기서 연다.** Agent 가 도구를 부르기 전 마지막 결정론
+    #   노드라, 카운터가 0 인 시점이 여기 하나로 고정된다.
     return {"companies": companies,
-            "anchor_names": anchor_names, "intent": intent}
+            "anchor_names": anchor_names, "intent": intent,
+            **budget.initial()}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -248,7 +252,15 @@ def fetch_propagation(state: AskState) -> AskState:
     ★`is_risk` 가 아닌 사건은 계산하지 않는다. 상한은 도구 안에 있다(원칙 ③).
     """
     risky = [e.event_id for e in state["events"] if e.is_risk]
-    return {"propagation": graph_tools.get_propagation(risky)}
+    # ★**총량 예산이 여기서도 실제로 자른다**(계약 4). 세기만 하고 안 자르면
+    #   카운터가 관측값으로 전락한다 — 상한은 막으라고 있는 것이다.
+    room = budget.remaining(state)["propagations_used"]
+    if len(risky) > room:
+        log.info("fetch_propagation 예산으로 자른다 %d -> %d", len(risky), room)
+        risky = risky[:room]
+    propagation = graph_tools.get_propagation(risky)
+    return {"propagation": propagation,
+            **budget.spend(state, propagations_used=len(propagation))}
 
 
 def fetch_relations(state: AskState) -> AskState:

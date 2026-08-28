@@ -1,9 +1,9 @@
-"""`/ask` 실행 그래프 — 12노드 + 조건부 엣지 둘.
+"""`/ask` 실행 그래프 — Agent 루프 + 조건부 엣지 셋.
 
-    guard_workspace ─┬─▶ search ─▶ resolve_anchor ─┬─▶ plan_material ─▶ fetch_events
+    guard_workspace ─┬─▶ search ─▶ resolve_anchor ─┬─▶ plan_material
+                     │                             │        ─▶ agent ⇄ run_tools
+                     │                             │        ─▶ evidence_validation
                      │                             │        ─▶ fetch_propagation
-                     │                             │        ─▶ fetch_relations
-                     │                             │        ─▶ fetch_evidence
                      │                             │        ─▶ build_prompt ─▶ generate
                      │                             │        ─▶ verify_sources
                      │                             │        ─▶ check_claims ─▶ respond ─▶ END
@@ -11,7 +11,23 @@
                                    ▼
                            halt_no_material ─▶ END
 
-★게이트가 **셋에서 둘로 줄었다.** `AnswerService.ask()` 에는 게이트가 셋 있었다:
+★**앵커 해소는 Agent 앞에 남는다.** `resolve_anchor` 가 `UNRESOLVED` 를 내면
+  `halt_no_material` 로 빠져 **Agent 를 아예 부르지 않는다.** 이 순서가
+  「TSMC 를 물었는데 삼성전자로 답하는 탐지 불가능한 오답」을 막는 장치다
+  (설계서 §14-3) — 판정을 LLM 뒤로 옮기면 장치가 사라진다.
+
+★**`fetch_propagation` 은 Agent 뒤에 남는다.** 계약 1번이 `get_propagation` 을
+  「주어진 Event 의 파급을 계산하는 내부 primitive」로 못 박았기 때문에 도구로
+  열지 않는다. 그렇다고 빼면 파급 재료가 통째로 사라지므로, **Agent 가 모은
+  사건 위에서 결정론으로** 계산한다. 그래서 `evidence_validation` 뒤다 —
+  거기서 사건이 합쳐진 뒤라야 파급이 중복 없이 계산된다.
+
+★**`fetch_events`·`fetch_relations`·`fetch_evidence` 는 더 이상 배선되지 않는다.**
+  앞의 둘은 `agent ⇄ run_tools` 가, 마지막은 `evidence_validation` 이 대신한다.
+  함수는 `material.py` 에 남겨 뒀다 — 지우는 diff 를 이 변경에 섞으면 정작
+  바뀐 것(실행 구조)이 안 보인다. 정리는 따로 한다.
+
+★게이트는 **둘**이고, 2차에서 **Agent 루프 분기**가 하나 더 붙었다. `AnswerService.ask()` 에는 게이트가 셋 있었다:
 
     ① 워크스페이스가 비었나            → 여기 남는다 (조건부 엣지)
     ② 앵커를 못 찾았나                 → 여기 남는다 (조건부 엣지)
@@ -22,8 +38,8 @@
   같은 결론을 내렸다. 그래프에서는 판정이 난 자리에서 바로 갈라지므로 되짚을
   일이 없다 — **그래프화의 핵심 이득이다.**
 
-★전 노드 **순차**다. `fetch_events` 와 `fetch_relations` 가 서로를 안 보는 것은
-  맞지만, 병렬화는 Phase 2 다. 지금 나누면 로그 순서가 바뀌어 출력 대조가 깨진다.
+★`agent ⇄ run_tools` **말고는 전부 순차**다. 병렬화는 아직 하지 않는다 —
+  루프가 도는 횟수부터 재고 나서 볼 일이다.
 
 ★체크포인터를 붙이지 않는다. 한 요청이 한 번에 끝나고 중단·재개가 없다.
 """
@@ -40,12 +56,10 @@ from app.graph.state import AskState
 
 # ★노드 이름은 **함수 이름과 같게** 둔다. 로그·`get_graph()` 출력·테스트가 전부
 #   이 문자열을 쓰는데, 이름이 갈리면 어느 노드 얘기인지 대조해야 한다.
-_SEQUENCE = [
-    "plan_material",
-    "fetch_events",
+# Agent 루프가 끝난 **뒤**의 순차 구간. 루프 자체는 조건부 엣지로 돈다.
+_AFTER_LOOP = [
+    "evidence_validation",
     "fetch_propagation",
-    "fetch_relations",
-    "fetch_evidence",
     "build_prompt",
     "generate",
     "verify_sources",
@@ -62,7 +76,10 @@ def build_ask_graph():
     builder.add_node("search", nodes.search)
     builder.add_node("resolve_anchor", nodes.resolve_anchor)
     builder.add_node("halt_no_material", nodes.halt_no_material)
-    for name in _SEQUENCE:
+    builder.add_node("plan_material", nodes.plan_material)
+    builder.add_node("agent", nodes.agent)
+    builder.add_node("run_tools", nodes.run_tools)
+    for name in _AFTER_LOOP:
         builder.add_node(name, getattr(nodes, name))
 
     builder.add_edge(START, "guard_workspace")
@@ -78,7 +95,16 @@ def build_ask_graph():
                                   {"plan_material": "plan_material",
                                    "halt_no_material": "halt_no_material"})
 
-    for before, after in zip(_SEQUENCE, _SEQUENCE[1:]):
+    # ── Agent 루프 — ★조건부 ③ ────────────────────────────────
+    #   예산이 소진되면 도구 호출을 요청했어도 마감으로 보낸다(계약 4번).
+    #   `recursion_limit` 에 기대면 예외로 끝나 답변이 아예 안 나간다.
+    builder.add_edge("plan_material", "agent")
+    builder.add_conditional_edges(
+        "agent", nodes.should_continue,
+        {"run_tools": "run_tools", "evidence_validation": "evidence_validation"})
+    builder.add_edge("run_tools", "agent")
+
+    for before, after in zip(_AFTER_LOOP, _AFTER_LOOP[1:]):
         builder.add_edge(before, after)
     builder.add_edge("respond", END)
     builder.add_edge("halt_no_material", END)

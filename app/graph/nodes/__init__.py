@@ -5,6 +5,8 @@
 그래야 그래프로 옮기면서 동작이 따라 바뀌지 않는다.
 """
 
+from app.graph.nodes.agent_loop import (agent, evidence_validation, run_tools,
+                                   should_continue)
 from app.graph.nodes.answer import (build_prompt, check_claims, generate,
                                     halt_no_material, respond, verify_sources)
 from app.graph.nodes.material import (fetch_evidence, fetch_events,
@@ -14,7 +16,11 @@ from app.graph.nodes.material import (fetch_evidence, fetch_events,
 
 __all__ = [
     "guard_workspace", "search", "resolve_anchor", "plan_material",
-    "fetch_events", "fetch_propagation", "fetch_relations", "fetch_evidence",
+    # ── Agent 루프 (2차) ──
+    "agent", "run_tools", "should_continue", "evidence_validation",
+    "fetch_propagation",
+    # ★더 이상 배선되지 않는다 — `agent ⇄ run_tools` 와 `evidence_validation` 이 대신한다
+    "fetch_events", "fetch_relations", "fetch_evidence",
     "build_prompt", "generate", "verify_sources", "check_claims", "respond",
     "halt_no_material",
 ]

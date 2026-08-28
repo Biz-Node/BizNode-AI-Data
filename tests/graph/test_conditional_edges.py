@@ -84,10 +84,18 @@ def test_unresolved_searches_but_builds_no_material(monkeypatch, wired, fake_llm
 
 
 def test_resolved_path_runs_every_fetch(wired, fake_llm, request_):
-    """정상 경로는 조립 넷을 **순서대로** 다 돈다 — 파급은 사건 뒤여야 한다."""
+    """정상 경로는 재료를 다 모은다 — **파급은 사건 뒤**여야 한다(설계서 §13).
+
+    ★2차부터 **순서를 그래프가 정하지 않는다.** 어떤 도구를 어떤 순서로 부를지는
+      Agent 가 고르므로(각본은 `FakeChat`), 여기서 볼 수 있는 계약은 「무엇이
+      불렸나」와 「파급이 사건 뒤인가」뿐이다.
+    """
     graph, service = wired
     graph.invoke({"request": request_})
 
-    assert service.calls == ["search", "get_events", "get_propagation",
-                             "get_relations"]
+    assert service.calls[0] == "search", "검색이 먼저다"
+    assert set(service.calls) == {"search", "get_relations", "get_events",
+                                  "get_propagation"}
+    assert (service.calls.index("get_events")
+            < service.calls.index("get_propagation")), "파급은 사건 뒤다"
     assert fake_llm.calls == 1
