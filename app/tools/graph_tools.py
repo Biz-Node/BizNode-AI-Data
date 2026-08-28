@@ -283,8 +283,19 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
             limit=_MAX_EVENTS_PER_COMPANY)             # ③ 인자가 아니다
         for wrapped in kept:
             row = wrapped.raw
-            if row["event_id"] in seen:
+            previous = seen.get(row["event_id"])
+            if previous is not None:
+                # ★**공유 사건의 근거를 합친다** — 건너뛰기만 하면 먼저 온 기업의
+                #   근거만 남고 나머지가 조용히 사라진다. `retrieve_service.
+                #   _merge_evidence_ids()` 가 고쳐 둔 것과 **같은 규칙**이다
+                #   (실측: 「담합 소송」 질의에서 3건). 질문이 부른 기업이 둘이면
+                #   둘 다 근거이고, scope 밖 기업은 애초에 `by_company` 에 없다.
+                _merge_evidence_ids(previous, row)
                 continue
+            # ★목록을 **복사해서** 싣는다. 아래 병합이 이 리스트를 늘리는데,
+            #   원본 row 를 그대로 쥐면 `company_service.events_of()` 가 준
+            #   dict 를 밖에서 키우게 된다.
+            row = {**row, "evidence_ids": list(row.get("evidence_ids") or [])}
             seen[row["event_id"]] = row
             out.append(row)
 
@@ -292,6 +303,18 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
         log.info("tools.events eventness_suspect 제외=%d kept=%d",
                  suspect_dropped, len(out))
     return [_event_dto(r) for r in out]
+
+
+def _merge_evidence_ids(target: dict, other: dict) -> None:
+    """공유 사건의 근거를 합친다 — 순서 보존, 중복 제거.
+
+    ★`retrieve_service._merge_evidence_ids()` 와 **같은 규칙**이다. 저쪽은
+      `Event` 를 받고 여기는 raw dict 를 받아 시그니처만 다르다 — 규칙이
+      갈리면 `/retrieve` 와 `/ask` 가 같은 질문에 다른 근거를 낸다.
+    """
+    for evidence_id in (other.get("evidence_ids") or []):
+        if evidence_id not in target["evidence_ids"]:
+            target["evidence_ids"].append(evidence_id)
 
 
 class _Row:

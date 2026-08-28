@@ -485,6 +485,13 @@ def _classify(diffs: dict) -> tuple[bool, str]:
     사건들을 따라 달라지는 근거다.
 
     ★기업·관계가 달라지면 **예상 밖**이다. 의심 표시 제외는 그 둘을 건드리지 않는다.
+
+    ★**근거도 본다**(2026-08-28 신설). 예전에는 `companies`·`relations`·`events`
+      셋만 보고 `evidence` diff 를 아예 검사하지 않아, 어떤 근거 차이든 자동으로
+      「예상된 것」으로 넘어갔다. 실제로 그 구멍으로 **공유 사건의 근거 병합
+      누락**이 통과했다 — `get_events` 가 중복 event_id 를 건너뛰기만 하고
+      둘째 기업의 근거를 합치지 않던 회귀다. 근거만 달라지고 사건은 같으면
+      그것은 정확히 그 모양이므로 **예상 밖**으로 잡는다.
     """
     from app.core.database import neo4j_session
 
@@ -508,8 +515,48 @@ def _classify(diffs: dict) -> tuple[bool, str]:
         promoted = ev["_only_graph_all"] & suspect
         if promoted:
             return False, f"의심 표시 사건이 도구 쪽에 올라왔다: {sorted(promoted)[:4]}"
+
+    # ── 근거 — ★사건 차이로 **설명되는 것만** 예상된 것이다 ──────────
+    ev_diff = diffs.get("evidence")
+    if ev_diff:
+        changed_events = (ev["_only_base_all"] | ev["_only_graph_all"]) if ev else set()
+        if not changed_events:
+            return False, ("사건은 같은데 근거만 달라졌다 — 의심 표시 제외로는 "
+                           "안 생기는 차이다(공유 사건 근거 병합 누락이 이 모양이다)")
+        changed_evidence = ev_diff["_only_base_all"] | ev_diff["_only_graph_all"]
+        stray = changed_evidence - _evidence_of_events(changed_events)
+        if stray:
+            return False, (f"달라진 사건에 붙지 않은 근거 {len(stray)}건: "
+                           f"{sorted(stray)[:4]}")
     return True, ("eventness_suspect 제외와 그로 인한 빈 자리 승격, "
                   "그리고 그 사건들을 따라간 근거 차이뿐")
+
+
+def _evidence_of_events(event_ids: set) -> set:
+    """이 사건들의 `HAS_EVENT` 엣지에 달린 근거 id 전부.
+
+    ★**엣지에서 읽는다.** Event 노드의 `evidence_ids` 는 그 사건에 엮인 모든
+      기업의 합집합이라, 그걸 쓰면 「달라진 사건에 붙어 있다」의 범위가 실제보다
+      넓어져 설명되지 않는 차이까지 설명된 것으로 통과한다.
+    """
+    from app.core.database import neo4j_session
+
+    if not event_ids:
+        return set()
+    with neo4j_session() as s:
+        rows = s.run(
+            "MATCH (:Company)-[h:HAS_EVENT]->(e:Event) "
+            "WHERE e.event_id IN $ids "
+            "RETURN h.evidence_id AS one, h.evidence_ids AS many",
+            ids=sorted(event_ids))
+        out = set()
+        for r in rows:
+            if r["one"]:
+                out.add(str(r["one"]))
+            for v in (r["many"] or []):
+                if v:
+                    out.add(str(v))
+    return out
 
 
 def report_materials(rows: list[dict]) -> int:
