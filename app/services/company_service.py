@@ -110,7 +110,7 @@ def find_by_names(names: list[str]) -> Optional[dict]:
 _BY_KEY_Q = """
 MATCH (c:Company) WHERE c.corp_code IN $k OR c.norm_name IN $k
 RETURN coalesce(c.corp_code, c.norm_name) AS key, c.name AS name,
-       c.norm_name AS norm_name
+       c.norm_name AS norm_name, c.corp_code AS corp_code
 """
 
 
@@ -149,6 +149,24 @@ def norm_names_by_keys(keys: list[str]) -> dict[str, str]:
     with neo4j_session() as s:
         return {r["key"]: r["norm_name"] for r in s.run(_BY_KEY_Q, k=unique)
                 if r["norm_name"]}
+
+
+def corp_codes_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → **`corp_code`.** 없는 기업은 빠진다 — `norm_names_by_keys()` 의 짝.
+
+    ★**해외 기업은 여기 안 나온다.** `corp_code` 는 DART 가 주는 값이라
+      그래프 Company 중에도 `null` 인 노드가 있다(해외·비상장). 「그래프에
+      없다」와 「`corp_code` 가 없다」는 다른 사실이라 갈라서 읽어야 한다 —
+      존재 확인은 `norm_names_by_keys()` 가 한다.
+
+    ★같은 `_BY_KEY_Q` 를 쓴다(컬럼 하나만 더 읽는다) — 조회를 두 벌 두지 않는다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["corp_code"] for r in s.run(_BY_KEY_Q, k=unique)
+                if r["corp_code"]}
 
 
 _NON_COMPANY_Q = """

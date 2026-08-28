@@ -296,6 +296,62 @@ class PropagationDTO(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  근거 검색 히트
+# ══════════════════════════════════════════════════════════════════
+
+
+class EvidenceHitDTO(BaseModel):
+    """의미검색이 짚은 근거 한 건.
+
+    ★**citation 필드를 여기서 만들지 않는다.** `source_doc`(기사 URL·접수번호)
+      과 언론사·보도일은 `relation_service.evidence_for_ids()` 가 조립하는
+      값이고, 그 경로는 **마감 단계(`evidence_validation`)가 한 번에** 탄다
+      (계약 2번). 도구가 따로 만들면 같은 사실을 두 곳에서 짓는 것이 되고,
+      두 벌은 반드시 갈린다.
+
+      그래서 이 DTO 는 **Agent 가 읽고 고르는 데 필요한 것**만 담는다.
+      인용에 필요한 나머지는 `evidence_id` 로 나중에 이어 붙인다.
+    """
+
+    evidence_id: str = Field(examples=["ev_684dc0c435ca1676"])
+    text: str = Field(description="근거 원문. ★우리가 요약한 것이 아니다")
+    source_type: Literal["dart", "dart_filing", "news"] = Field(examples=["news"])
+    source_note: str = Field(description="`SOURCE_NOTE` 의 문구 — 확정 사실인가 주장인가")
+    edge_type: Optional[str] = Field(
+        None, description="이 근거가 뒷받침하는 관계의 종류", examples=["SUPPLIES_TO"])
+    subtype: Optional[str] = Field(None, examples=["공급계약"])
+    occurred_at: Optional[str] = Field(
+        None,
+        description="사건 시점 `YYYY-MM-DD`. ★`null` 이 실재한다 — 적재 때 "
+                    "시점을 못 뽑은 근거의 `occurred_at` 은 `0` 이다",
+        examples=["2026-06-08"])
+    rcept_no: Optional[str] = Field(
+        None,
+        description="DART 접수번호. ★뉴스 근거에는 **없다**(빈 문자열이 아니라 `null`)",
+        examples=["20260608800436"])
+
+
+# ══════════════════════════════════════════════════════════════════
+#  공시 목록
+# ══════════════════════════════════════════════════════════════════
+
+
+class FilingDTO(BaseModel):
+    """공시 한 건 — `documents` 표. ★**제목까지다. 본문이 아니다.**
+
+    ★`evidence_id` 를 두지 않는다. 이건 「무엇이 공시됐나」의 목록이지 근거가
+      아니다. 인용할 문장이 필요하면 `search_dart` 가 근거 청크를 준다.
+    """
+
+    rcept_no: str = Field(examples=["20260310002820"])
+    doc_type: Optional[str] = Field(None, examples=["사업보고서"])
+    title: Optional[str] = Field(None, examples=["사업보고서 (2025.12)"])
+    rcept_dt: Optional[str] = Field(None, description="접수일 `YYYY-MM-DD`",
+                                    examples=["2026-03-10"])
+    url: Optional[str] = Field(None, description="DART 원문 링크 — 되짚을 수 있는 값")
+
+
+# ══════════════════════════════════════════════════════════════════
 #  사업의 내용
 # ══════════════════════════════════════════════════════════════════
 
