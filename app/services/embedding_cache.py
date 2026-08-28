@@ -25,6 +25,11 @@
 ★그래서 **값을 고정한다.** 캐시가 (모델, 텍스트) → 벡터를 한 번만 정하고
   그 뒤로는 그 값을 돌려준다. 실측으로 이 방식이 20질문 × 5회 흔들림 0 이었다.
 
+★**폴백은 용도에 따라 갈린다**(2026-08-28). 운영 `/ask` 는 캐시가 값을 못 주면
+  직접 계산으로 넘어가고, 평가·대조 실행은 **그 자리에서 멈춘다**(`STRICT_ENV`).
+  하나로 합쳐 두면 운영 폴백이 평가의 보호막까지 걷어낸다 — 흔들린 실행을
+  점수의 근거로 쓰게 되고, 그러면 애초에 캐시를 만든 이유가 사라진다.
+
   ★부수 효과 하나가 더 있다 — **배치 구성 의존이 사라진다.** 같은 라벨이라도
     리스트 길이·위치에 따라 다른 청크에 실려 다른 벡터를 받았는데, 캐시는
     텍스트 하나를 키로 삼으므로 그 차이가 정규화된다.
@@ -56,6 +61,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Callable, Optional, Sequence
 
 from app.core.config import EMBEDDING_MODEL
@@ -64,6 +70,34 @@ from app.core.trace import trace_logger
 log = trace_logger(__name__)
 
 Embed = Callable[[list[str]], Sequence[Sequence[float]]]
+
+# ★폴백은 **용도에 따라 갈린다**(2026-08-28). 하나로 합쳐 두면 운영 폴백이
+#   평가의 보호막까지 걷어낸다.
+#
+#       운영 `/ask`    캐시가 값을 못 주면 **직접 계산으로 넘어간다.**
+#                      저장소가 죽었다고 답변까지 막을 이유가 없다
+#       평가·대조      **그 자리에서 멈춘다.** 직접 계산한 값은 드리프트를
+#                      타므로(배치 150건에서 코사인 최대 4.4e-03) 그 실행은
+#                      재현되지 않는다. 흔들린 실행을 점수의 근거로 쓰면
+#                      「Agent 때문인지 임베딩 때문인지」를 못 가른다 —
+#                      그러라고 캐시를 만든 것이다
+#
+# ★**환경변수로 가른다.** 인자로 두면 `retrieve_service._default_embed` 까지
+#   내려가야 하는데 그 파일은 2차 동안 손대지 않는 자리다. 평가 스크립트가
+#   프로세스 앞에서 켜면 아래 전 구간에 걸린다.
+STRICT_ENV = "EMBED_CACHE_STRICT"
+_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+class EmbeddingCacheMiss(RuntimeError):
+    """★평가·대조 실행에서 캐시가 값을 못 줬다 — **그 실행은 재현되지 않는다.**
+
+    운영 경로에서는 절대 오르지 않는다(거기선 직접 계산으로 넘어간다).
+    """
+
+
+def _strict() -> bool:
+    return os.getenv(STRICT_ENV, "").strip().lower() in _TRUE
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -106,6 +140,7 @@ def embed_with_cache(texts: list[str], real: Embed,
     """
     if not texts:
         return []
+    strict = _strict()
     model = model or EMBEDDING_MODEL
     wanted = list(dict.fromkeys(texts))          # 순서 보존 · 중복 제거
 
@@ -122,6 +157,14 @@ def embed_with_cache(texts: list[str], real: Embed,
                 found = {row[0]: list(row[1]) for row in cur.fetchall()}
 
             missing = [t for t in wanted if _key(t) not in found]
+            # ★평가·대조 — **계산하기 전에** 멈춘다. 계산해 버리면 그 값이
+            #   이미 드리프트를 탄 뒤라 「멈췄다」가 의미를 잃는다.
+            if missing and strict:
+                raise EmbeddingCacheMiss(
+                    f"캐시에 없는 텍스트 {len(missing)}건 / 요청 {len(wanted)}건 — "
+                    f"{STRICT_ENV} 가 켜져 있어 멈춘다. 직접 계산한 값은 흔들리므로 "
+                    f"이 실행을 대조의 근거로 쓸 수 없다. **캐시를 먼저 데운 뒤** "
+                    f"다시 재라. 예: {missing[0][:60]!r}")
             if missing:
                 fresh = list(real(missing))
                 if len(fresh) != len(missing):
@@ -142,7 +185,14 @@ def embed_with_cache(texts: list[str], real: Embed,
                      model, len(wanted), len(wanted) - len(missing), len(missing))
             return [found[_key(t)] for t in texts]
 
+    except EmbeddingCacheMiss:
+        raise                     # ★평가 경로의 정지 신호 — 삼키지 않는다
     except Exception as exc:  # noqa: BLE001 — 캐시가 죽어도 /ask 는 살아야 한다
+        if strict:
+            # 저장소가 죽은 것도 평가에서는 정지 사유다. 여기서 폴백하면
+            # 「캐시를 물렸다」고 믿는 채로 흔들린 값을 재게 된다.
+            raise EmbeddingCacheMiss(
+                f"캐시를 쓸 수 없다 — {STRICT_ENV} 가 켜져 있어 멈춘다 ({exc!r})") from exc
         log.warning("embed.cache 사용 불가 — 직접 계산으로 넘어간다. "
                     "★이 실행의 임베딩은 **고정이 아니다** (%r)", exc)
         return [list(v) for v in real(texts)]
