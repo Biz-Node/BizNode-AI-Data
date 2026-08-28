@@ -1045,12 +1045,29 @@ if not matched: return ordered          # relation_selector.py — 정렬이 통
 ```text
 예상   정렬이 켜지면 IS_EXECUTIVE_OF·REGULATES·HAS_EVENT 가 R2 안에서 앞으로 올라와
        R2 가 살아난다
-실제   R2 는 전후 모두 0
+실제   R2 는 세 시점 모두 kept 0
 ```
 
-**이유는 구조적입니다** — 정렬은 링 **안에서만** 순서를 바꾸고, 자르기는 링 **순서대로** 먹습니다. R1 이 혼자 746건이라 상한을 다 채우고 끝나므로 **R2 는 애초에 차례가 오지 않습니다.**
+**이유는 구조적입니다** — 정렬은 링 **안에서만** 순서를 바꾸고, 자르기는 링 **순서대로** 먹습니다.
+
+```text
+ordered = [R0 블록] + [R1 블록] + [R2 블록] + [R3 블록]   ← 링 순서 고정
+kept    = ordered[:limit]                                  ← 프리픽스 컷
+```
+
+R1 이 혼자 **746건**(정본 `9ae14c4`)이라 R0+R1 이 `limit` 을 다 채우고 끝나므로 **R2 는 애초에 차례가 오지 않습니다.**
 
 즉 현황서 §5-17(비-Company 관계가 Ring 2 로 밀려 잘린다)은 이 수정으로 **닫히지 않았고**, **링 사이 배분(fair-share) 문제**로 남습니다. 링별 최소 할당 같은 배분 규칙이 없으면 정렬을 어떻게 바꿔도 R2·R3 는 0 입니다. **그 결정은 아직 하지 않았습니다.**
+
+### 17-6. ★`41bb1bb` 가 바꾸는 것은 「몇 개」가 아니라 「무엇」이다
+
+위 프리픽스 컷 구조에서 따라 나오는 중요한 성질이 하나 있습니다.
+
+`relation_selector.order()` 는 `ordered = list(rows)` 뒤 `sort()` 만 합니다 — **길이를 보존하는 순열**이라 블록 크기를 못 바꿉니다. 그래서 **링 안 순서는 링별 kept *개수*에 영향을 줄 수 없습니다.**
+
+★한때 재측정 수치의 개수 변화(`kept 126→110` 등)를 이 수정의 효과로 적었으나, **그것은 계측 오귀속이었습니다** — `observe.record_rings()` 가 도구 호출마다 `edge_id` 중복을 안 접어 「호출 × 관계」를 세고 있었고, 몇 번 부를지는 LLM 이 정합니다. 계측은 `e6c70f4` 에서 고쳤고 `tests/graph/test_observe_rings.py` 8건이 「호출 횟수가 링 수치를 못 바꾼다」를 못 박습니다. 자세한 경위는 [개발 이력 §4-9](BizNode_Agent_Development_History.md) · [평가 문서 §10-3](BizNode_Agent_Evaluation.md).
+
+**이 수정의 효과를 보려면 링별로 「어떤 `edge_id` 가 남았나」를 대조해야 합니다** — 실제로 LLM 없이 한 대조에서 **순서까지 11/11 동일**이 나왔고, 달라진 것은 어떤 엣지가 남나뿐이었습니다(§17-4).
 
 ---
 
@@ -1117,7 +1134,7 @@ if rows is None:
 | **도구** | `tool_calls` `tools_used` `tool_items` `tool_errors` | ★「불렀는데 0건」과 「안 불렀다」 · 거부된 호출 |
 | **임베딩** | `embed_calls` `embed_texts` `embed_cache_hits/misses` | ★빗나감 = 「실제로 계산했다」 → 그 실행은 값이 흔들림 |
 | **예산** | `agent_stopped_by_budget` | ★**루프가 잘린 것**과 「끝난 뒤 파급 예산이 찼다」 |
-| **링** | `ring_seen` `ring_kept` `relations_kept/cut` `ring_by_edge` | 자르기 전 분포와 남은 것 |
+| **링** | `ring_seen` `ring_kept` `relations_kept/cut` `ring_by_edge` | 자르기 전 분포와 남은 것. ★`edge_id` 로 **중복을 접습니다**(아래) |
 | **인용** | `cited_rings` `cited_without_ring` | ★**링 순서가 답변까지 살아갔나** |
 
 ### 19-3. ★`agent_stopped_by_budget` 을 State 플래그와 가르는 이유
@@ -1141,7 +1158,19 @@ observe.record_cited_relations(cited_edges,
                                without_ring=len(accepted_set) - len(cited_edges))
 ```
 
-★**사건·뉴스 근거에는 링이 없습니다 — Ring 0 으로 뭉뚱그리지 않습니다.** 이 구분이 「인용의 85%가 관계가 아니다」라는 실측을 낳았습니다(§17-5).
+★**사건·뉴스 근거에는 링이 없습니다 — Ring 0 으로 뭉뚱그리지 않습니다.** 이 구분이 「인용 45건 중 38건(84%)이 관계가 아니다」라는 실측을 낳았습니다(정본 `9ae14c4`).
+
+### 19-6. ★관측도 틀릴 수 있다 — `record_rings` 의 중복 계수
+
+`record_rings()` 는 `get_relations` **호출마다** 불립니다. 처음에는 `edge_id` 중복을 안 접고 더해서, `ring_seen` 이 「관계 몇 개」가 아니라 ★**「호출 × 관계」**였습니다. **몇 번 부를지는 LLM 이 정하므로**(실측: 같은 20 케이스에서 한 실행 7회 · 다른 실행 3회) 링 수치가 랭킹과 무관하게 흔들렸습니다.
+
+**고친 뒤**(`e6c70f4`) `ring_seen`·`ring_kept` 는 `edge_id` 로 중복을 접습니다.
+
+★**`cut` 만은 안 접습니다** — 같은 관계가 한 호출에서 남고 다른 호출에서 잘릴 수 있어 「어느 쪽이 참인가」가 없습니다. 자른 **횟수**로 읽어야 하는 값입니다.
+
+`tests/graph/test_observe_rings.py` **8건**이 이것을 못 박습니다 — 특히 `test_call_count_does_not_change_ring_numbers`(같은 입력을 1회 넣든 5회 넣든 링 수치가 같다). DB·LLM 을 쓰지 않습니다.
+
+> ★**교훈**: 「재기만 하고 아무것도 안 바꾼다」는 관측 계층도 **틀리게 잴 수 있습니다.** 그리고 그 틀림은 정책 결함보다 찾기 어렵습니다 — 아무 증상이 없고, 수치가 그럴듯하게 나오기 때문입니다.
 
 ### 19-5. 버킷을 여는 자리
 
@@ -1170,8 +1199,8 @@ seen.tool_calls, seen.tools_used, seen.cited_rings
 ### 20-2. 수집 규모
 
 ```text
-962 collected / 32 deselected   (needs_llm · needs_db 마커)
-전체 스위트 953 passed · 기존 실패 7건 · 신규 0    (709496a 시점)
+970 collected / 32 deselected   (needs_llm · needs_db 마커 · 총 1,002)
+전체 스위트 961 passed · 기존 실패 7건 · 신규 0    (9ae14c4 시점)
 ```
 
 ### 20-3. Agent 관련 단위 테스트
