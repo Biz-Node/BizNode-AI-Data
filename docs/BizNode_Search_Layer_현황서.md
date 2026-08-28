@@ -2510,6 +2510,65 @@ EMBED_CACHE_STRICT=1 python -m batch.audit.ask_graph_parity  # ② 물린 채로
 
 ---
 
+### 8-16. citation 승격의 비대칭 — 왜 사업개요는 인용할 수 없나 (2026-08-28 · Phase 2)
+
+★**이 절은 「나중에 보는 사람이 버그로 오인하지 않게」 하려고 있습니다.**
+「사업보고서를 인용했는데 근거가 안 붙는다」는 상태가 **의도된 것**입니다.
+
+**인용 가능한 도구는 하나뿐입니다**
+
+| 도구 | 인용 | 왜 |
+|---|---|---|
+| `search_news` | **가능** | `evidence` 컬렉션 청크라 `evidence_id` 가 이미 있고, 본문·`source_doc`(기사 URL)·언론사·보도일은 `relation_service.evidence_for_ids()` 가 채웁니다. **코드가 사실상 안 바뀝니다** — 기존 화이트리스트를 그대로 탑니다 |
+| `search_dart` | 아직 | 청크도 `evidence_id` 도 **이미 있습니다.** 올리는 데 필요한 것은 코드가 아니라 **측정**입니다 — 한 출처로 경로를 확인한 뒤에 올립니다 |
+| `get_business_overview` | **구조적으로 불가** | 아래 |
+| `get_market` | 불가 | **계산값**입니다. 근거 id 를 발급하면 원본 갱신 때 어긋납니다 — 되짚을 것은 계산 좌표입니다 |
+| `get_filings` | 불가 | 공시 **목록**입니다. 제목까지고 인용할 문장이 없습니다 |
+
+★**이유가 둘로 다릅니다. 뭉뚱그리면 안 됩니다.** `search_dart` 는 「이 단계의
+범위라서」이고 `get_business_overview` 는 「구조적으로 못 올려서」입니다. 한 통에
+넣으면 「나중에 올리면 되지」로 읽혀 적재 작업이 사라집니다.
+
+**사업개요가 구조적으로 못 올라가는 이유** (실측 2026-08-28)
+
+```text
+business_overview        PostgreSQL 64행 · 평균 2,294자 · 최대 16,623자
+                         → 목차 절 **전문**이다. 근거 단위가 아니다
+ChromaDB evidence        해당 청크 **0건**
+vector_chunks            chunk_type 두 종뿐 — evidence 10,510 · company 2,432
+```
+
+근거 본문은 `relation_service.evidence_for_ids()` **한 경로로만** 옵니다. 그래서
+`business_overview` 에 억지로 `evidence_id` 를 발급해도 그 경로가 청크를 못 찾아
+`missing:True` 로 내보내고, 화이트리스트가 그걸 버려 **「근거 없음」으로
+표시됩니다.** 인용하려면 청킹·적재가 선행돼야 하고 그건 별도 파이프라인
+작업입니다 — 이 단계 범위가 아닙니다.
+
+**규칙은 한 곳에 둡니다**
+
+`app/tools/citation.py` 가 세 통(`CITABLE_TOOLS`·`DEFERRED_TOOLS`·
+`CONTEXT_ONLY_TOOLS`)으로 정하고, 마감 단계도 프롬프트도 문서도 **읽기만**
+합니다. 흩어 두면 하나만 바뀌었을 때 아무도 못 봅니다.
+
+**LLM 에게도 말합니다** — 시스템 프롬프트 `[자료의 한계]` 절
+
+```text
+기사 원문은 제공되지 않습니다.          ← evidence 는 승격된 문장만 담는다
+사업개요는 참고 맥락입니다.             ← evidence_id 가 없어 인용할 수 없다
+사업개요에서 읽은 내용은 claims에 넣지 않습니다.
+```
+
+★**세 번째 줄이 지표를 지킵니다.** 이걸 안 적으면 LLM 이 사업개요를 claims 에
+넣는데 인용할 id 가 없어서 `claim_check` 의 **uncited 카운터가 오염됩니다.**
+그러면 「Agent 가 근거 없이 말했다」와 「인용할 수 없는 자료를 참고했다」가
+한 숫자에 섞여 지표를 못 읽습니다.
+
+★프롬프트는 **한 벌뿐**입니다 — 그래프 경로가 `answer_service._SYSTEM_PROMPT`
+를 그대로 import 합니다(`app/graph/nodes/answer.py`). 사본이 생기면 한쪽만
+고쳐지고 그 차이를 아무도 못 봅니다. `tests/tools/test_citation.py` 가 두
+객체의 동일성과 **규칙·프롬프트가 같은 말을 하는지**를 마주 세워 둡니다.
+
+
 ## 9. 실측 근거 없는 잠정치
 
 **전부 조정 여지로 남겨 둔 값입니다.** 트래픽·품질 실측 후 정합니다.
@@ -2588,6 +2647,7 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-28 | ★**Phase 2 진행 — 작업 0·A·B** (브랜치 `yun-phase2`) | **이 단계부터 출력 대조가 성립하지 않는다** — 완료 기준이 평가셋 점수로 바뀐다. ① **작업 0**: `embedding_cache.model` → **`embedding_model`** 개명(`vector_chunks` 와 이름 통일 — 모델 교체 시 재임베딩 대상과 버릴 캐시를 같은 값으로 고른다). 런타임 DDL·`02_schema.sql`·**신규 마이그레이션**(`batch/repair/embedding_cache_column.py`, 516행 보존·멱등) 세 곳 동시 수정. **폴백 정책을 용도별로 분리** — 운영 `/ask` 는 직접 계산, 평가·대조는 `EMBED_CACHE_STRICT=1` 로 **즉시 정지**(`EmbeddingCacheMiss`). ★운영 경로 비결정성은 **고치지 않고** 알려진 한계로 명시 → [§8-13](#8-13-기준선-비결정성의-뿌리--임베딩-값-드리프트-2026-08-28--phase-175). ★문서의 표 개수가 이미 틀려 있었다 — 5곳이 「27표」였으나 실측 **26표 + 뷰 1**이고 ERD 가 등재한 25개 중 빠진 하나가 정확히 `embedding_cache` 였다. 26으로 정정. ② **작업 A**: Agent 도구 **5종** — `search_news`·`search_dart`(`app/tools/search_tools.py`) · `get_business_overview`·`get_filings`·`get_market`(`app/tools/company_tools.py`). 1.5차 4원칙 그대로. ★두 검색 도구는 **같은 evidence 컬렉션**을 `source_type` 메타로만 가른다(실측: news 7,668 · dart 2,561 · dart_filing 113 · **없음 168** — 168건은 0차가 추측하지 않고 남긴 것이라 **두 도구 모두에 안 잡힌다**). ★기업 필터에 `corp_code`·`norm_name` **두 형태를 다** 넣는다 — 메타에 섞여 있어 한 형태만 쓰면 근거 절반이 조용히 사라진다. `get_market` 에 **`evidence_id` 없음**(계산 좌표만). 신설 DTO `EvidenceHitDTO`·`FilingDTO` — ★citation 필드는 두지 않는다(계약 2). ③ **작업 B**: **`search_news` 만** citation 승격. 규칙을 `app/tools/citation.py` 한 곳에 두고 시스템 프롬프트 `[자료의 한계]` 절이 같은 말을 하게 했다 → [§8-16](#8-16-citation-승격의-비대칭--왜-사업개요는-인용할-수-없나-2026-08-28--phase-2). 테스트 836 → **918 passed** · 기존 실패 7건 그대로 · 신규 0. ★Agent 루프·총량 예산·`evidence_validation` 은 아직(작업 C·D·E) · `/retrieve`·`pipeline/llm.py`·`search/`·`langchain-openai` 핀 무수정 |
 | 2026-08-28 | ★**Phase 1.75 — 기준선을 고정한다** (브랜치 `yun-phase175`) | **기능을 만들지 않는다.** 2차의 완료 기준이 평가셋 점수인데 기준선이 실행마다 흔들려 점수 차이를 귀속시킬 수 없었다 — 그것만 고친다. ① ★**비결정성의 뿌리는 동점이 아니라 임베딩 값 드리프트**였다(실측 4단계). OpenAI 임베딩이 같은 입력에 같은 벡터를 안 주고 편차가 배치 크기에 붙어 있다(150건에서 2.1e-03 · 코사인 최대 4.4e-03). 반올림으로는 못 막아(버킷보다 큰 드리프트) **영속 캐시**로 값을 고정하고, 캐시가 못 막는 진짜 동점에 **`event_id` tiebreak** 을 더했다 → [§8-13](#8-13-기준선-비결정성의-뿌리--임베딩-값-드리프트-2026-08-28--phase-175). ② ★**도구가 공유 사건의 근거 병합을 잃고 있었다** — `_merge_evidence_ids()` 가 이미 고쳐 둔 버그를 도구화가 되돌렸고, `_classify()` 가 `evidence` diff 를 안 봐서 대조가 못 잡았다. 둘 다 고치고 두 사본 동일성 테스트를 신설 → [§8-14](#8-14-두-사본의-동일성을-테스트로-강제-2026-08-28--phase-175). ③ 프롬프트 조립 사본 통합(`app/llm/prompt.py`) — **바이트 무변경**(40개 sha256 동일). `[사실]` 렌더링은 의도적으로 다르므로 안 옮긴다. 테스트를 **먼저 이관**했다(운영 렌더러에 직접 테스트가 0건이었다) → [§8-15](#8-15-프롬프트-조립-사본-통합-2026-08-28--phase-175). ④ `RelationDTO`·`EventDTO` 에 **provenance 자리**(값은 전부 `direct`, 탐색 로직 없음). ⑤ `embedding_cache` 표를 **`infra/postgres/init/02_schema.sql` 에 반영** — 런타임 DDL 만 있어 스키마 정본에서 빠져 있었다. 통째 재덤프는 pg_dump 빌드 차이로 서식 잡음 1,000줄이 섞여 표 하나 분량만 넣고, 빈 DB 적재 대조로 검증했다(컬럼 231 · 제약 26 · 인덱스 52 · 뷰 1, **차이 0**). 실측: 20질문 × 4회 **흔들림 0** · `--materials` **예상 밖 0** · 761 → **836 passed** · 기존 실패 7건 그대로 · 신규 0. ★Agent·새 도구·새 재료 없음 · `/retrieve`·`pipeline/llm.py`·`search/`·상한값·`langchain-openai` 핀 무수정 |
 | 2026-08-28 | ★**Phase 1.5 정리 — 불필요한 인자·State 필드 제거** (브랜치 `yun-phase15`) | **기능 추가가 아니다** — 최종 Agent 구조에서 LLM 이 불필요한 판단을 하지 않게 하고, State 에 흐르지 않는 값을 두지 않게 한다. 다섯 자리: ① `get_events` 의 `role` **검색 인자** 제거(`EventDTO.role`·`role_note` 는 유지 — 「거르기」와 「표기하기」를 가른다) ② `AskState.use_hits` 제거(write-only, 판정 결과는 `companies` 출처로 드러난다) ③ `AskState.backstop` 제거(★로직·조건·결과는 그대로) ④ `match_type` 생성을 `fetch_evidence` → **`search`** 로 이동(`result.mode` 만 보는 값이라 검색이 끝난 자리에서 확정된다) ⑤ `main._answer_service` 인스턴스 제거(★클래스는 유지 — 대조 기준선). 실측: 재료 **예상 밖 차이 0건**(변경 전과 같은 판정) · 761 passed · 기존 실패 7건 그대로 · 신규 0 → [§8-12](#8-12-구조-정리--불필요한-인자state-필드-제거-2026-08-28--phase-15). ★대조 스크립트의 **1차 기준선 열에 실행 간 흔들림**이 있음을 확인(원본 코드 2회 실행이 서로 다름) — 회귀로 오독하지 않도록 §8-12 에 기록. ★`/retrieve`·`RetrieveService`·`pipeline/llm.py`·`search/`·`get_propagation`·Finance/News 도구·Agent 루프·상한값 무수정 |
 | 2026-08-28 | ★**Phase 1.5 — `fetch_*` 를 도구 시그니처로** (브랜치 `yun-phase15`) | **순수 리팩터링**이다 — 재료는 그대로 두고 표기만 붙인다. Graph 계열 도구 셋(`get_relations`·`get_events`·`get_propagation`)이 기존 Service 를 감싸고, `app/tools/dto.py`(0차)를 돌려준다. 구조는 `Agent(2차) → Tool → 기존 Service → Repository`. **4원칙** — ① key 만 받고 범위 밖 거부(★범위를 **인자로 받지 않는다**: 2차에 부르는 쪽이 LLM 이라 인자면 LLM 이 넓힐 수 있다. `workspace_keys`·`anchor_keys`·`anchor_names` 도 같은 이유로 문맥에 둔다) ② 표기가 끝난 DTO ③ `limit` 은 내부 상수(값은 `retrieve_service` 것을 그대로 import) ④ 해소 실패는 `ToolError`, 정말 없으면 `[]`. `app/graph/prompt.py` 신설 — DTO 를 읽는 프롬프트 조립(`answer_service` 는 대조 기준선이라 손대지 않는다). 실측: 재료 집합 **예상 밖 차이 0건** · `eventness_suspect` 207건 제외 · `grounding_suspect` 추가 제외 **0건** · 프롬프트 최대 +1,043자(2.7%) → [§8-11](#8-11-도구-계층-재료-집합-대조-2026-08-28--phase-15). [§5-28](#5-28-그래프-경로를-직접-보는-테스트가-라우트-위임-검사-하나뿐이다--해소-2026-08-28) **닫힘** — 그래프·도구 테스트 55건 신설(`needs_db` 마커로 DB 의존분 분리). 테스트 705 → **760 passed** · 2 xfailed · 4 deselected · 7 failed(기존). ★`/retrieve`·`pipeline/llm.py`·`search/` 무수정 · Agent 루프·Finance/News 도구·새 재료 없음 |
