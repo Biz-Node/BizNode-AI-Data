@@ -95,13 +95,25 @@ def _tool_node():
 
 
 def _scope_of(state: AskState):
-    """도구가 만질 범위 — **서버가 정하고 도구가 강제한다.**"""
+    """도구가 만질 범위 — **서버가 정하고 도구가 강제한다.**
+
+    ★`edge_types`·`direction` 은 `intent` 와 **같은 자리에 같은 방식**으로 싣는다.
+      1.5차 `fetch_relations` 가 인자로 넘기던 값인데 Agent 배선에서 인자를 빼며
+      옮기지 않아, `relation_selector.order()` 가 `if not matched: return ordered`
+      로 빠져 **링 안의 의도 정렬이 죽어 있었다**(현황서 §8-18).
+
+    ★`direction` 은 **`.value` 문자열**로 넘긴다 — 1.5차 `fetch_relations` 가
+      `getattr(query.direction, "value", None)` 로 넘기던 형태 그대로다.
+    """
+    query = state["query"]
     return scope.anchor_scope(
         [c.key for c in state["companies"]],
         workspace_keys=state["request"].workspace_keys,
         anchor_keys=[a.key for a in state["decision"].anchors],
         anchor_names=state["anchor_names"],
-        intent=state.get("intent") or "")
+        intent=state.get("intent") or "",
+        edge_types=query.edge_types or (),
+        direction=getattr(query.direction, "value", None))
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -18,7 +18,9 @@
     get_events(keys)          `intent` 를 안 받는다 — 「무엇을 중요하게 볼지」를
                               LLM 이 정하면 그건 재료 범위를 고르는 것이다.
                               서버가 `ToolContext.intent` 에 실어 보낸다
-    get_relations(keys)       `edge_types`·`direction` 을 안 받는다 — 같은 이유
+    get_relations(keys)       `edge_types`·`direction` 을 안 받는다 — 같은 이유.
+                              서버가 `ToolContext` 에 실어 보낸다. ★빼기만 하고
+                              옮기지 않으면 정렬이 통째로 꺼진다(현황서 §8-18)
     get_business_overview(key) `year` 를 안 받는다 — 최신 연도로 고정
 
   4원칙 ① 이 「범위를 인자로 받지 않는다」인 이유가 여기서 실현된다. 부르는
@@ -115,7 +117,10 @@ def _guard(tool: str, fn, *args, **kwargs) -> str:
 
 def get_relations(keys: list[str]) -> str:
     """이 기업들의 관계(공급·협력·경쟁·소송·지분 등)를 가져온다."""
-    return _guard("get_relations", graph_tools.get_relations, keys)
+    ctx = scope.context()
+    return _guard("get_relations", graph_tools.get_relations, keys,
+                  (list(ctx.edge_types) if ctx else None),
+                  (ctx.direction if ctx else None))
 
 
 def get_events(keys: list[str]) -> str:

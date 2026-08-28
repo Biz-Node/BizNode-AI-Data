@@ -2713,16 +2713,52 @@ raw row 를 먹여 비교하는 것이라 **그대로 유효합니다** — 도�
 링 분류가 살아 있어 **일어나지 않습니다.** 잃은 것은 **링 안의 우선순위**이고, 링
 안에서는 입력 순서(=점수순)가 그대로 남습니다.
 
-**★고치는 데 필요한 것** (이번에 하지 않았습니다):
+**★고치는 데 필요한 것** (조사 시점에는 하지 않았습니다):
 
 1. `ToolContext` 에 `edge_types: tuple[str, ...]` · `direction: Optional[str]` 두 자리
 2. `agent_loop._scope_of()` 가 `state["query"]` 에서 실어 보내기 — `intent` 와 같은 방식
 3. `agent_tools.get_relations` 가 `ctx.edge_types`·`ctx.direction` 을 `graph_tools` 로 넘기기
 4. 도구 시그니처·Agent 인자는 **그대로** — 4원칙 ① 을 깨지 않습니다
 
-★고친 뒤에는 **Phase 8 을 다시 재야 합니다.** 순서가 바뀌면 자르는 지점이 바뀌고
-재료가 바뀝니다. 링 우선이냐 의도 우선이냐(§5-17·§7-3 의 `[DECIDE]`)는 그 데이터를
-보고 정합니다.
+---
+
+#### ★해소 (2026-08-28) — 위 넷을 그대로 했습니다. **Phase 8 앞에서** 했습니다
+
+측정 뒤에 고치면 순서가 바뀌어 `ordered[:limit]` 의 자르는 지점이 바뀌고, 그러면
+평가셋을 **두 번 재게 됩니다.** 그래서 재기 전에 넣었습니다.
+
+바꾼 파일은 **셋뿐**입니다 — `app/tools/scope.py`(필드 두 자리) ·
+`app/graph/nodes/agent_loop.py`(`_scope_of` 가 싣는다) ·
+`app/tools/agent_tools.py`(`ctx` 에서 꺼내 넘긴다). `graph_tools.py` 와
+`relation_selector.py` 는 **한 줄도 안 바꿨습니다** — 받는 쪽은 처음부터 멀쩡했고,
+비어 있던 것은 **보내는 쪽**이었습니다.
+
+★`get_events` 의 `intent` 와 **같은 자리에 같은 방식**으로 실었습니다. 새 패턴을
+만들지 않았습니다. `direction` 은 `Direction` enum 이 아니라 **`.value` 문자열**로
+넘깁니다 — 1.5차 `fetch_relations` 가 `getattr(query.direction, "value", None)` 로
+넘기던 형태 그대로입니다. 형태를 바꾸면 그건 대조에서 티가 안 나는 차이가 됩니다.
+
+**★대조 실측** (실제 Neo4j · 삼성전자 관계 526건 · **LLM 호출 없음**). Search 평가셋
+20질의를 `QueryRouter` 에 먹여 `edge_types` 가 잡힌 고유 질의 11건에 대해, 세 경로가
+돌려주는 `edge_id` **순열**을 비교했습니다:
+
+| 경로 | `matched` | 결과 |
+|---|---|---|
+| **A. 1.5차** `fetch_relations` 가 인자로 넘기던 그대로 | 11건 전부 채워짐 | 기준 |
+| **B. 2차(고침)** `ToolContext` 로 실음 | 11건 전부 채워짐 | ★**A 와 순서까지 11/11 동일** |
+| **C. 2차(고치기 전)** 아무것도 안 넘김 | **11건 전부 빔** | A 와 순서가 **8건에서 다름**(3건만 우연히 동일) |
+
+★**개선이 아니라 복구입니다.** B 가 A 와 순열까지 같으므로 이 수정은 새 정책을
+넣은 것이 아니라 1.5차가 하던 일을 되돌린 것입니다. 링 우선이냐 의도 우선이냐
+(§5-17·§7-3 의 `[DECIDE]`)는 **여전히 안 정했습니다** — Phase 8 관측을 보고 정합니다.
+
+★**C 가 8건에서 달랐다**는 것이 이 회귀의 크기입니다. 자르기가 정렬 뒤라 순서가
+곧 「무엇이 살아남나」이고, 그 8건에서는 남는 관계 집합 자체가 달랐습니다.
+
+★Agent 인자는 **안 늘렸습니다.** `get_relations` 는 여전히 `keys` 만 받습니다 —
+도구 스키마도 시스템 프롬프트도 안 바뀝니다. `tests/graph/test_relation_intent_order.py`
+**6건**이 이 회귀를 묶습니다. 죽은 방식이 조용했다는 것이 이유입니다 — `matched` 가
+비면 `order()` 가 예외도 로그도 없이 그대로 돌려주므로 **테스트가 아니면 안 잡힙니다.**
 
 ---
 
@@ -2884,6 +2920,7 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-28 | ★**Phase 2 — 링 안의 의도 정렬 복구** (§8-18 해소 · 브랜치 `yun-phase2`) | **개선이 아니라 복구입니다.** 1.5차 `fetch_relations` 가 인자로 넘기던 `edge_types`·`direction` 을 Agent 배선에서 인자로만 빼고 **`ToolContext` 로 옮기지 않아**, `matched` 가 항상 빈 집합이 되고 `relation_selector.order()` 가 `if not matched: return ordered` 로 링 안의 정렬을 **예외도 로그도 없이** 건너뛰고 있었습니다. `get_events` 의 `intent` 와 **같은 자리에 같은 방식**으로 실었습니다 — 새 패턴 없음. 바꾼 파일은 **셋뿐**(`scope.py` 필드 두 자리 · `agent_loop._scope_of` · `agent_tools.get_relations`); `graph_tools.py`·`relation_selector.py` 는 **무수정**입니다 — 받는 쪽은 멀쩡했고 비어 있던 건 **보내는 쪽**이었습니다. ★**Phase 8 앞에서** 했습니다 — 순서가 바뀌면 `ordered[:limit]` 의 자르는 지점이 바뀌어 평가셋을 두 번 재게 됩니다. 대조 실측(실 Neo4j · 삼성전자 526관계 · **LLM 호출 없음**): 라우터가 `edge_types` 를 잡는 고유 질의 11건에서 **1.5차 경로와 순서까지 11/11 동일**, 고치기 전 경로와는 **8건에서 순서가 달랐습니다**(그만큼 살아남는 관계가 달랐다는 뜻). ★Agent 인자는 **안 늘렸습니다** — `get_relations` 는 여전히 `keys` 만 받아 도구 스키마·시스템 프롬프트 무변경(4원칙 ①). ★랭킹 정책은 **안 정했습니다** — 링 우선 vs 의도 우선(§5-17·§7-3)은 Phase 8 관측을 보고 판단합니다. `tests/graph/test_relation_intent_order.py` **6건** 신설 (죽은 방식이 조용해 테스트가 아니면 안 잡힙니다) → [§8-18](#8-18-링-정렬-상속-조사--세-단계-중-두-단계만-남았다-2026-08-28--phase-2). ★평가셋 미실행 · 예산 4값·남은 빚 셋 무수정 |
 | 2026-08-28 | ★**Phase 8 — Agent 평가셋 신설 + 관측 로그** (브랜치 `worktree-agent-eval-set`) | **기능을 만들지 않는다.** 2차의 완료 기준이 「평가셋 점수」인데 잴 평가셋이 Agent 를 못 재고 있었다 — 기존 `/ask` 20질문은 **2026-08-23**, 도구 5종(8/28)보다 먼저라 `search_dart`·`get_business_overview`·`get_market`·`get_filings` 를 끌어오는 질문이 **하나도 없었다.** ① **관측 계층 신설**(`app/core/observe.py`) — ContextVar 버킷 + 훅 5곳(`agent_tools._guard`·`agent_loop.run_tools`·`should_continue`·`graph_tools.get_relations`·`embedding_cache.embed_with_cache`·`answer.verify_sources`). ★**재기만 하고 아무 동작도 안 바꾼다** — 버킷이 안 열려 있으면 no-op 이라 운영 경로에 비용이 없다. 질문별로 도구 호출수·사용 도구·임베딩 호출·**링 분포·kept/cut·최종 인용 관계의 링**을 남긴다. ② **Agent 평가셋 신설**(`tests/agent/eval/` 20 케이스 + 집합 판정 8) → [§13-8](#13-8-agent-루프-평가셋-2026-08-28-신설) · 결과 문서 [Agent 평가셋](BizNode_Agent_평가셋.md). 축은 `anchor_source` 셋 — QUERY 12 · **WORKSPACE 6**(기업 미명시 탐색형) · UNRESOLVED 2(Agent 미호출). ★**질문을 전부 실측으로 골랐다** — 후보를 `search`+`resolve_anchor` 에 통과시켜 갈래를 확인했고, 「요즘 공급망 리스크」(「요즘」이 실존 법인 01719318 으로 잡힌다)·「인텔 파운드리」(「파운드리서울」에 붙는다) 등을 걸러냈다. ★도구 선택은 **케이스마다 판정하지 않는다**(LLM 의 몫이라 모델을 바꾸면 죽는다) — 대신 **집합 수준**에서 「도구 7종이 전부 한 번은 불렸는가」를 강제한다. `needs_llm` 마커 신설(기본 실행에서 제외). ③ **`claim_grounding.QUESTIONS` 20개를 현재 DB 로 갱신** — 실측으로 셋 교체(★「심텍 공급 리스크」는 **심텍에 공급망 사건 0건**이었다). 갱신 뒤 20개 전부 재료 있음 → [§13-6](#13-6-claim-분포-수집-챗봇). ④ ★**예산 4개를 처음 실측했다** → [§9-1](#9-1-agent-예산-4개--처음-쟀습니다-2026-08-28). `tool_calls_used` 는 12 중 최대 **5** 로 한 번도 안 물고, **`propagations_used` 는 상한 12 에 최대 303(25배)** 을 쓴다 — 상한이 낮은 게 아니라 **자르는 단위(사건 수)와 세는 단위(파급 행 수)가 어긋났다.** 그래서 `budget_exhausted` 가 9/20 에서 켜지는데 **Agent 루프가 잘린 것은 0건**이다(플래그는 루프 뒤에 켜지고 아무도 안 읽어 지금은 무해). ⑤ **링은 관측만** → [§9-2](#9-2-링ring-순서--관측만-했습니다-2026-08-28). R2 는 203건을 보고 **0건 남았고**, 최종 인용 39건 중 **34건이 관계가 아니다**. 결과: Agent 평가셋 **28 passed** · 기본 스위트 **940 passed** · 기존 실패 7건 그대로 · **신규 0**. ★**ranking·예산·프롬프트 무수정** — Phase 8 은 현재 동작을 고정한 채 재는 단계다. 고치면 무엇을 쟀는지가 흐려진다. `tests/search/eval` 20 케이스는 **검색 회귀 기준선으로 그대로 보존**했다 |
 | 2026-08-28 | ★**Phase 2 — 링 정렬 상속 조사(조사만) · 작업 F provenance 관통** (브랜치 `yun-phase2`) | **코드 동작을 바꾸지 않습니다.** ① ★**링 정렬 상속 조사** — 1.5차의 세 단계 중 **링 분류·링 순 줄세우기·정렬 뒤 자르기는 살아 있고**, **링 안의 의도 정렬만 무력화**됐습니다. `agent_tools.get_relations(keys)` 가 `edge_types`·`direction` 을 안 넘겨 `matched` 가 빈 집합이 되고, `relation_selector.order()` 가 `if not matched: return ordered` 로 그대로 돌려줍니다. 도구 4원칙 ① 을 지키느라 Agent 인자에서는 뺐는데 `get_events` 의 `intent` 와 달리 **`ToolContext` 로 옮겨 싣지 않은** 자리입니다. 실측: `QueryRouter` 의 결정론적 규칙이 Search 평가셋 20질의 중 **12건(60%)에서 `edge_types` 를 채웁니다.** ★**고치지 않았습니다** — 순서가 바뀌면 자르는 지점이 바뀌어 Phase 8 기준선이 또 움직입니다. 링 우선 vs 의도 우선(§5-17·§7-3)은 그 데이터를 보고 정합니다 → [§8-18](#8-18-링-정렬-상속-조사--세-단계-중-두-단계만-남았다-2026-08-28--phase-2). ★로그 이름이 `relations.rings` → **`tools.relations rings`** 로 바뀌었습니다(`/ask` 기준). ② **작업 F**: `provenance` 가 도구 → tool result → `evidence_validation` → `build_prompt` 까지 **끊긴 데 없이** 갑니다 — 이을 것이 없었습니다. 값은 `direct` 하나 그대로. ★**프롬프트 글자로는 안 냅니다**(노출 여부 미정 — 문구를 바꾸면 평가셋 측정 대상이 하나 는다). `tests/graph/test_provenance.py` **7건**이 그 둘을 **양방향**으로 묶습니다 → [§8-19](#8-19-provenance-관통-확인-2026-08-28--phase-2--작업-f). 테스트 940 → **947 passed** · 기존 실패 7건 그대로 · **신규 0**. ★평가셋 미실행(OpenAI 호출 없음) · `tests/search/eval/`·평가셋 문서 무수정 · 링 정렬·랭킹 정책·예산 4값 무수정 |
 | 2026-08-28 | ★**Phase 2 진행 — 작업 0·A·B** (브랜치 `yun-phase2`) | **이 단계부터 출력 대조가 성립하지 않는다** — 완료 기준이 평가셋 점수로 바뀐다. ① **작업 0**: `embedding_cache.model` → **`embedding_model`** 개명(`vector_chunks` 와 이름 통일 — 모델 교체 시 재임베딩 대상과 버릴 캐시를 같은 값으로 고른다). 런타임 DDL·`02_schema.sql`·**신규 마이그레이션**(`batch/repair/embedding_cache_column.py`, 516행 보존·멱등) 세 곳 동시 수정. **폴백 정책을 용도별로 분리** — 운영 `/ask` 는 직접 계산, 평가·대조는 `EMBED_CACHE_STRICT=1` 로 **즉시 정지**(`EmbeddingCacheMiss`). ★운영 경로 비결정성은 **고치지 않고** 알려진 한계로 명시 → [§8-13](#8-13-기준선-비결정성의-뿌리--임베딩-값-드리프트-2026-08-28--phase-175). ★문서의 표 개수가 이미 틀려 있었다 — 5곳이 「27표」였으나 실측 **26표 + 뷰 1**이고 ERD 가 등재한 25개 중 빠진 하나가 정확히 `embedding_cache` 였다. 26으로 정정. ② **작업 A**: Agent 도구 **5종** — `search_news`·`search_dart`(`app/tools/search_tools.py`) · `get_business_overview`·`get_filings`·`get_market`(`app/tools/company_tools.py`). 1.5차 4원칙 그대로. ★두 검색 도구는 **같은 evidence 컬렉션**을 `source_type` 메타로만 가른다(실측: news 7,668 · dart 2,561 · dart_filing 113 · **없음 168** — 168건은 0차가 추측하지 않고 남긴 것이라 **두 도구 모두에 안 잡힌다**). ★기업 필터에 `corp_code`·`norm_name` **두 형태를 다** 넣는다 — 메타에 섞여 있어 한 형태만 쓰면 근거 절반이 조용히 사라진다. `get_market` 에 **`evidence_id` 없음**(계산 좌표만). 신설 DTO `EvidenceHitDTO`·`FilingDTO` — ★citation 필드는 두지 않는다(계약 2). ③ **작업 B**: **`search_news` 만** citation 승격. 규칙을 `app/tools/citation.py` 한 곳에 두고 시스템 프롬프트 `[자료의 한계]` 절이 같은 말을 하게 했다 → [§8-16](#8-16-citation-승격의-비대칭--왜-사업개요는-인용할-수-없나-2026-08-28--phase-2). ④ **작업 C·D·E**: **Agent 루프**(`agent ⇄ run_tools` → `evidence_validation`). ★앵커 해소는 **Agent 앞의 결정론 노드**로 남기고 `UNRESOLVED` 면 Agent 를 아예 안 부른다. ★도구 인자를 원본보다 **좁혔다**(`intent`·`edge_types`·`direction`·`year` 제거 — 서버가 `ToolContext` 로 넣는다). ★총량 예산을 **누적치로** 센다(계약 4) — 인자 길이만 막으면 반복 호출로 우회된다. 소진되면 예외가 아니라 **마감으로 전이**한다(`recursion_limit` 에 기대면 답변이 아예 안 나간다). ★`get_propagation` 은 도구로 열지 않고(계약 1) `evidence_validation` **뒤**의 결정론 노드로 남겼다 — 빼면 파급 재료가 통째로 사라진다 → [§8-17](#8-17-agent-루프--무엇을-넘겼고-무엇을-안-넘겼나-2026-08-28--phase-2). 테스트 836 → **940 passed** · 기존 실패 7건 그대로 · 신규 0. ★`test_parity.py`(1차 재료 대조, `needs_db`)의 전제는 **만료**됐다 — 완료 기준이 평가셋 점수다. `test_retrieve_parity.py`(계약 6)는 조립 함수를 비교하므로 **그대로 유효**하다. ★평가셋 측정(작업 완료 기준)은 아직 · `/retrieve`·`pipeline/llm.py`·`search/`·`langchain-openai` 핀 무수정 |

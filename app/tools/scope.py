@@ -45,6 +45,21 @@ class ToolContext:
     #   그건 재료 범위를 고르는 것과 같다(4원칙 ①). 서버가 `plan_material`
     #   에서 정한 값을 여기 실어 보낸다.
     intent: str = ""
+    # ★관계 순서를 정하는 **질문이 물은 엣지 타입·방향**. `get_relations` 가 쓴다.
+    #   `intent` 와 **같은 이유로 같은 자리**에 있다 — 「무슨 관계를 물었나」를
+    #   Agent 인자로 두면 LLM 이 순서를 정하게 되는데, 순서는 `ordered[:limit]` 의
+    #   자르는 지점을 정하므로 곧 **재료를 고르는 일**이 된다(4원칙 ①).
+    #
+    #   ★**비면 정렬이 통째로 꺼진다** — `relation_selector.order()` 가
+    #     `if not matched: return ordered` 로 그대로 돌려준다. 1.5차에는
+    #     `fetch_relations` 가 인자로 넘기던 값인데, Agent 배선에서 인자를 빼며
+    #     **여기로 옮기지 않아** 60% 질의에서 정렬이 죽어 있었다(현황서 §8-18).
+    edge_types: tuple[str, ...] = ()
+    #   ★`Direction` enum 이 아니라 **그 `.value` 문자열**이다 — 1.5차
+    #     `fetch_relations` 가 `getattr(query.direction, "value", None)` 로
+    #     넘기던 형태를 그대로 쓴다. `relation_selector._direction_matches` 는
+    #     둘 다 받지만, 형태를 바꾸면 그게 대조에서 티가 안 나는 차이가 된다.
+    direction: Optional[str] = None
 
 
 _SCOPE: ContextVar[Optional[ToolContext]] = ContextVar("tool_scope", default=None)
@@ -54,14 +69,18 @@ _SCOPE: ContextVar[Optional[ToolContext]] = ContextVar("tool_scope", default=Non
 def anchor_scope(keys: Iterable[str], *, workspace_keys: Iterable[str] = (),
                  anchor_keys: Iterable[str] = (),
                  anchor_names: Iterable[str] = (),
-                 intent: str = ""):
+                 intent: str = "",
+                 edge_types: Iterable[str] = (),
+                 direction: Optional[str] = None):
     """이 블록 안에서 도구가 만질 수 있는 key 와 랭킹 문맥을 정한다."""
     token = _SCOPE.set(ToolContext(
         allowed=frozenset(k for k in keys if k),
         workspace_keys=frozenset(k for k in workspace_keys if k),
         anchor_keys=frozenset(k for k in anchor_keys if k),
         anchor_names=tuple(n for n in anchor_names if n),
-        intent=intent))
+        intent=intent,
+        edge_types=tuple(t for t in (edge_types or ()) if t),
+        direction=direction))
     try:
         yield
     finally:
