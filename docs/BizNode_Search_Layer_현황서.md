@@ -1505,7 +1505,7 @@ except Exception:  # noqa: BLE001 — 임베딩이 죽어도 답변은 나가야
 | 새 파일 | 무엇을 보나 |
 |---|---|
 | `tests/graph/test_conditional_edges.py` | 조건부 엣지 둘. **「무엇을 하지 않는가」** — 빈 워크스페이스는 검색조차 안 하고, `UNRESOLVED` 는 검색만 하고 조립을 안 돈다 |
-| `tests/graph/test_plan_material.py` | `anchor_names`·`intent` 확정, `use_hits`, `companies` key 무변환, 백스톱 |
+| `tests/graph/test_plan_material.py` | `anchor_names`·`intent` 확정, `companies` key 무변환·출처(히트냐 앵커냐), 백스톱 |
 | `tests/graph/test_state_flow.py` | 노드 간 State 전달. `AskState` 의 모든 키가 실제로 채워지는지 |
 | `tests/tools/test_graph_tools.py` | 도구 4원칙 — 범위 거부·표기·`limit` 비인자·실패 구별 |
 | `tests/graph/test_parity.py` | 재료 집합 대조(`needs_db` 마커) |
@@ -2248,10 +2248,11 @@ trace id 가 노드를 관통     True     ['486104bf']
 
 **사건 `role` 분포** — subject 215 · counterparty 16 · mentioned 17.
 
-★`get_events` 의 기본값은 `role="subject"` 지만(Agent 가 붙었을 때의 안전한
-  기본 — 「이 기업에 난 일」은 `subject` 만입니다) **`fetch_events` 노드는
-  `role=None`(전부)을 넘깁니다.** 1차가 role 을 거르지 않았으므로 여기서
-  거르면 재료가 33건 줄어 대조가 성립하지 않습니다. 거를지는 사람이 정할 일입니다.
+★**`get_events` 는 role 로 거르지 않습니다** — 검색 필터로서의 `role` 인자를
+  아예 받지 않습니다(§8-12 에서 제거). `subject` 만 남기면 재료가 33건 줄어
+  1차와 대조가 성립하지 않고, 무엇보다 **재료 범위를 LLM 이 정하게 됩니다.**
+  역할은 결과 표기(`EventDTO.role`·`role_note`)로만 남아, 「이 기업에 난 일」
+  인지는 LLM 이 그 문구를 읽고 판단합니다.
 
 **★대조의 전제 조건 — 이게 없으면 결과를 못 믿습니다**
 
@@ -2274,6 +2275,45 @@ trace id 가 노드를 관통     True     ['486104bf']
 | 캐시 히트 0 · 미스 33,098 | `_CachedEmbed` 가 호출 시점에 `_default_embed` 를 다시 import 해 **자기 자신을 불렀다**(재귀로 300회 넘게 돌고 캐시는 0) |
 
 둘 다 「재료가 달라졌다」로만 보였다면 도구화 회귀로 오독했을 것입니다.
+
+---
+
+### 8-12. 구조 정리 — 불필요한 인자·State 필드 제거 (2026-08-28 · Phase 1.5)
+
+최종 멀티에이전트 구조에 맞춰 **재료를 그대로 둔 채** 다섯 자리를 정리했습니다.
+기능 추가가 아니라, LLM 이 판단하지 않아도 될 것을 판단하지 않게 하고 State 에
+흐르지 않는 값을 두지 않는 작업입니다.
+
+| # | 뺀 것 | 남긴 것 | 왜 |
+|---|---|---|---|
+| 1 | `get_events(role=...)` **검색 인자** | `EventDTO.role`·`role_note` | 「거르기」와 「표기하기」를 가릅니다. 인자로 두면 2차 Agent 가 재료 범위를 스스로 좁힐 수 있어 도구 4원칙 ① 과 같은 이유로 막습니다. 1차 material 과 동일해집니다 |
+| 2 | `AskState.use_hits` | `plan_material` 안의 **지역 판정** | 아무 노드도 안 읽던 write-only 값이었습니다. 판정 결과는 `companies` 의 출처(히트냐 앵커냐)로 전부 드러납니다 |
+| 3 | `AskState.backstop` | `_with_anchor_backstop()` **로직 전체** | 마찬가지로 write-only 관측값입니다. 끼어드는 **조건도 결과도** 안 바뀝니다. 로그는 `anchor.backstop` 이 이미 남깁니다 |
+| 4 | `fetch_evidence` 의 `match_type` 생성 | `match_type` 자체 | `result.mode` 만 보고 정해지므로 **검색이 끝난 자리**에서 확정됩니다. `fetch_evidence` 는 근거 조회·조립만 합니다 |
+| 5 | `main._answer_service` **인스턴스** | `AnswerService` **클래스** | 부르는 라우트가 하나도 없었습니다. 대조 스크립트는 자기 인스턴스를 직접 만들어(`AnswerService(RetrieveService(embed=embed))`) 기준선은 그대로 돕니다 |
+
+**실측 — 재료 변화 없음.** `pytest -q` 761 passed(기존 실패 7건 그대로 · 신규 0) ·
+`pytest -m needs_db -q` 4 passed · `--materials` 대조 **동일 4 · 예상된 차이 16 ·
+예상 밖 차이 0**(변경 전과 같은 판정).
+
+★**대조 스크립트에 실행 간 흔들림이 있습니다 — 도구 경로가 아니라 1차 기준선
+  쪽입니다.** 이번에 변경 전/후 출력이 한 질문(「메모리 가격 담합」)에서 갈려
+  회귀를 의심했는데, **원본 코드를 두 번 돌리자 그 두 값이 그대로 재현**됐습니다.
+
+```text
+원본 1회차   1차 평균 19,362 · 1.5차 20,282
+원본 2회차   1차 평균 19,397 · 1.5차 20,282   ← 변경 후와 바이트 단위 동일
+변경후 2회    1차 평균 19,397 · 1.5차 20,282
+```
+
+  **1.5차(도구) 열은 4회 실행 내내 20,282 로 고정**이고 흔들린 것은 1차 열뿐입니다.
+  구조상으로도 그렇습니다 — `compare_materials()` 는 질문마다 **기준선을 먼저**
+  돌려 캐시를 채우고 그 다음 얼린 캐시로 도구 경로를 돌리므로, 기준선 결과는
+  그래프 쪽 변경의 영향을 받을 수 없습니다. 흔들림의 뿌리는 1차 사건 선택의
+  동점 처리로 보이며 `[TODO]` 로 둡니다.
+
+  ★**교훈** — 이 스크립트의 차이를 회귀로 읽기 전에 **같은 코드로 두 번 돌려
+    보십시오.** 한 번의 diff 만으로는 「내 변경이 깼다」와 구별되지 않습니다.
 
 ---
 
@@ -2357,6 +2397,7 @@ fuzzy threshold 만 실측 근거가 있습니다 — 정답 후보는 0.5 이�
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-08-28 | ★**Phase 1.5 정리 — 불필요한 인자·State 필드 제거** (브랜치 `yun-phase15`) | **기능 추가가 아니다** — 최종 Agent 구조에서 LLM 이 불필요한 판단을 하지 않게 하고, State 에 흐르지 않는 값을 두지 않게 한다. 다섯 자리: ① `get_events` 의 `role` **검색 인자** 제거(`EventDTO.role`·`role_note` 는 유지 — 「거르기」와 「표기하기」를 가른다) ② `AskState.use_hits` 제거(write-only, 판정 결과는 `companies` 출처로 드러난다) ③ `AskState.backstop` 제거(★로직·조건·결과는 그대로) ④ `match_type` 생성을 `fetch_evidence` → **`search`** 로 이동(`result.mode` 만 보는 값이라 검색이 끝난 자리에서 확정된다) ⑤ `main._answer_service` 인스턴스 제거(★클래스는 유지 — 대조 기준선). 실측: 재료 **예상 밖 차이 0건**(변경 전과 같은 판정) · 761 passed · 기존 실패 7건 그대로 · 신규 0 → [§8-12](#8-12-구조-정리--불필요한-인자state-필드-제거-2026-08-28--phase-15). ★대조 스크립트의 **1차 기준선 열에 실행 간 흔들림**이 있음을 확인(원본 코드 2회 실행이 서로 다름) — 회귀로 오독하지 않도록 §8-12 에 기록. ★`/retrieve`·`RetrieveService`·`pipeline/llm.py`·`search/`·`get_propagation`·Finance/News 도구·Agent 루프·상한값 무수정 |
 | 2026-08-28 | ★**Phase 1.5 — `fetch_*` 를 도구 시그니처로** (브랜치 `yun-phase15`) | **순수 리팩터링**이다 — 재료는 그대로 두고 표기만 붙인다. Graph 계열 도구 셋(`get_relations`·`get_events`·`get_propagation`)이 기존 Service 를 감싸고, `app/tools/dto.py`(0차)를 돌려준다. 구조는 `Agent(2차) → Tool → 기존 Service → Repository`. **4원칙** — ① key 만 받고 범위 밖 거부(★범위를 **인자로 받지 않는다**: 2차에 부르는 쪽이 LLM 이라 인자면 LLM 이 넓힐 수 있다. `workspace_keys`·`anchor_keys`·`anchor_names` 도 같은 이유로 문맥에 둔다) ② 표기가 끝난 DTO ③ `limit` 은 내부 상수(값은 `retrieve_service` 것을 그대로 import) ④ 해소 실패는 `ToolError`, 정말 없으면 `[]`. `app/graph/prompt.py` 신설 — DTO 를 읽는 프롬프트 조립(`answer_service` 는 대조 기준선이라 손대지 않는다). 실측: 재료 집합 **예상 밖 차이 0건** · `eventness_suspect` 207건 제외 · `grounding_suspect` 추가 제외 **0건** · 프롬프트 최대 +1,043자(2.7%) → [§8-11](#8-11-도구-계층-재료-집합-대조-2026-08-28--phase-15). [§5-28](#5-28-그래프-경로를-직접-보는-테스트가-라우트-위임-검사-하나뿐이다--해소-2026-08-28) **닫힘** — 그래프·도구 테스트 55건 신설(`needs_db` 마커로 DB 의존분 분리). 테스트 705 → **760 passed** · 2 xfailed · 4 deselected · 7 failed(기존). ★`/retrieve`·`pipeline/llm.py`·`search/` 무수정 · Agent 루프·Finance/News 도구·새 재료 없음 |
 | 2026-08-27 | ★**Phase 1 — `/ask` 의 실행을 LangGraph 가 담당한다** (브랜치 `yun-phase1`) | **동작을 바꾸지 않는 이식**이다. 성공 기준이 「출력이 똑같다」라 그걸 실측으로 확인했다 — 대표 질문 20개 전부 프롬프트가 **바이트까지** 동일([§8-10](#8-10-ask-그래프-출력-대조-2026-08-27)). ① `app/llm/` 어댑터 — LangChain 의 `with_structured_output()` 은 실패 시 **예외를 던지므로**(실측) `pipeline/llm.py` 와 같은 `failed` 표시 규약으로 그 갭을 메운다 ② `app/graph/state.py` — 기존 DTO 를 해체하지 않고 품는다 ③ 12노드 + 조건부 엣지 둘 ④ 라우트 교체(`AnswerService` 는 **기준선으로 남긴다**). ★**게이트가 셋에서 둘로 줄었다** — 세 번째(`retrieve` 결과가 `None`)는 두 번째와 **같은 판정을 결과로 되짚은 것**이라 조건부 엣지 하나로 흡수됐다. ★**`anchor_names` 계산식을 통일**했다(잠재 결함 · 이 세트에서는 출력 무변경). ★**trace id 발급을 요청 경계로 올렸다** — 노드 안에서 하면 LangGraph 의 컨텍스트 복사 때문에 전파되지 않는다. 신설 결함 2건([§5-27](#5-27-임베딩이-실패하면-사건-정렬이-조용히-degrade-된다-todo)·[§5-28](#5-28-그래프-경로를-직접-보는-테스트가-라우트-위임-검사-하나뿐이다-todo)). 테스트 **705 passed · 2 xfailed · 7 failed — 기준선 그대로(회귀 0)**. ★`/retrieve` 무변경 · `pipeline/llm.py` 무수정 · `search/` 무수정 · 병렬화·체크포인터·도구 없음 |
 | 2026-08-27 | ★**Phase 0 — LangGraph 이식 선행 정리 4건** (브랜치 `yun-phase0`, **LangGraph 코드는 한 줄도 없음**) | 도구 계층을 얹기 전에 **계약이 갈려 있던 자리**를 먼저 맞췄다. ① `Evidence`·`Source` 의 `source_type` 을 `Relation` 과 같은 **3값**으로(`dart_filing` 113건이 실재한다) ② ChromaDB `evidence` 10,510청크의 메타에 `source_type` **백필** — `VectorStore.update_metadata` 신설, **재임베딩 없음**, 2,674건 채움([§8-9](#8-9-evidence-청크-source_type-백필-2026-08-27)) ③ `company_service.business_overview_of()` 신설 — 사업보고서 「사업의 내용」 **원문** 조회(인용 가능한 유일한 재무계 텍스트) ④ `app/tools/dto.py` 신설 — 도구 반환 DTO 4종 **계약만**(구현 없음). 신설 `app/tools/` · `batch/repair/evidence_source_type.py` · 수정 `app/api/schemas.py`·`app/services/company_service.py`·`pipeline/vectorstore/{base,chroma_store}.py`. 테스트 644 → **714개**(705 passed · 2 xfailed · 7 failed=[§5-26](#5-26-프롬프트를-고치면서-문구를-박아둔-테스트-7개가-깨졌다-todo), Phase 0 이전부터 깨져 있던 것). ★**Neo4j 쓰기 없음 · `/ask`·`/retrieve` 동작 무변경 · `search/` 무수정** |

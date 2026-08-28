@@ -228,8 +228,7 @@ def _event_dto(row: dict[str, Any]) -> EventDTO:
     )
 
 
-def get_events(keys: Sequence[str], intent: str,
-               role: Optional[str] = "subject") -> list[EventDTO]:
+def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     """이 기업들의 사건. `intent` 로 순위를 정한다.
 
     ★`eventness_suspect` 사건을 뺀다 — 사건이 아닌 것으로 보이는 **83건**에 붙은
@@ -237,10 +236,15 @@ def get_events(keys: Sequence[str], intent: str,
       `HAS_EVENT` 92개 · 기업 42곳이다(2026-08-28 실측). 표시가 있는데 재료로
       쓰면 표시를 한 이유가 없어진다.
 
-    ★`role` 은 **`None` 이면 전부**다. 기본값이 `"subject"` 인 것은 Agent 가
-      붙었을 때의 안전한 기본을 뜻한다 — 「이 기업에 난 일」은 `subject` 만이다.
-      다만 **1.5차의 `fetch_events` 노드는 `None` 을 넘긴다**: 1차가 role 을
-      거르지 않았으므로, 여기서 거르면 재료 집합이 달라져 대조가 성립하지 않는다.
+    ★**`role` 로 거르지 않는다 — 검색 필터로서의 role 은 두지 않는다.**
+      1차 `_events_of()` 가 role 을 안 걸렀고, 재료 집합이 1차와 같아야 한다
+      (`ask_graph_parity.py --materials`). 인자로 두면 2차의 Agent 가
+      「이 기업에 난 일만 보겠다」를 스스로 정하게 되는데, 그건 **재료 범위를
+      LLM 이 정하는 것**이라 도구 4원칙 ① 와 같은 이유로 막는다.
+
+      ★**결과의 role 은 그대로 남는다** — `EventDTO.role`·`role_note` 는
+        지우지 않는다. 「이 기업에 난 일」인지는 LLM 이 그 문구를 읽고
+        판단한다. 「거르기」와 「표기하기」를 가른다.
 
     ★선택은 **기업 scope 안에서, 기업마다 따로** 한다. 전부 한 줄로 세워 자르면
       사건이 많은 기업이 상한을 다 먹고 나머지 기업이 통째로 사라진다 — 그건
@@ -253,15 +257,11 @@ def get_events(keys: Sequence[str], intent: str,
 
     by_company: list[tuple[str, list[dict]]] = []
     suspect_dropped = 0
-    role_dropped = 0
     for norm in norms:
         kept = []
         for row in company_service.events_of(norm):
             if row.get("eventness_suspect"):
                 suspect_dropped += 1
-                continue
-            if role is not None and (row.get("role") or "subject") != role:
-                role_dropped += 1
                 continue
             kept.append(row)
         by_company.append((norm, kept))
@@ -288,9 +288,9 @@ def get_events(keys: Sequence[str], intent: str,
             seen[row["event_id"]] = row
             out.append(row)
 
-    if suspect_dropped or role_dropped:
-        log.info("tools.events eventness_suspect 제외=%d role 제외=%d kept=%d",
-                 suspect_dropped, role_dropped, len(out))
+    if suspect_dropped:
+        log.info("tools.events eventness_suspect 제외=%d kept=%d",
+                 suspect_dropped, len(out))
     return [_event_dto(r) for r in out]
 
 

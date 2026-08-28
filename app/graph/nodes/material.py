@@ -85,6 +85,13 @@ def search(state: AskState) -> AskState:
       `ContextVar.set()` 이 노드 밖으로 나가지 않는다. 실측(2026-08-27):
       이 노드가 발급하면 자기 로그 4줄만 id 를 달고 **나머지 9줄이 `-` 로**
       찍혔다. 발급은 진짜 요청 경계인 `run_ask()` 가 한다.
+
+    ★`match_type` 도 **여기서 정한다.** 저건 `result.mode` 만 보고 정해지는
+      값이라(`_match_type_of`) 검색이 끝난 순간 확정된다. 전에는
+      `fetch_evidence` 가 정했는데, 그 노드는 근거를 조회·조립하는 자리라
+      「검색이 어느 경로로 답했나」를 거기서 되짚을 이유가 없었다 — 재료를
+      다 모을 때까지 미뤄 둔 것뿐이다. 값을 만드는 노드와 값이 정해지는
+      시점을 맞춘다.
     """
     request = state["request"]
     query, result = _svc()._orchestrator.search(SearchRequest(
@@ -93,7 +100,8 @@ def search(state: AskState) -> AskState:
         # 인용이 목적이라 항상 켠다.
         include_evidence=True,
     ))
-    return {"query": query, "result": result}
+    return {"query": query, "result": result,
+            "match_type": _match_type_of(result)}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -139,7 +147,13 @@ def is_resolved(state: AskState) -> str:
 
 
 def plan_material(state: AskState) -> AskState:
-    """`use_hits`·`companies`·`backstop`·`anchor_names`·`intent` 를 **여기서 전부** 정한다.
+    """`companies`·`anchor_names`·`intent` 를 **여기서 전부** 정한다.
+
+    ★`use_hits`·`backstop` 은 **State 에 싣지 않는다.** 둘 다 이 노드 안에서만
+      쓰이는 중간 판정이었고, 뒤 노드 중 아무도 읽지 않았다(write-only). State 는
+      「노드 사이를 흐르는 값」만 담는다 — 관측용 값을 얹어 두면 다음 노드가
+      그걸 읽어도 되는 값으로 오해한다. 두 판정이 실제로 한 일은 `companies`
+      한 곳에 전부 드러나므로, 검증도 그쪽을 본다.
 
     ★`companies` 의 `key` 형태를 **바꾸지 않는다.** `_companies_from()` 이
       `hit.entity_id` 를 그대로 싣는데 그게 `corp_code` 일 수도 `norm_name` 일
@@ -167,7 +181,9 @@ def plan_material(state: AskState) -> AskState:
 
     # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
     #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이다.
-    took_backstop = not companies and bool(decision.anchors)
+    #   ★**로직은 그대로다** — 뺀 것은 「끼어들었나」를 State 에 남기던 값뿐이고,
+    #     끼어드는 조건도 결과도 안 바뀐다. 로그는 `_with_anchor_backstop` 안에
+    #     이미 있다(`anchor.backstop`).
     companies = _with_anchor_backstop(companies, decision)
 
     anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
@@ -175,7 +191,7 @@ def plan_material(state: AskState) -> AskState:
         anchor_names = [a.name for a in decision.anchors if a.name]
     intent = evidence_selector.intent_of(request.question, anchor_names)
 
-    return {"use_hits": use_hits, "companies": companies, "backstop": took_backstop,
+    return {"companies": companies,
             "anchor_names": anchor_names, "intent": intent}
 
 
@@ -218,14 +234,12 @@ def _scope(state: AskState):
 def fetch_events(state: AskState) -> AskState:
     """사건. **도구가 만든다**(Phase 1.5).
 
-    ★`role=None` 을 넘긴다. 도구 기본값은 `"subject"` 지만(Agent 가 붙었을 때의
-      안전한 기본 — 「이 기업에 난 일」은 `subject` 만이다), 1차의 `_events_of()`
-      는 role 을 거르지 않았다. 여기서 거르면 **재료 집합이 달라져** 대조가
-      성립하지 않는다. 거를지는 사람이 정할 일이다.
+    ★role 을 넘기지 않는다 — 도구가 아예 **검색 필터로서의 role 을 받지
+      않는다**(`graph_tools.get_events`). 역할은 결과의 표기로만 남는다.
     """
     with _scope(state):
         return {"events": graph_tools.get_events(
-            [c.key for c in state["companies"]], state["intent"], role=None)}
+            [c.key for c in state["companies"]], state["intent"])}
 
 
 def fetch_propagation(state: AskState) -> AskState:
@@ -264,6 +278,9 @@ def fetch_evidence(state: AskState) -> AskState:
 
     ★못 꺼낸 근거를 **조용히 빼지 않는다.** `missing=True` 로 남긴다 —
       빼면 「근거가 없는 관계」로 읽힌다.
+
+    ★`match_type` 은 **여기서 만들지 않는다.** 검색 경로 이름이라 `search` 가
+      정한다 — 이 노드는 근거 조회·조립만 한다.
     """
     from_relations = [r.evidence_id for r in state["relations"] if r.evidence_id]
     from_events = [eid for event in state["events"] for eid in event.evidence_ids]
@@ -279,4 +296,4 @@ def fetch_evidence(state: AskState) -> AskState:
              len(from_relations), len(from_events), len(from_hits), len(set(ids)),
              len(evidence), sum(1 for e in evidence if e.missing),
              [e.evidence_id for e in evidence[:_MAX_LOGGED_EVIDENCE]])
-    return {"evidence": evidence, "match_type": _match_type_of(state["result"])}
+    return {"evidence": evidence}

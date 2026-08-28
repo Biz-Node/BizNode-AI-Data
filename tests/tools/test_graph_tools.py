@@ -204,7 +204,7 @@ def test_stale_relation_gets_a_lower_effective_confidence(stub):
 def test_event_role_note_separates_mentioned_from_subject(stub):
     stub(events=[_event(role="mentioned")])
     with scope.anchor_scope([_SAMSUNG]):
-        dto = gt.get_events([_SAMSUNG], intent="x", role=None)[0]
+        dto = gt.get_events([_SAMSUNG], intent="x")[0]
 
     assert dto.role_note == ROLE_NOTE["mentioned"]
     assert "이 기업에 난 일이 아니다" in dto.role_note
@@ -216,7 +216,7 @@ def test_timeline_stays_a_list_and_gets_a_summary(stub):
     stub(events=[_event(timeline=[{"period": "2026-06", "name": "1국면"},
                                   {"period": "2026-07", "name": "2국면"}])])
     with scope.anchor_scope([_SAMSUNG]):
-        dto = gt.get_events([_SAMSUNG], intent="x", role=None)[0]
+        dto = gt.get_events([_SAMSUNG], intent="x")[0]
 
     assert len(dto.timeline) == 2
     assert dto.timeline_summary == "2026-06 1국면 → 2026-07 2국면 (2국면)"
@@ -225,7 +225,7 @@ def test_timeline_stays_a_list_and_gets_a_summary(stub):
 def test_sign_comes_from_impacts_and_stays_none_when_absent(stub):
     stub(events=[_event(sign=None)])
     with scope.anchor_scope([_SAMSUNG]):
-        assert gt.get_events([_SAMSUNG], intent="x", role=None)[0].sign is None
+        assert gt.get_events([_SAMSUNG], intent="x")[0].sign is None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -238,7 +238,7 @@ def test_eventness_suspect_events_are_dropped(stub):
     stub(events=[_event(event_id="ok"),
                  _event(event_id="susp", eventness_suspect=True)])
     with scope.anchor_scope([_SAMSUNG]):
-        got = gt.get_events([_SAMSUNG], intent="x", role=None)
+        got = gt.get_events([_SAMSUNG], intent="x")
 
     assert [e.event_id for e in got] == ["ok"]
 

@@ -19,11 +19,15 @@ from app.graph.state import AskState
 
 # 각 노드가 **채워야 하는** 키. 노드를 지난 뒤 이게 없으면 배선이 끊긴 것이다.
 _PRODUCES = {
-    "plan_material": ("use_hits", "companies", "backstop", "anchor_names", "intent"),
+    # ★`match_type` 은 **`search` 가 만든다**(1.5차 정리). `result.mode` 만 보고
+    #   정해지는 값이라 검색이 끝난 자리에서 확정된다 — 전에는 `fetch_evidence`
+    #   가 만들었는데 그 노드는 근거를 모으는 자리다.
+    "search": ("query", "result", "match_type"),
+    "plan_material": ("companies", "anchor_names", "intent"),
     "fetch_events": ("events",),
     "fetch_propagation": ("propagation",),
     "fetch_relations": ("relations",),
-    "fetch_evidence": ("evidence", "match_type"),
+    "fetch_evidence": ("evidence",),
     "build_prompt": ("user_prompt",),
     "generate": ("llm_result",),
     "verify_sources": ("answer", "failed", "sources"),

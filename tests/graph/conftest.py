@@ -116,7 +116,7 @@ class FakeTools:
 
         self.scopes.append(scope.allowed_keys())
 
-    def get_events(self, keys, intent, role="subject"):
+    def get_events(self, keys, intent):
         self.calls.append("get_events")
         self._note_scope()
         return list(self.events)

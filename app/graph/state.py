@@ -41,20 +41,26 @@ class AskState(TypedDict, total=False):
     # ── search 노드 ───────────────────────────────────────────
     query: SearchQuery
     result: SearchResult
+    # 검색이 어느 경로로 답했나. `[사실]` 첫 줄이 이걸 쓴다.
+    # ★`result.mode` 만 보고 정해지므로 **검색이 끝난 자리**에서 확정된다.
+    #   전에는 `fetch_evidence` 가 만들었는데, 그 노드는 근거를 모으는 자리라
+    #   여기까지 미룰 이유가 없었다.
+    match_type: MatchType
 
     # ── resolve_anchor 노드 ───────────────────────────────────
     decision: AnchorDecision
 
     # ── plan_material 노드 ────────────────────────────────────
-    # 검색 히트를 재료로 믿어도 되나(`_hits_reflect_the_anchor`).
-    use_hits: bool
+    # ★`use_hits`(히트를 믿어도 되나)·`backstop`(앵커로 메웠나)은 **여기 없다.**
+    #   둘 다 `plan_material` 안에서만 쓰이고 아무 노드도 안 읽던 값이라(1.5차
+    #   정리에서 제거) State 에 둘 이유가 없었다. State 는 **노드 사이를 흐르는
+    #   값**만 담는다 — 관측용을 얹으면 다음 노드가 읽어도 되는 값으로 읽는다.
+    #   두 판정의 결과는 `companies` 에 전부 드러난다.
     # ★`key` 형태를 **바꾸지 않는다.** 정규화도 `corp_code` 변환도 하지 않는다.
     #   `company_service.events_of()` 는 `corp_code` 든 `norm_name` 이든 받지만,
     #   **잘못된 값을 주면 예외가 아니라 조용히 0건**이 나온다 — 「사건이 없다」로
     #   잘못 읽힌다. `_events_of` 가 `events_of(c.key)` 로 넘기던 그 형태 그대로 싣는다.
     companies: list[RelationEndpoint]
-    # 백스톱이 실제로 끼어들었나 — 로그·검증용 관측값이다.
-    backstop: bool
 
     # ★`anchor_names` 와 `intent` 를 **여기 한 번만 올린다.**
     #
@@ -85,8 +91,6 @@ class AskState(TypedDict, total=False):
     # ★근거만은 API 스키마 그대로다 — `Source` 로 그대로 옮겨 담기고
     #   `claim_check`·`material_consistency` 가 이 모양을 읽는다.
     evidence: list[Evidence]
-    # 검색이 어느 경로로 답했나. `[사실]` 첫 줄이 이걸 쓴다.
-    match_type: MatchType
 
     # ── build_prompt · generate 노드 ──────────────────────────
     user_prompt: str

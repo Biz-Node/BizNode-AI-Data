@@ -42,7 +42,6 @@ from fastapi.concurrency import run_in_threadpool
 from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
 from app.core.trace import configure_logging
 from app.services.retrieve_service import RetrieveService
-from app.services.answer_service import AnswerService
 from app.graph.ask_graph import run_ask
 from app.graph.nodes.material import bind_service
 from app.services import (
@@ -103,11 +102,16 @@ app = FastAPI(
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
 _retrieve_service = RetrieveService()
-# ★`AnswerService` 를 **지우지 않는다.** `/ask` 는 이제 그래프가 처리하지만,
-#   이쪽이 출력 대조의 **기준선**이다(`batch/audit/ask_graph_parity.py`).
-#   지우면 「그래프가 예전과 같은 답을 내는가」를 물을 수 없다.
-_answer_service = AnswerService(_retrieve_service)
-# 그래프도 **같은 인스턴스**를 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
+# ★`AnswerService` **인스턴스는 여기 두지 않는다.** `/ask` 는 그래프가 처리하고
+#   이 앱에서 저 인스턴스를 부르는 라우트가 하나도 없었다 — 만들어만 두면 기동
+#   때마다 쓰이지 않는 객체가 하나 선다.
+#
+#   ★**클래스는 지우지 않았다.** 출력 대조의 기준선이 그쪽이라
+#     (`batch/audit/ask_graph_parity.py`) 지우면 「그래프가 예전과 같은 답을
+#     내는가」를 물을 수 없다. 다만 그 스크립트는 자기가 쓸 인스턴스를 직접
+#     만든다(`AnswerService(RetrieveService(embed=embed))`) — 여기 것을 쓰지
+#     않았으므로 대조는 그대로 돈다. 최종 폐기 여부는 별도 결정이다.
+# 그래프는 위 인스턴스를 **그대로** 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
 # 둘이 되어 커넥션·캐시가 갈린다.
 bind_service(_retrieve_service)
 

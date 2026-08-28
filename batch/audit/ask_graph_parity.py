@@ -592,13 +592,14 @@ def report_materials(rows: list[dict]) -> int:
         if newly:
             print(f"     ★표기 때문에 새로 넘은 질문 {len(newly)}개: {newly}")
 
-    # ── role 분포 — fetch_events 가 role=None 을 넘기는 근거 ──
+    # ── role 분포 — 도구가 role 로 거르지 않는 근거 ──
     roles = Counter()
     for r in rows:
         roles.update(r["roles"])
     print(f"\n■ 사건 role 분포: {dict(roles)}")
-    print("   ★`fetch_events` 는 `role=None`(전부)을 넘긴다. 도구 기본값인")
-    print("     `subject` 로 거르면 위 subject 외 건수만큼 재료가 줄어든다.")
+    print("   ★`get_events` 는 **role 로 거르지 않는다**(검색 필터로서의 role 을")
+    print("     아예 받지 않는다). `subject` 만 남기면 위 그 밖의 건수만큼 재료가")
+    print("     줄어 1차와 대조가 안 된다. 역할은 결과 표기로만 남는다.")
 
     # ── 전제 조건 ────────────────────────────────────────────
     hits = sum(r["cache_hits"] for r in rows)
