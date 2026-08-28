@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.api import main as main_module
 from app.api.main import app
-from app.api.schemas import RetrieveResponse
+from app.api.schemas import MatchType, RetrieveResponse
 
 _PATH = "/retrieve"
 
@@ -77,7 +77,7 @@ def test_workspace_keys_are_accepted(client):
 
 def test_route_delegates_to_the_service(client, monkeypatch):
     """라우트에 로직이 없다 — 서비스가 준 것을 그대로 내보낸다(설계서 Rule 5)."""
-    payload = RetrieveResponse(question="바꿔치기")
+    payload = RetrieveResponse(question="바꿔치기", match_type=MatchType.EXACT)
     monkeypatch.setattr(main_module, "_retrieve_service", _stub_service(payload))
 
     body = client.post(_PATH, json={"question": "원래질문"}).json()

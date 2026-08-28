@@ -275,13 +275,12 @@ def test_alias_fallback_is_the_second_window(postgres_repo, runs: dict[str, Case
     """「네이버」는 corp_code_master 1차에서 못 찾고 company_aliases 2차에서만
     잡힌다 — pg_trgm이 한글↔영문을 원리적으로 못 잇기 때문이다.
 
-    known-alias-naver 케이스가 xfail인 것은 그 **다음 단계**(EntityResolver)가
-    같은 창구를 쓰지 않아서다. AnchorExtractor 쪽 경로 자체는 여기서 초록으로
-    확인한다."""
+    ★2026-08-23 해소 — 2차 창구가 **정식 법인명(canon_name)**을 돌려주게 되어
+    EntityResolver도 같은 회사에 닿는다(현황서 §4-6). 케이스의 xfail을 뗐다."""
     assert postgres_repo.match_candidates(["네이버"]) == [], \
         "corp_code_master 1차에서 「네이버」가 잡히면 이 케이스의 전제가 깨진다"
-    assert postgres_repo.alias_exact_match(["네이버"]) == "네이버"
-    assert runs["known-alias-naver"].anchor == "네이버"
+    assert postgres_repo.alias_exact_match(["네이버"]) == "NAVER Corporation"
+    assert runs["known-alias-naver"].anchor == "NAVER Corporation"
 
 
 def test_unknown_company_is_not_resolved(entity_resolver, runs: dict[str, CaseRun]):

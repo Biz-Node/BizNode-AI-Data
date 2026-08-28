@@ -36,8 +36,14 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.core.config import CHROMA_HOST, CHROMA_PORT
+
+from fastapi.concurrency import run_in_threadpool
+
+from app.core.config import CHROMA_HOST, CHROMA_PORT, LOG_LEVEL
+from app.core.trace import configure_logging
 from app.services.retrieve_service import RetrieveService
+from app.graph.ask_graph import run_ask
+from app.graph.nodes.material import bind_service
 from app.services import (
     company_service,
     insight_service,
@@ -47,7 +53,7 @@ from app.services import (
     workspace_service,
 )
 from app.api.schemas import (
-    AskRequest, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
+    AskRequest, AskResponse, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
     Filing, GraphResponse, InsightCard, MarketResponse, NewsFeedResponse, NewsItem,
     OwnershipResponse, ProductItem, Propagation, Relation, RelationDetail,
     RetrieveResponse, RiskEvent, SearchResponse, Suggestion, TrendingItem,
@@ -55,6 +61,10 @@ from app.api.schemas import (
     WorkspaceInsightRequest, WorkspaceSuggestRequest, WorkspaceSuggestResponse,
     WorkspaceSummaryRequest,
 )
+
+# 라우트를 만들기 전에 켠다 — 이게 없으면 검색·답변 경계의 trace 로그가 root
+# 로거 기본값(WARNING)에 막혀 통째로 사라진다.
+configure_logging(LOG_LEVEL)
 
 app = FastAPI(
     title="BizNode 데이터 API",
@@ -88,17 +98,24 @@ app = FastAPI(
     ],
 )
 
-# ★프로세스당 하나이되, 챗봇 요청이 들어올 때 처음 만든다. 그래프·기업 API는
-#   OpenAI 키가 필요 없으므로 Retrieve 의 임베딩 클라이언트 때문에 서버 전체가
-#   기동 실패해서는 안 된다. 테스트는 이 모듈 속성을 스텁으로 갈아끼운다.
-_retrieve_service: RetrieveService | None = None
 
+# ★프로세스당 하나. 안에서 SearchOrchestrator 를 들고 있어(커넥션·캐시) 요청마다
+#   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
+#   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
+_retrieve_service = RetrieveService()
+# ★`AnswerService` **인스턴스는 여기 두지 않는다.** `/ask` 는 그래프가 처리하고
+#   이 앱에서 저 인스턴스를 부르는 라우트가 하나도 없었다 — 만들어만 두면 기동
+#   때마다 쓰이지 않는 객체가 하나 선다.
+#
+#   ★**클래스는 지우지 않았다.** 출력 대조의 기준선이 그쪽이라
+#     (`batch/audit/ask_graph_parity.py`) 지우면 「그래프가 예전과 같은 답을
+#     내는가」를 물을 수 없다. 다만 그 스크립트는 자기가 쓸 인스턴스를 직접
+#     만든다(`AnswerService(RetrieveService(embed=embed))`) — 여기 것을 쓰지
+#     않았으므로 대조는 그대로 돈다. 최종 폐기 여부는 별도 결정이다.
+# 그래프는 위 인스턴스를 **그대로** 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
+# 둘이 되어 커넥션·캐시가 갈린다.
+bind_service(_retrieve_service)
 
-def _get_retrieve_service() -> RetrieveService:
-    global _retrieve_service
-    if _retrieve_service is None:
-        _retrieve_service = RetrieveService()
-    return _retrieve_service
 
 
 # 프론트가 로컬에서 바로 붙어 볼 수 있게. ★배포 때는 백엔드 도메인만 남긴다
@@ -509,6 +526,29 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
     return await _get_retrieve_service().retrieve_async(body)
+
+
+@app.post("/ask", response_model=AskResponse, tags=["챗봇"],
+          summary="챗봇 답변 생성")
+async def ask(body: AskRequest) -> AskResponse:
+    """질문 하나 → LLM 이 쓴 답변 + 화이트리스트를 통과한 근거.
+
+    `/retrieve` 가 만든 재료 밖의 것은 인용할 수 없다 — `sources` 에 실리는
+    `evidence_id` 는 전부 서버가 재료 안에서 확인한 것이다.
+
+    - `failed=true` 면 `answer` 는 고정 안내 문구다. `sources` 는 그래도 원본
+      근거를 담고 있다 — 답을 못 썼어도 근거는 보여줄 수 있다.
+    - `missing=true` 였던 근거는 `sources` 에 오지 않는다.
+    """
+    # ★실행 담당이 **LangGraph 로 넘어갔다**(Phase 1). 동작은 그대로다 —
+    #   재료 조립도 프롬프트도 후처리도 전부 같은 함수를 그대로 부른다.
+    #   실측(2026-08-27): 대표 질문 20개 전부 프롬프트·응답이 바이트까지 동일
+    #   (`batch/audit/ask_graph_parity.py`).
+    #
+    # ★그래프 노드는 전부 **sync** 다. 안이 Neo4j·PostgreSQL·OpenAI 왕복이라
+    #   이벤트루프에서 그냥 부르면 멈춘다 — `retrieve_async()` 와 같은 이유로
+    #   threadpool 로 내린다. `contextvars`(trace id)는 anyio 가 복사해 준다.
+    return await run_in_threadpool(run_ask, body)
 
 
 @app.get("/health", tags=["운영"], summary="상태 확인")

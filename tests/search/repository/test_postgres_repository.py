@@ -135,8 +135,12 @@ def test_alias_exact_match_finds_company_registered_only_in_english(postgres_rep
 
     similarity('NAVER','네이버')=0.000 — pg_trgm은 한글↔영문을 원리적으로
     잇지 못한다. company_aliases에 ('네이버','네이버','NAVER Corporation')이
-    있으므로 이 표를 본다."""
-    assert postgres_repo.alias_exact_match(["네이버"]) == "네이버"
+    있으므로 이 표를 본다.
+
+    ★2026-08-23: 돌려주는 것이 **걸린 별칭이 아니라 정식 법인명(canon_name)**
+      이다. 별칭 문자열을 그대로 주면 다음 단계(EntityResolver)가 같은 회사를
+      다시 놓친다(현황서 §4-6)."""
+    assert postgres_repo.alias_exact_match(["네이버"]) == "NAVER Corporation"
 
 
 def test_alias_exact_match_returns_none_for_common_nouns(postgres_repo):

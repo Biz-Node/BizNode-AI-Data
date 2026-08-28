@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 from app.core.database import neo4j_session
+from pipeline import token_overlap
 from pipeline.llm import ask_json
 from pipeline.importer.evidence import fetch_texts
 from pipeline.ontology import (
@@ -93,30 +94,13 @@ SET r.grounding_stage1 = NULL, r.retype_suspect = NULL, r.retype_hint = NULL
 RETURN count(r) AS n
 """
 
-# 흔한 조사·접미어라 근거 대조에 의미 없는 토큰
-_STOP = {"주식회사", "코퍼레이션", "그룹", "홀딩스", "사건", "관계", "계약", "co", "ltd", "inc"}
-
-
-def _tokens(name: str) -> list[str]:
-    """이름에서 대조할 핵심 토큰 — 2글자 이상, 불용어 제외."""
-    parts = re.split(r"[\s\-_·,.()\[\]「」『』/]+", name or "")
-    out = []
-    for p in parts:
-        p = p.strip()
-        if len(p) >= 2 and p.lower() not in _STOP:
-            out.append(p)
-    return out
-
-
-def grounding(text: str, *names: str) -> tuple[float, list[str]]:
-    """이름 토큰이 근거에 얼마나 나오는가. (비율, 없는 토큰들)"""
-    flat = re.sub(r"\s+", "", text or "").lower()
-    toks = [t for n in names for t in _tokens(n)]
-    if not toks:
-        return 1.0, []
-    missing = [t for t in toks
-               if re.sub(r"\s+", "", t).lower() not in flat]
-    return 1 - len(missing) / len(toks), missing
+# ★1차 대조 자체는 `pipeline/token_overlap.py` 로 옮겼다 — `app/services/
+#   claim_check.py` 가 같은 것을 쓰는데 `app` 이 `batch` 를 임포트한 전례가
+#   없어서다(확인: 0곳). 여기 이름은 그대로 둔다 — 이 모듈의 나머지와
+#   `batch/audit/selftest.py` 가 계속 쓴다.
+_STOP = token_overlap.STOP
+_tokens = token_overlap.tokens
+grounding = token_overlap.overlap
 
 
 def _fetch_evidence(rows: list[dict]) -> dict[str, str]:

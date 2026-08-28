@@ -6,7 +6,7 @@
 > **라우트별 상세 명세는 이 문서에 없습니다.** `/docs`가 코드에서 자동 생성되므로
 > 문서로 옮겨 적으면 반드시 어긋납니다. 여기에는 `/docs`가 알려줄 수 없는 것만 씁니다.
 
-작성 2026-08-18 · 라우트 21개 (실제 20 · 스텁 1)
+작성 2026-08-18 · 갱신 2026-08-23 · 라우트 22개 — **전부 실물** (고정값 라우트 없음)
 
 ---
 
@@ -423,21 +423,53 @@ DB에서 가장 큰 노드고(LG전자 599 · SK하이닉스 494 · 중앙값 80
 |              | `POST /workspace/changes`         | 알림                                   |
 | 홈           | `POST /insights`                  | 인사이트 카드                          |
 | 뉴스         | `GET /news`                       | 주제·워크스페이스·최신순 3축           |
-| 챗봇         | `POST /retrieve`                  | **스텁**                               |
+| 챗봇         | `POST /retrieve`                  | 챗봇 **재료** (문장 생성 없음)         |
+|              | `POST /ask`                       | **답변 문장 + 검증된 근거**            |
 | 운영         | `GET /health`                     |                                        |
 
-**스텁은 `X-Stub: true` 헤더가 붙습니다. 헤더가 없으면 진짜입니다.**
+**고정값을 돌려주는 라우트는 없습니다** (2026-08-23 확인).
+
+⚠ `X-Stub: true` 헤더가 `GET /news` 하나에 아직 붙습니다. `/news` 는 실제로
+PostgreSQL 을 읽으므로(실측 12,250건) **이 헤더를 실물 여부 판단에 쓰지 마세요.**
+헤더를 정리할지는 아직 정하지 않았습니다.
 
 ---
 
 ## 10. 아직 안 된 것 · 결정 대기
 
-### 스텁 하나
+### 스텁 없음 (2026-08-23)
+
+`/retrieve` 는 2026-08-20 에 실물이 됐고, `POST /ask` 가 2026-08-22 에 추가됐습니다.
 
 ```
-/retrieve   챗봇 재료. 추론 담당이 app/services 를 직접 import 하므로
-            이 HTTP 라우트는 「백엔드가 볼 모양」입니다
+/retrieve   챗봇 재료 — question · match_type · companies · events
+            · relations · propagation · evidence
+/ask        답변 문장 — answer · sources[] · failed
+            요청 바디는 /retrieve 와 같습니다(AskRequest). 새 이름을 만들지 않았습니다.
 ```
+
+★`/ask` 에서 `workspace_keys` 는 **필수**입니다 — 그래프 안에서 인사이트를
+만드는 챗봇이라 워크스페이스 없이 부를 수 없습니다. 스키마 기본값이
+`default_factory=list` 라 **422 는 아니지만**, 2026-08-26 부터 **서버가 검색 전에
+거부**하고 `anchor_source="unresolved"` 로 고정 문구를 돌려줍니다.
+
+★**요청 계약은 바뀌지 않습니다** (2026-08-25 확인). `/ask` 는 계속
+`{ question, workspace_keys }` 를 받고, `workspace_keys` 는 **현재 워크스페이스 기업의
+`corp_code` 배열**입니다 — 요청마다 실어 보내 주세요. 워크스페이스 동기화 API 는
+**만들지 않습니다.**
+
+★**응답 필드 둘이 2026-08-26 에 추가됐습니다** —
+`AskResponse.anchor_source`(`query`/`workspace`/`unresolved`)와
+`RetrieveResponse.anchors[]`. 뜻은
+[설계서 §14](BizNode_Search_Layer_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
+[현황서 §3-2](BizNode_Search_Layer_현황서.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
+
+★`anchor_source` 가 `unresolved` 면 **`failed=false` 인데 `sources` 가 빕니다** — 서버
+오류가 아니라 「그 기업을 못 찾았다」는 뜻이고, `answer` 에 대안이 담깁니다. 화면에서
+`failed=true`(LLM 실패)와 **다르게** 다뤄 주세요.
+
+★`failed=true` 면 `answer` 는 고정 문구이고 **HTTP 는 200** 입니다. `sources` 는
+그대로 나가므로 화면이 「답은 못 썼지만 근거는 있다」를 보여줄 수 있습니다.
 
 ### 언제나 빈 배열인 필드 하나
 

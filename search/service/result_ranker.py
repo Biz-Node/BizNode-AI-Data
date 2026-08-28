@@ -19,8 +19,14 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.core.trace import trace_logger
 from search.dto.search_hit import SearchHit
 from search.model.enums import EntityType
+
+log = trace_logger(__name__)
+
+# 상위 몇 건만 남긴다 — 최종 재료가 되는 건 앞머리이고, 전량은 응답에 있다.
+_MAX_LOGGED_WINNERS = 3
 
 _RRF_K = 60
 
@@ -161,4 +167,12 @@ class ResultRanker:
         #   결과가 이유 없이 쪼그라든다.
         keys = set(workspace_keys or ())
         merged.sort(key=lambda h: (workspace_priority(h, keys), -h.rrf_score))
-        return merged[:top_k] if top_k is not None else merged
+        ranked = merged[:top_k] if top_k is not None else merged
+
+        # 입력을 소스별로 갈라 남긴다 — 「그래프 0건인데 벡터가 채웠다」와
+        # 「그래프가 다 맞혔다」는 답변 신뢰도가 다른데 결과만 보면 구별이 안 된다.
+        log.info("rank.merge graph=%d vector=%d -> merged=%d top=%s",
+                 len(graph_hits), len(vector_hits), len(ranked),
+                 [f"{hit.entity_id}:{hit.rrf_score:.4f}"
+                  for hit in ranked[:_MAX_LOGGED_WINNERS]])
+        return ranked

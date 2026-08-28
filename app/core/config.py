@@ -59,3 +59,7 @@ EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
 # ── 캐시/큐 (Redis, 선택) ──────────────────────────────────────
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# ── 로깅 ───────────────────────────────────────────────────────
+# 검색·답변 경계의 trace 로그가 INFO 다. 시끄러우면 `.env` 에 LOG_LEVEL=WARNING.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

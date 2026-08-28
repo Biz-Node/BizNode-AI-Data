@@ -195,8 +195,21 @@ def test_extract_picks_company_registered_only_in_english(extractor):
     company_aliases에는 ('네이버','네이버','NAVER Corporation')이 있으므로
     DART 1차 매칭이 비었을 때만 이 표를 2차 창구로 쓴다. 결함의 본질은
     「네이버가 DB에 없다」가 아니라 「일반명사 일이가 기업명을 이긴다」이므로
-    기대값은 None이 아니라 '네이버'다."""
-    assert extractor.extract("네이버에 생산 차질을 일으킬 만한 일이 있었나?") == "네이버"
+    기대값은 None이 아니다.
+
+    ★2026-08-23: 기대값이 '네이버'에서 **정식 법인명**으로 바뀌었다 —
+      extract()가 질의의 부분 문자열이 아니라 매칭된 법인명을 돌려준다
+      (현황서 §4-3·§4-6). 이 값이라야 EntityResolver가 해소에 성공한다."""
+    assert (extractor.extract("네이버에 생산 차질을 일으킬 만한 일이 있었나?")
+            == "NAVER Corporation")
+
+
+def test_extract_returns_corp_name_not_the_query_substring(extractor):
+    """★§4-3 회귀 — Kiwi가 「에」를 조사로 못 보는 어절에서도 anchor에 조사가
+    붙어 나오지 않는다. 후보는 '삼성FN리츠에'지만 돌려주는 것은 매칭된
+    법인명 '삼성FN리츠'다."""
+    assert (extractor.extract("삼성FN리츠에 생산 차질을 일으킬 만한 일이 있었나?")
+            == "삼성FN리츠")
 
 
 def test_extract_still_returns_none_for_nonexistent_company_with_kiwi(extractor):

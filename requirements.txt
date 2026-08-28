@@ -10,7 +10,18 @@ requests>=2.32,<3.0
 lxml>=5.0,<7.0
 
 # LLM — 경로 C 서술 추출 · evidence 임베딩(text-embedding-3-small)
+# ★핀을 유지한다. `pipeline/llm.py` 가 이 SDK 를 직접 쓰고 배치 22곳이 그 위에
+#   있다. 핀 없이 `langchain-openai` 를 깔면 **openai 3.5.0 으로 밀려 올라간다**
+#   (실측 2026-08-27: 1.109.1 → 3.5.0). major 를 둘 건너뛰는 셈이라 배치가
+#   통째로 위험해진다.
 openai>=1.50,<2.0
+
+# ── LangGraph — /ask 의 실행 그래프 (Phase 1) ──────────────────
+# `/ask` 를 12노드 순차 그래프로 옮긴다. 동작은 그대로다 — 실행 담당만 바뀐다.
+# ★`langchain-openai` 는 **1.1.x 로 눌러 둔다.** 1.6.0 은 `openai>=2` 를 끌어와
+#   위 핀과 충돌한다. 1.1.9 가 `openai<2.0` 과 함께 풀리는 마지막 계열이다.
+langgraph>=1.2,<2.0
+langchain-openai>=1.1,<1.2
 
 # 형태소 분석 — 검색 질의에서 조사를 문법적으로 분리(AnchorExtractor).
 # 문자열 휴리스틱(어절 끝 조사 목록 매칭)이 「일이」 같은 조사 잔여물을

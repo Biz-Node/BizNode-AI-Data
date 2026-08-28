@@ -393,23 +393,20 @@ CASES: tuple[EvalCase, ...] = (
     EvalCase(
         id="known-alias-naver",
         query="네이버",
-        verifies="AnchorExtractor는 company_aliases 2차 창구로 「네이버」를 뽑아내지만, "
-                 "EntityResolver.resolve()는 corp_code_master만 보므로 "
-                 "similarity('NAVER','네이버')=0.000에 걸려 해소에 실패한다. "
-                 "그 결과 NAME이어야 할 질의가 SEMANTIC으로 빠진다",
+        verifies="corp_code_master에 'NAVER'로만 있는 회사를 한글 「네이버」로 물어도 "
+                 "이름 해소로 답한다. company_aliases 2차 창구가 **정식 법인명**을 "
+                 "돌려주므로 EntityResolver의 fuzzy 경로가 normalize로 'naver'를 만들어 "
+                 "1.000으로 붙는다 — 두 컴포넌트가 같은 창구를 쓴다(2026-08-23 해소)",
         coverage=("mode:NAME", "anchor:company_aliases fallback",
                   "negative:한글/영문 alias"),
         kind="fixed",
         expected_mode=SearchMode.NAME,
-        expected_anchor="네이버",
+        expected_anchor="NAVER Corporation",
         expected_direction=None,
         expected_edge_types=(),
         expected_sources=_PG,
         exact_total=1,
         must_include=(("NAVER", "00266961"),),
-        known_issue="AnchorExtractor는 alias로 해소하는데 EntityResolver는 못 한다 — "
-                    "alias_exact_match()가 corp_code를 돌려주지 않아 anchor 문자열이 "
-                    "그대로 pg_trgm에 다시 들어간다. 이번 작업 범위 밖(수정 금지)",
     ),
     EvalCase(
         id="known-generic-noun-daesang",

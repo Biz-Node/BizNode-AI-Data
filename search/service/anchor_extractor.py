@@ -160,8 +160,19 @@ class AnchorExtractor:
         self._repo = repo or PostgresRepository()
 
     def extract(self, raw_query: str) -> Optional[str]:
-        """문장에서 기업명 후보 1개를 뽑는다. 확신(threshold 이상) 없으면
-        None — 호출부는 None을 "원문을 그대로 쓰라"는 신호로 해석한다."""
+        """문장에서 기업 **1곳을 짚어 정식 법인명**을 돌려준다. 확신
+        (threshold 이상) 없으면 None — 호출부는 None을 "원문을 그대로 쓰라"는
+        신호로 해석한다.
+
+        ★2026-08-23 계약 변경: 돌려주는 것이 **질의의 부분 문자열이 아니라
+          매칭된 법인명**이다(현황서 §4-3). 전에는 걸린 어절을 그대로 줘서
+          Kiwi가 「에」를 조사로 못 본 9건에서 조사가 붙은 채 나갔다
+          ("삼성FN리츠에"·"원익큐브에"·"플리토에" …). 매칭된 법인명을 주면
+          EntityResolver가 fuzzy가 아니라 **exact(1.000)**로 붙는다.
+
+          ★이것이 못 고치는 것 — 사명 끝 음절이 조사로 읽혀 **후보 자체가
+            잘못 잘린** 경우("우리로에"→"우리")는 그대로 남는다. 잘린 후보가
+            실존 법인과 1.000으로 붙어 점수 경쟁에서 이기기 때문이다."""
         analysis = _analyze(raw_query)
         candidates = _build_candidates(raw_query)
         if not candidates:
@@ -173,7 +184,8 @@ class AnchorExtractor:
             # 1.000 동점이 실제로 나기 때문이다("농심" vs "일이" 둘 다 실존
             # 법인). 저장소의 ORDER BY는 동점 순서를 정의하지 않아 물리적
             # 행 순서에 좌우됐다.
-            return max(matches, key=lambda m: (m[2], len(m[0])))[0]
+            # 고르는 기준은 (점수, 후보 길이), 돌려주는 것은 **매칭된 법인명**이다.
+            return max(matches, key=lambda m: (m[2], len(m[0])))[1]
 
         # DART 1차가 비었을 때만 별칭 표에 묻는다. pg_trgm이 한글↔영문을
         # 원리적으로 못 잇기 때문이다 — similarity('NAVER','네이버')=0.000.
@@ -186,4 +198,6 @@ class AnchorExtractor:
                 proper.extend(_candidates_of(word, noun_part))
         if not proper:
             return None
+        # ★alias_exact_match()도 **정식 법인명**을 돌려준다(2026-08-23) —
+        #   위 DART 경로와 계약을 맞춰 둬야 호출부가 분기를 몰라도 된다.
         return self._repo.alias_exact_match(proper)

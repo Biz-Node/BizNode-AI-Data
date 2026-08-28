@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from app.core.database import neo4j_session, postgres_connection
 from pipeline.freshness import assess
+from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.ksic import label_of
 
 # 근거 검증에서 이 판정이 난 관계는 **응답에서 아예 뺀다.**
@@ -63,6 +64,134 @@ def _node(session, key: str) -> Optional[dict]:
         """MATCH (c:Company) WHERE c.corp_code = $k OR c.norm_name = $k
            RETURN properties(c) AS p LIMIT 1""", k=key).single()
     return dict(row["p"]) if row else None
+
+
+_BY_NAME_Q = """
+MATCH (c:Company) WHERE c.norm_name IN $n
+RETURN c.norm_name AS norm_name, coalesce(c.corp_code, c.norm_name) AS key,
+       c.name AS name, c.corp_code AS corp_code
+"""
+
+
+def find_by_names(names: list[str]) -> Optional[dict]:
+    """이름 후보들 중 **그래프에 실재하는 기업** 하나. 없으면 `None`.
+
+    ★`EntityResolver`(PostgreSQL `corp_code_master`)가 해소에 실패했을 때의
+      **두 번째 수단**이다 — 설계서 §16-1 의 식별 우선순위 `corp_code` →
+      `norm_name` 에서 뒤쪽이다.
+
+    ★왜 필요한가 (실측 2026-08-25 · 현황서 §8-5) — `TSMC`·`마이크론` 은 Neo4j 에
+      Company 로 있는데 `corp_code_master` 에 없다. 이 fallback 없이 두면
+      「저희 데이터에서 찾지 못했습니다」(설계서 §14-4)가 **거짓말**이 된다.
+
+    ★**정규화하고 조회한다.** `norm_name` 규약이 어긋나면 조용히 0건이 된다
+      (설계서 §16-1). 후보가 하나도 안 남으면 조회하지 않는다 — 빈 `IN` 절은
+      전체 스캔이다.
+
+    ★**입력 순서가 이긴다.** 여럿이 걸려도 먼저 준 후보를 쓴다 — 같은 질문에
+      매번 다른 앵커가 잡히면 안 된다(`evidence_selector.select` 와 같은 규약).
+    """
+    norms = list(dict.fromkeys(
+        normalize_company_name(n) for n in names if n and n.strip()))
+    norms = [n for n in norms if n]
+    if not norms:
+        return None
+
+    with neo4j_session() as s:
+        by_norm = {r["norm_name"]: {"key": r["key"], "name": r["name"],
+                                    "corp_code": r["corp_code"]}
+                   for r in s.run(_BY_NAME_Q, n=norms)}
+    for norm in norms:
+        if norm in by_norm:
+            return by_norm[norm]
+    return None
+
+
+_BY_KEY_Q = """
+MATCH (c:Company) WHERE c.corp_code IN $k OR c.norm_name IN $k
+RETURN coalesce(c.corp_code, c.norm_name) AS key, c.name AS name,
+       c.norm_name AS norm_name, c.corp_code AS corp_code
+"""
+
+
+def names_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → 이름. **그래프에 있는 것만** 돌려준다 — 없는 key 는 빠진다.
+
+    ★그래서 **존재 확인을 겸한다.** 「해소됐다 ≠ 그래프에 있다」이기 때문이다 —
+      `corp_code_master` 118,535건 대 그래프 Company 3,432건이다. 없는 key 를
+      재료 기업에 넣으면 `companies` 에 **팬텀 항목**만 남고 사건·관계는 0 이 된다
+      (`events_of`·`relations_of` 는 없는 key 에 조용히 빈 목록을 준다).
+
+    ★`workspace_service.names_of()` 가 이 함수를 쓴다 — 조회를 두 벌 두지 않는다.
+      저쪽은 여기 결과에 「못 찾은 key 는 key 로 남긴다」를 얹을 뿐이다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["name"] for r in s.run(_BY_KEY_Q, k=unique)}
+
+
+def norm_names_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → **`norm_name`.** 그래프에 없는 key 는 빠진다.
+
+    ★`names_by_keys()` 와 **같은 질의**를 쓴다(컬럼 하나만 더 읽는다) — 조회를
+      두 벌 두지 않는다. 저쪽은 표시용 `name` 을, 여기는 **식별용 `norm_name`**
+      을 준다. 설계서 §16-1 의 식별 우선순위(`corp_code` → `norm_name`)에서
+      `name` 은 식별에 쓰지 않는다.
+
+    ★도구 계층(`app/tools/`)이 「조용한 0건」을 실패로 바꾸는 데 쓴다.
+      `events_of()` 는 못 찾은 key 에 예외가 아니라 빈 목록을 주기 때문이다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["norm_name"] for r in s.run(_BY_KEY_Q, k=unique)
+                if r["norm_name"]}
+
+
+def corp_codes_by_keys(keys: list[str]) -> dict[str, str]:
+    """key → **`corp_code`.** 없는 기업은 빠진다 — `norm_names_by_keys()` 의 짝.
+
+    ★**해외 기업은 여기 안 나온다.** `corp_code` 는 DART 가 주는 값이라
+      그래프 Company 중에도 `null` 인 노드가 있다(해외·비상장). 「그래프에
+      없다」와 「`corp_code` 가 없다」는 다른 사실이라 갈라서 읽어야 한다 —
+      존재 확인은 `norm_names_by_keys()` 가 한다.
+
+    ★같은 `_BY_KEY_Q` 를 쓴다(컬럼 하나만 더 읽는다) — 조회를 두 벌 두지 않는다.
+    """
+    unique = list(dict.fromkeys(k for k in keys if k))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["key"]: r["corp_code"] for r in s.run(_BY_KEY_Q, k=unique)
+                if r["corp_code"]}
+
+
+_NON_COMPANY_Q = """
+MATCH (n) WHERE NOT n:Company AND n.name IN $names
+RETURN n.name AS name, labels(n)[0] AS label
+"""
+
+
+def non_company_labels(names: list[str]) -> dict[str, str]:
+    """이름 → 그 이름을 **정확히** 가진 비-Company 노드의 라벨. 없으면 빠진다.
+
+    ★기업이 아닌 것을 기업으로 오인하는 것을 막는 데 쓴다 — 실측(2026-08-25 ·
+      현황서 §8-5)에서 「HBM을 만드는 기업」의 `HBM` 이 Kiwi `SL` 태그를 받아
+      **기업을 지목한 것**으로 읽혔다. `HBM` 은 Product 노드다.
+
+    ★**정확 일치만 본다.** `CONTAINS` 로 하면 「삼성전자」가 Event 이름에,
+      「엔비디아」가 Product 이름에 걸려 **실존 기업이 통째로 억제**된다
+      (실측: 삼성전자→Event · TSMC→Event · 마이크론→Organization · 엔비디아→Product).
+      정확 일치에서는 `HBM` 만 걸리고 나머지는 하나도 안 걸린다 — 오탐 0.
+    """
+    unique = list(dict.fromkeys(n for n in names if n and n.strip()))
+    if not unique:
+        return {}
+    with neo4j_session() as s:
+        return {r["name"]: r["label"] for r in s.run(_NON_COMPANY_Q, names=unique)}
 
 
 def _verdict(p: dict) -> str:
@@ -117,6 +246,23 @@ def _relation(src: dict, tgt: dict, etype: str, p: dict,
         "score": score,
         "corroboration": corr,
         "source_type": p.get("source_type") or "news",
+        # ★아래 둘은 **API 응답에 안 나간다.** `Relation`·`CompanyDetail` 이
+        #   pydantic 기본값(`extra="ignore"`)이라 모델을 지나며 떨어진다 —
+        #   실제로 `/retrieve`·`/companies/{key}`·`/companies/{key}/relations`
+        #   전부 `Relation(**row)` 를 거친다. 도구 계층(`app/tools/`)만 이 raw
+        #   dict 를 직접 읽는다.
+        #
+        #   `confidence` — `score` 는 corroboration 보정과 wrong_type 벌점까지
+        #   곱한 뒤 1.0 에서 잘린 값이라 **되돌릴 수 없다.** `RelationDTO.
+        #   effective_confidence`(= confidence × 신선도 가중치)를 만들려면
+        #   원래 값이 필요하다.
+        "confidence": conf,
+        #   `verdict` — 근거 검증 판정(`supported`/`wrong_type`/…). **원시
+        #   `grounding_suspect` 가 아니라 이 값을 싣는다.** 의심 표시가 붙어도
+        #   `wrong_type` 은 **관계 자체는 실재**하므로 남기고 점수만 깎는 것이
+        #   이 저장소의 규칙이고(`graph_service._HIDE` 와 같다), 원시 플래그를
+        #   실으면 도구가 그 규칙을 모른 채 `wrong_type` 까지 지운다.
+        "verdict": _verdict(p),
         "refresh_cycle_days": int(cycle) if cycle is not None else None,
         "days_since": fr.days_since,
         "days_until_refresh": left,
@@ -153,6 +299,58 @@ def _financials(cur, corp_code: str, limit: int = 3) -> list[dict]:
             "operating_margin": _pct(op, rev),
         })
     return out
+
+
+_OVERVIEW_Q = """SELECT corp_code, bsns_year, overview_text, products_text, source_doc
+                 FROM business_overview WHERE corp_code = %s"""
+
+
+def business_overview_of(key: str, *, year: Optional[int] = None) -> Optional[dict]:
+    """사업보고서 「사업의 내용」 **원문.** 없으면 `None`.
+
+    ★`company_profiles` 와 갈라 두는 이유 — 저쪽은 **우리가 쓴 요약**이라
+      인용하면 우리 문장을 근거로 삼는 셈이 된다. 이 표는 사업보고서 본문
+      그대로라 **챗봇이 인용할 수 있는 유일한 재무계 텍스트**다.
+      (실측 2026-08-27: 64행 · 기업 64곳 · 전부 2025년 · `products_text` 는 63행)
+
+    ★`source_doc` 을 **반드시 함께 준다.** 이 값이 DART 접수번호라, 나중에
+      이 텍스트를 `Evidence` 로 승격할 때 되짚을 출처가 된다. 지금은 승격하지
+      않는다 — 여기까지가 조회다.
+
+    `company_detail` 안에서 `overview_text` 만 최신 1건 읽는 자리는 그대로
+    둔다. 저기는 화면 블록 채우기고, 여기는 인용 재료를 통째로 꺼내는 입구다.
+
+    Args:
+        key: `corp_code` 이거나 `norm_name`.
+        year: 사업연도. 주지 않으면 **가장 최근 연도**.
+    """
+    with neo4j_session() as s:
+        node = _node(s, key)
+    corp = (node or {}).get("corp_code")
+    if not corp:
+        return None
+
+    sql, params = _OVERVIEW_Q, [corp]
+    if year is None:
+        sql += " ORDER BY bsns_year DESC LIMIT 1"
+    else:
+        sql += " AND bsns_year = %s"
+        params.append(year)
+    with postgres_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+    if not row:
+        return None
+
+    code, bsns_year, overview_text, products_text, source_doc = row
+    # `character(8)`·`character(14)` 는 고정폭이라 공백이 붙어 나올 수 있다.
+    return {
+        "corp_code": code.strip() if code else None,
+        "bsns_year": int(bsns_year),
+        "overview_text": overview_text,
+        "products_text": products_text,
+        "source_doc": source_doc.strip() if source_doc else None,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -267,13 +465,48 @@ def relations_of(key: str, *, limit: Optional[int] = None,
 _EVENT_Q = """
 MATCH (c:Company)-[h:HAS_EVENT]->(e:Event)
 WHERE c.corp_code = $k OR c.norm_name = $k
-RETURN properties(e) AS e, properties(h) AS h
+OPTIONAL MATCH (e)-[i:IMPACTS]->(c)
+RETURN properties(e) AS e, properties(h) AS h, i.sign AS sign
 ORDER BY coalesce(h.occurred_at, e.last_seen) DESC
 """
 
 
+def _own_evidence_ids(h: dict) -> list[str]:
+    """★기업별 근거는 **엣지에 있다.** Event 노드의 `evidence_ids` 를 쓰면 안 된다.
+
+    하나의 Event 를 여러 기업이 공유하는데(실측 2026-08-23: 사건 938건 중 85건),
+    노드의 `evidence_ids` 는 그 사건에 엮인 **모든 기업의 근거 합집합**이다.
+    그걸 기업별 조회가 그대로 돌려주는 바람에 「SK하이닉스」 질의의 /ask 근거에
+    현대오토에버 노조 기사가 섞였다(ev_14df4ce056904b8b).
+
+        Event '노조 설립'  e.evidence_ids = [현대오토에버 ×2, SK하이닉스, 신세계]
+          SK하이닉스   -[HAS_EVENT {evidence_id: ev_47b007…}]->
+          현대오토에버 -[HAS_EVENT {evidence_id: ev_14df4c…}]->
+
+    `role`·`occurred_at` 은 이미 엣지에서 가져오고 있었다 — 「날짜는 사건 노드가
+    아니라 관계에 있다」(schemas.py `Event`). `evidence_ids` 만 그 원칙에서
+    빠져 있었을 뿐이다.
+
+    ★못 찾아도 노드 합집합으로 메우지 않는다. 없는 것과 남의 것은 다르다 —
+      메우면 이 사고가 그대로 되돌아온다(실측: 1,062개 HAS_EVENT 엣지 전부가
+      `evidence_id` 를 들고 있어 메울 일도 없다).
+
+    단수·복수를 둘 다 모은다 — `relation_service._evidence()`·
+    `graph_searcher._evidence_refs()` 와 같은 규약이다(실측: 복수 11건).
+    """
+    ids: list[str] = []
+    for value in (h.get("evidence_id"), *(h.get("evidence_ids") or [])):
+        if value and value not in ids:
+            ids.append(str(value))
+    return ids
+
+
 def events_of(key: str) -> list[dict]:
-    """사건 목록. `timeline` 은 **펴서** 준다 — 화면이 문자열을 쪼개게 하지 않는다."""
+    """사건 목록. `timeline` 은 **펴서** 준다 — 화면이 문자열을 쪼개게 하지 않는다.
+
+    근거는 **이 기업의 엣지 것만** 나간다(`_own_evidence_ids`). 사건 자체는
+    공유 구조 그대로 — 같은 Event 를 여러 기업이 들고 있어도 사건은 사건이다.
+    """
     with neo4j_session() as s:
         rows = [dict(r) for r in s.run(_EVENT_Q, k=key)]
     out = []
@@ -289,6 +522,15 @@ def events_of(key: str) -> list[dict]:
             "name": e.get("name") or "",
             "event_type": e.get("event_type") or "기타",
             "is_risk": bool(e.get("is_risk")),
+            # ★`Event` 가 pydantic 기본값(`extra="ignore"`)이라 **API 응답에는
+            #   안 나간다.** 사건이 아닌 것으로 보이는 83건에 붙은 표시로
+            #   (ERD §「표시만 하고 안 지운다」), 도구 계층만 이걸 읽어 뺀다.
+            "eventness_suspect": bool(e.get("eventness_suspect")),
+            # ★사건의 **극성** — `IMPACTS` 엣지에 있다(negative/positive/neutral).
+            #   `HAS_EVENT` 1,062건 중 711건이 짝을 갖는다(2026-08-28 실측).
+            #   한 (기업,사건) 쌍에 `IMPACTS` 는 최대 1개라 행이 불어나지 않는다.
+            #   `Event` 가 `extra="ignore"` 라 **API 응답에는 안 나간다.**
+            "sign": row.get("sign"),
             "role": h.get("role") or "subject",
             "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
             "article_count": int(e.get("article_count") or 1),
