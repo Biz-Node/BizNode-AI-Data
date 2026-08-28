@@ -252,7 +252,7 @@ CREATE TABLE public.edge_subtypes (
 --
 
 CREATE TABLE public.embedding_cache (
-    model text NOT NULL,
+    embedding_model text NOT NULL,
     text_hash text NOT NULL,
     embedding double precision[] NOT NULL,
     text_preview text,
@@ -880,7 +880,7 @@ ALTER TABLE ONLY public.edge_subtypes
 --
 
 ALTER TABLE ONLY public.embedding_cache
-    ADD CONSTRAINT embedding_cache_pkey PRIMARY KEY (model, text_hash);
+    ADD CONSTRAINT embedding_cache_pkey PRIMARY KEY (embedding_model, text_hash);
 
 
 --

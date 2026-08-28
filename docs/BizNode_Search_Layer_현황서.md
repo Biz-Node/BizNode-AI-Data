@@ -2364,18 +2364,19 @@ run2       c4a7…=0.39154100229761007   68f7…=0.39165095725302596   → 68f7 
 
 | 컬럼 | 타입 | NULL | 기본값 | 무엇을 담나 |
 |---|---|---|---|---|
-| `model` | `text` | NO | — | 임베딩 모델명(`EMBEDDING_MODEL`, 기본 `text-embedding-3-small`). ★**키의 일부** — 모델을 바꾸면 새 항목이 되어 옛 벡터를 잘못 물려받지 않습니다 |
+| `embedding_model` | `text` | NO | — | 임베딩 모델명(`EMBEDDING_MODEL`, 기본 `text-embedding-3-small`). ★**키의 일부** — 모델을 바꾸면 새 항목이 되어 옛 벡터를 잘못 물려받지 않습니다. ★이름은 `vector_chunks.embedding_model` **과 같습니다** — 같은 값이라 같은 이름을 씁니다(2026-08-28 개명, 원래 `model`) |
 | `text_hash` | `text` | NO | — | `sha256(text)` hex 64자 |
 | `embedding` | `double precision[]` | NO | — | 벡터 본체. ★**float8 이라 왕복이 무손실**입니다 — `real`·`numeric` 이면 값이 바뀌어 「고정」의 의미가 사라집니다 |
 | `text_preview` | `text` | YES | — | 원문 앞 200자. **조회에 쓰지 않습니다** — 사람이 볼 용도 |
 | `cached_at` | `timestamptz` | NO | `now()` | 적재 시각. 역시 조회에 쓰지 않습니다 |
 
-`PRIMARY KEY (model, text_hash)` 하나뿐이고, 조회가 `WHERE model = %s AND
-text_hash = ANY(%s)` 한 형태로 고정이라 이 인덱스로 전부 덮입니다.
+`PRIMARY KEY (embedding_model, text_hash)` 하나뿐이고, 조회가
+`WHERE embedding_model = %s AND text_hash = ANY(%s)` 한 형태로 고정이라 이
+인덱스로 전부 덮입니다.
 쓰기는 `ON CONFLICT DO NOTHING` — **갱신 경로가 없습니다.** 한 번 정해진 벡터를
 덮어쓰지 않는 것이 「고정」의 정의입니다. **TTL·만료도 없습니다** — 만료되면 그
 시점부터 다시 흔들립니다. 모델을 바꿔 옛 행을 지우려면
-`DELETE FROM embedding_cache WHERE model = '<옛 모델>'` 를 손으로 돌립니다.
+`DELETE FROM embedding_cache WHERE embedding_model = '<옛 모델>'` 를 손으로 돌립니다.
 
 **DDL 이 두 군데 있는 이유** (2026-08-28 보완)
 
@@ -2383,6 +2384,7 @@ text_hash = ANY(%s)` 한 형태로 고정이라 이 인덱스로 전부 덮입�
 |---|---|
 | `infra/postgres/init/02_schema.sql` | ★**새 클론·빈 DB.** 컨테이너 최초 기동 때 돌아 표가 처음부터 있습니다 |
 | `embedding_cache.py` 의 `_ensure()` | ★**이미 데이터가 든 DB.** init 스크립트는 데이터 디렉터리가 비었을 때만 돌아서, 기존 DB 에는 이 경로로만 생깁니다(프로세스당 1회) |
+| `batch/repair/embedding_cache_column.py` | ★**컬럼을 바꿀 때만.** 위 둘은 「표가 없으면 만든다」라서 **이미 있는 표의 컬럼은 못 고칩니다.** 그래서 개명·추가는 마이그레이션이 따로 필요합니다(2026-08-28 `model` → `embedding_model`) |
 
 ★**둘 다 필요합니다.** 스키마 파일만 있으면 기존 DB 에 표가 안 생겨 매 실행
 경고를 내며 폴백하고(= 그 실행은 고정이 아님), 런타임 DDL 만 있으면 표가

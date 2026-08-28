@@ -9,7 +9,7 @@
 
 ```
 Neo4j        노드 7,755 · 엣지 11,060 (12종)      관계 탐색
-PostgreSQL   27표 + 뷰 1 · 110MB                 숫자와 이력
+PostgreSQL   26표 + 뷰 1 · 110MB                 숫자와 이력
 ChromaDB     evidence 10,510 · company 2,432      근거 원문
 ```
 
@@ -353,7 +353,7 @@ L3 Subtype (개방)   상세 패널 표시. 관리 목록으로 수렴
 
 ---
 
-# 3. PostgreSQL — 27표 + 뷰 1
+# 3. PostgreSQL — 26표 + 뷰 1
 
 **빈 표는 없다.** 예전엔 「스키마가 곧 계획서」라며 빈 표를 남겨 뒀는데, 계획이
 실현되거나 폐기되면서 전부 정리됐다(`companies`·`ingest_runs`·`shareholder_summaries`
@@ -422,13 +422,14 @@ PSR     = 시가총액 ÷ 매출액
 > 준다(회사가 공시에 단위를 잘못 적었다). 그대로 두면 시총 146만 조가 되어
 > **순위가 통째로 뒤집힌다.** `suspect`로 표시하고 뷰에서만 뺀다.
 
-## 3-4. 뉴스와 적재 (3)
+## 3-4. 뉴스와 적재 (4)
 
 | 표 | 행 | 주요 컬럼 | 무엇을 담나 |
 |---|---:|---|---|
 | `news_articles` | 14,032 | `url` **PK** · `title` · `press` · `published_at` · `source_channel` · `title_hash` · `body_length` · `rule_passed` · `llm_relevant` · `extracted_at` | 기사 메타. **본문은 저장하지 않는다** |
 | `staged_edges` | 19,512 | `id` **PK** · `src_key` · `tgt_key` · `edge_type` · `subtype` · `properties` · `origin` · `validated` · `validation_error` | **Neo4j로 가기 전 착지대** |
 | `vector_chunks` | 12,942 | `chunk_id` **PK** · `collection` · `owner_key` · `corp_code` · `embedding_model` · `is_active` | ChromaDB에 무엇이 들어 있는지의 목록 |
+| `embedding_cache` | 516 | `embedding_model`+`text_hash` **PK** · `embedding` · `text_preview` · `cached_at` | **(모델, 텍스트) → 벡터를 고정한다.** OpenAI 임베딩은 같은 입력에 같은 벡터를 주지 않아서(실측 2026-08-28: 배치 150건 편차 2.1e-03 · 코사인 최대 4.4e-03) 사건 순위가 실행마다 뒤집혔다. ★`vector_chunks`와 **같은 `embedding_model`** 을 본다 — 모델을 바꿀 때 재임베딩 대상과 버릴 캐시를 같은 값으로 고른다 |
 
 **`news_articles`에 본문 컬럼이 없는 이유** — 크롤러가 언론사 robots.txt를 지키는
 조건으로 본문을 받아 **관계 추출에만 쓰고 버린다.** 화면이 인용하는 건 근거 한두

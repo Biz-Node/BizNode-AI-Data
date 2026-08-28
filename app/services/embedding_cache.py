@@ -34,12 +34,23 @@
   모델), 모델을 바꾸면 캐시가 통째로 무효가 되어야 한다. 키에 있으면 새 모델은
   자연히 새 항목이 되고 옛 벡터를 잘못 물려받지 않는다.
 
+  ★컬럼 이름은 **`embedding_model`** 이다 — `vector_chunks.embedding_model` 과
+    **같은 뜻이라 같은 이름을 쓴다**(2026-08-28 개명, 원래 `model`). 모델을
+    교체할 때 재임베딩 대상을 고르는 쪽과 캐시를 버리는 쪽이 같은 값을 보는데,
+    이름이 갈리면 한쪽만 고치고 넘어가게 된다. 파이썬 인자는 `model` 그대로다
+    — 저장소 컬럼명이지 호출 규약이 아니다.
+
 ★**DDL 이 두 군데 있고 둘 다 필요하다.** 표의 정본은
   `infra/postgres/init/02_schema.sql` 이지만 그 파일은 컨테이너가 **데이터
   디렉터리가 비었을 때만** 돌린다. 이미 데이터가 들어 있는 DB 에는 아래
   `_ensure()` 로만 생긴다. 런타임 DDL 을 빼면 기존 DB 는 매 실행 폴백하며
   경고를 내고(= 그 실행은 고정이 아니다), 스키마 파일에서 빼면 새 클론이
   이 표의 출처를 추적할 수 없다.
+
+  ★그래서 **컬럼을 바꾸려면 세 군데를 함께 고쳐야 한다** — 이 파일의 `_DDL`,
+    `infra/postgres/init/02_schema.sql`, 그리고 이미 돌고 있는 DB 를 위한
+    `batch/repair/` 마이그레이션. 하나라도 빠지면 새 클론과 기존 DB 의 스키마가
+    갈린다.
 """
 
 from __future__ import annotations
@@ -56,12 +67,12 @@ Embed = Callable[[list[str]], Sequence[Sequence[float]]]
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS embedding_cache (
-    model        text NOT NULL,
-    text_hash    text NOT NULL,
-    embedding    double precision[] NOT NULL,
-    text_preview text,
-    cached_at    timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (model, text_hash)
+    embedding_model text NOT NULL,
+    text_hash       text NOT NULL,
+    embedding       double precision[] NOT NULL,
+    text_preview    text,
+    cached_at       timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (embedding_model, text_hash)
 )
 """
 
@@ -106,7 +117,7 @@ def embed_with_cache(texts: list[str], real: Embed,
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT text_hash, embedding FROM embedding_cache "
-                    "WHERE model = %s AND text_hash = ANY(%s)",
+                    "WHERE embedding_model = %s AND text_hash = ANY(%s)",
                     (model, [_key(t) for t in wanted]))
                 found = {row[0]: list(row[1]) for row in cur.fetchall()}
 
@@ -120,9 +131,9 @@ def embed_with_cache(texts: list[str], real: Embed,
                 with conn.cursor() as cur:
                     cur.executemany(
                         "INSERT INTO embedding_cache "
-                        "(model, text_hash, embedding, text_preview) "
+                        "(embedding_model, text_hash, embedding, text_preview) "
                         "VALUES (%s, %s, %s, %s) "
-                        "ON CONFLICT (model, text_hash) DO NOTHING",
+                        "ON CONFLICT (embedding_model, text_hash) DO NOTHING",
                         [(model, _key(t), [float(x) for x in v], t[:200])
                          for t, v in zip(missing, fresh)])
                 for t, v in zip(missing, fresh):
