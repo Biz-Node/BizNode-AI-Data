@@ -14,6 +14,21 @@
 --     --schema-only --no-owner --no-privileges \
 --     > infra/postgres/init/02_schema.sql
 --
+--   ★**지금 컨테이너의 pg_dump 로는 이 파일이 그대로 안 나옵니다**(2026-08-28).
+--     빌드가 달라져 `\restrict` 줄과 `Owner: -` 주석이 붙고, `--schema-only` 는
+--     이 파일에 있는 빈 `Data for Name:` 헤더(빈 DB 를 통째로 덤프한 흔적)를
+--     지웁니다. 그대로 덮으면 **1,000줄 넘는 서식 잡음**에 진짜 변경이 묻힙니다.
+--     그래서 embedding_cache 는 표 하나 분량만 손으로 넣고, 아래 방법으로
+--     실DB 와 일치함을 확인했습니다. 다음에도 표 한둘이면 같은 방식이 낫습니다.
+--
+--   ── 손으로 넣었으면 반드시 이렇게 검증하세요 ──
+--     docker exec biznode-postgres psql -U biznode -d postgres \
+--       -c 'CREATE DATABASE schema_check'
+--     docker exec -i biznode-postgres psql -U biznode -d schema_check \
+--       < infra/postgres/init/02_schema.sql
+--     두 DB 의 information_schema 컬럼·제약·인덱스를 대조해 차이 0 을 확인하고
+--     schema_check 를 지웁니다. 2026-08-28 실측: 차이 0.
+--
 --   ★스키마를 바꿨으면 반드시 다시 뽑으세요. 안 하면 또 어긋납니다.
 --     덤프가 없는 새 클론에서는 이 파일이 **DB를 세우는 유일한 길**입니다
 --     (infra/share/ 는 124MB라 .gitignore 에 있습니다).
@@ -229,6 +244,19 @@ CREATE TABLE public.edge_subtypes (
     seen_count integer DEFAULT 1 NOT NULL,
     first_seen timestamp with time zone DEFAULT now() NOT NULL,
     last_seen timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: embedding_cache; Type: TABLE; Schema: public; Owner: biznode
+--
+
+CREATE TABLE public.embedding_cache (
+    model text NOT NULL,
+    text_hash text NOT NULL,
+    embedding double precision[] NOT NULL,
+    text_preview text,
+    cached_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -668,6 +696,11 @@ ALTER TABLE ONLY public.staged_edges ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Data for Name: embedding_cache; Type: TABLE DATA; Schema: public; Owner: biznode
+--
+
+
+--
 -- Data for Name: event_merge_verdicts; Type: TABLE DATA; Schema: public; Owner: biznode
 --
 
@@ -840,6 +873,14 @@ ALTER TABLE ONLY public.edge_audits
 
 ALTER TABLE ONLY public.edge_subtypes
     ADD CONSTRAINT edge_subtypes_pkey PRIMARY KEY (edge_type, subtype);
+
+
+--
+-- Name: embedding_cache embedding_cache_pkey; Type: CONSTRAINT; Schema: public; Owner: biznode
+--
+
+ALTER TABLE ONLY public.embedding_cache
+    ADD CONSTRAINT embedding_cache_pkey PRIMARY KEY (model, text_hash);
 
 
 --
