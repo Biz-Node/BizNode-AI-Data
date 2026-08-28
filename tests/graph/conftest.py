@@ -83,6 +83,46 @@ def request_():
     return AskRequest(question="삼성전자 압수수색", workspace_keys=[_SAMSUNG, _HYNIX])
 
 
+# ══════════════════════════════════════════════════════════════════
+#  그래프 Company 대장 — 이 파일이 대역을 안 세웠던 마지막 한 자리
+# ══════════════════════════════════════════════════════════════════
+
+_GRAPH_COMPANIES = {_SAMSUNG: "삼성전자", _HYNIX: "SK하이닉스"}
+
+
+@pytest.fixture
+def graph_companies():
+    """**그래프에 실제로 있는** Company 대장. 여기 없는 key 는 그래프에 없다.
+
+    ★`company_service.names_by_keys()` 와 **같은 계약**이다 — 못 찾은 key 는
+      돌려주지 않는다. 그래야 「해소됐다 ≠ 그래프에 있다」를 가리는
+      `_with_anchor_backstop()` 의 존재 확인이 대역에서도 그대로 돈다.
+    """
+    return dict(_GRAPH_COMPANIES)
+
+
+@pytest.fixture(autouse=True)
+def no_graph_db(request, monkeypatch, graph_companies):
+    """★맨 위 선언(**DB 를 쓰지 않는다**)을 **실제로 지키게** 한다.
+
+    `plan_material` 은 `companies` 가 비면 `_with_anchor_backstop()` 을 타고,
+    거기서 `company_service.names_by_keys()` → Neo4j 가 열린다. 대역이 없어
+    **DB 가 떠 있는 환경에서만 조용히 통과**하던 자리다 — 재료가 빈 경로는
+    드물지 않다(검색 히트가 0 이거나 상대가 Person·Organization·Event 일 때
+    늘 여기로 온다).
+
+    ★`needs_db` 는 건드리지 않는다 — `test_parity.py` 는 **진짜 그래프**와
+      대조하는 것이 목적이라 대역을 세우면 대조 자체가 성립하지 않는다.
+    """
+    if request.node.get_closest_marker("needs_db"):
+        return
+    from app.services import company_service
+
+    monkeypatch.setattr(
+        company_service, "names_by_keys",
+        lambda keys: {k: graph_companies[k] for k in keys if k in graph_companies})
+
+
 class FakeRetrieveService:
     """검색만 담당하는 대역 — 조회는 이제 **도구**가 한다(1.5차)."""
 

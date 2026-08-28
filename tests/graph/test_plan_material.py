@@ -15,7 +15,7 @@ from datetime import date
 
 import pytest
 
-from app.api.schemas import Anchor, AnchorSource, RelationEndpoint
+from app.api.schemas import Anchor, AnchorSource
 from app.graph.nodes.material import plan_material
 from app.services.query_understanding import AnchorDecision
 from pipeline.normalizer.resolver import Resolution
@@ -165,15 +165,15 @@ def test_backstop_is_flagged_only_when_it_actually_runs(request_):
     assert got["backstop"] is False
 
 
-def test_backstop_flag_set_when_hits_yield_no_company(monkeypatch, request_):
+def test_backstop_flag_set_when_hits_yield_no_company(request_):
     """관계 상대가 Person·Organization·Event 인 질의에서 재료가 통째로 0 이 됐다
-    (현황서 §5-16). 앵커는 멀쩡히 잡혀 있는데도 그랬다."""
-    from app.graph.nodes import material
+    (현황서 §5-16). 앵커는 멀쩡히 잡혀 있는데도 그랬다.
 
-    monkeypatch.setattr(material, "_with_anchor_backstop",
-                        lambda companies, decision:
-                        [RelationEndpoint(key=_SAMSUNG, name="삼성전자")])
-
+    ★`_with_anchor_backstop()` 을 **대역으로 바꾸지 않는다.** 그러면 백스톱이
+      실제로 무엇을 넣는지는 아무도 안 보게 된다. 대역은 그 함수가 존재 확인에
+      쓰는 DB 한 자리(`company_service.names_by_keys`)뿐이고, 그건 conftest 의
+      `graph_companies` 가 세운다.
+    """
     got = plan_material(_state(request_, resolved=[_resolution(_SAMSUNG, "삼성전자")],
                                hits=[]))
 
