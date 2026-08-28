@@ -20,6 +20,8 @@ from app.core.trace import trace_logger
 from app.services import claim_check, evidence_selector, material_consistency
 from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import RetrieveService, _default_embed
+from app.llm import prompt as shared
+from app.llm.prompt import EventRef, RelationRef
 from pipeline.llm import ask_json
 
 log = trace_logger(__name__)
@@ -358,30 +360,29 @@ _UNRESOLVED_TEMPLATE = "질문하신 '{named}' 에 해당하는 기업을 저희
 _WORKSPACE_HINT_TEMPLATE = "현재 워크스페이스에 담긴 기업은 다음과 같습니다 — {names}"
 
 
-# ★dict 조회로 전수 분기한다 — 미지 값을 조용히 EXACT(="확신을 갖고 말해도
-#   된다"는 허가)로 떨어뜨리지 않는다. 매핑에 없는 값이 오면 KeyError 로
-#   즉시 죽는다. 검증 우회 경로(`model_construct()` 등)로 pydantic 강제변환을
-#   건너뛴 값이 들어와도 조용히 잘못된 문구를 돌려주지 않기 위함이다.
-_NOTE_BY_MATCH_TYPE: dict[MatchType, str] = {
-    MatchType.EXACT: "검색 방식: EXACT — 이름 또는 관계가 그래프에서 정확히 일치한 결과입니다.",
-    MatchType.SEMANTIC: ("검색 방식: SEMANTIC — 이름/키워드가 정확히 일치하지 않아 의미가 "
-                         "비슷한 문서로 찾은 결과입니다. 확정된 사실처럼 말하지 마세요."),
-}
+# ★표기 문구·공용 조립은 **`app/llm/prompt.py` 한 곳**에 있다(Phase 1.5 계약 5번).
+#   여기서 이름을 다시 노출하는 것은 **사본이 아니라 별칭**이다 — 이 모듈이
+#   대조 기준선이라 기존 이름으로 부르는 코드·테스트가 그대로 돌아야 한다.
+_NOTE_BY_MATCH_TYPE = shared.NOTE_BY_MATCH_TYPE
+_TARGET_NOTE_BY_SOURCE = shared.TARGET_NOTE_BY_SOURCE
+_UNLINKED_EVIDENCE = shared.UNLINKED_EVIDENCE
+_MAX_PROPAGATION_LINES = shared.MAX_PROPAGATION_LINES
+_match_type_note = shared.match_type_note
+_neutralize_delimiters = shared.neutralize_delimiters
+_select_propagation = shared.select_propagation
 
 
-def _match_type_note(match_type: MatchType) -> str:
-    return _NOTE_BY_MATCH_TYPE[match_type]
+def _relation_refs(relations) -> list[RelationRef]:
+    """API 스키마 `Relation` → 공용 참조 타입."""
+    return [RelationRef(evidence_id=r.evidence_id, edge_id=r.edge_id,
+                        source_key=r.source.key, source_name=r.source.name,
+                        target_key=r.target.key, target_name=r.target.name)
+            for r in relations]
 
 
-# ★답변 형태를 가르는 줄(설계서 §14-6). 시스템 프롬프트 규칙 13이 「"답변 대상"
-#   줄」이라고 **이름으로** 참조하므로 문구를 바꿀 때 규칙도 같이 봐야 한다.
-_TARGET_NOTE_BY_SOURCE: dict[AnchorSource, str] = {
-    AnchorSource.QUERY: "답변 대상: 질문 — 질문이 지정한 대상에 대해 답합니다.",
-    AnchorSource.WORKSPACE: ("답변 대상: 워크스페이스 — 질문이 대상을 지정하지 않아 "
-                             "워크스페이스 기업들을 대상으로 삼았습니다."),
-    # `unresolved` 는 애초에 LLM 을 부르지 않는다(설계서 §14-4).
-    AnchorSource.UNRESOLVED: "",
-}
+def _event_refs(events) -> list[EventRef]:
+    return [EventRef(event_id=e.event_id, event_type=e.event_type,
+                     evidence_ids=e.evidence_ids) for e in events]
 
 
 def _membership(relation: Relation, workspace_keys: set[str]) -> str:
@@ -417,66 +418,6 @@ def _propagation_membership(prop: Propagation, workspace_keys: set[str]) -> str:
         return ""
     inside = "워크스페이스" if prop.key in workspace_keys else "바깥"
     return f", {prop.target}={inside}"
-
-
-def _select_propagation(
-        propagation: list[Propagation],
-        limit: int = _MAX_PROPAGATION_LINES,
-) -> tuple[list[Propagation], dict[str, int]]:
-    """사건별로 **공평하게** 나눠 담는다 — 뺀 몫은 사건 이름별로 돌려준다.
-
-    ★앞에서부터 자르면 **첫 사건이 예산을 통째로 먹는다.** 실측(fixture
-      `ask_sk_hynix_production_disruption`): 파급 135건이 3개 위험사건에 45건씩
-      고르게 있는데 상한 15줄을 첫 사건이 독점했고, 질문(「생산 차질을 일으킬
-      만한 일이 있었나?」)이 물은 바로 그 사건들 — 이천 공장 질소 누출 사고와
-      우시 공장 화재 — 의 파급은 **한 줄도 실리지 않았다.**
-
-    ★`_events_of()` 가 사건을 **기업마다 따로** 고르는 것과 같은 이유다. 전부
-      한 줄로 세워 자르면 「관련 없어서」가 아니라 「다른 사건이라서」 버린 것이
-      된다.
-
-    ★사건 안에서는 `stated=True` 가 먼저다 — 「기사가 직접 말한 것」이 「우리가
-      공급망으로 계산한 것」보다 먼저 잘릴 이유가 없다. 같은 실측에서 stated=True
-      3건 중 **2건이 잘리고** stated=False 14건이 자리를 차지했다.
-
-    ★그 밖에는 **입력 순서를 지킨다** — 같은 질문에 매번 다른 순서가 나오면 안
-      된다(`evidence_selector.select`·`relation_selector.order` 와 같은 규약).
-
-    ★사건 귀속은 `path[0]` 으로 읽는다. `Propagation` 에 `event_id` 가 없고
-      (`EdgePropagation` 에만 있다) `relation_service.event_impact()` 가
-      `propagate_risk(사건이름)` 의 경로를 그대로 싣기 때문이다 — 실측 135건이
-      정확히 3개 이름으로 갈렸다.
-    """
-    by_event: dict[str, list[Propagation]] = {}
-    for prop in propagation:
-        by_event.setdefault(prop.path[0] if prop.path else "", []).append(prop)
-
-    # 사건 안에서 `stated=True` 를 앞으로. 파이썬 정렬은 **안정 정렬**이라
-    # 나머지 순서는 입력 그대로 남는다.
-    for rows in by_event.values():
-        rows.sort(key=lambda p: not p.stated)
-
-    # 라운드로빈으로 **몫만** 정한다. 출력은 아래에서 사건별로 묶는다 — 줄이
-    # 사건을 오가며 번갈아 나오면 읽기 어렵다.
-    quota = dict.fromkeys(by_event, 0)
-    remaining = limit
-    while remaining > 0:
-        took = False
-        for origin, rows in by_event.items():
-            if quota[origin] >= len(rows):
-                continue
-            quota[origin] += 1
-            remaining -= 1
-            took = True
-            if remaining == 0:
-                break
-        if not took:      # 모든 사건이 바닥났다 — 상한에 못 미쳐도 끝이다
-            break
-
-    kept = [prop for origin, rows in by_event.items() for prop in rows[:quota[origin]]]
-    dropped = {origin: len(rows) - quota[origin]
-               for origin, rows in by_event.items() if len(rows) > quota[origin]}
-    return kept, dropped
 
 
 def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozenset(),
@@ -560,32 +501,9 @@ def _fact_lines(retrieved: RetrieveResponse, workspace_keys: set[str] = frozense
     return f"{_match_type_note(retrieved.match_type)}\n{body}"
 
 
-def _neutralize_delimiters(text: str) -> str:
-    """`<`/`>` 를 그대로 두면 근거 원문 속 `</evidence>` 가 델리미터를 조기에
-    닫아버릴 수 있다(설계서 §13-2). 보기엔 비슷하지만 태그로는 안 먹히는
-    문자로 바꿔 델리미터 무결성을 지킨다."""
-    return text.replace("<", "‹").replace(">", "›")
-
-
-# ★`[사실]` 의 어느 줄과도 이어지지 않은 근거에 붙는 표기. 검색 히트가 들고
-#   왔을 뿐인 근거다 — 실측(현황서 §8-6) 「납품 단가 압박」 38건 중 18건 ·
-#   「최근 인수 사례」 140건 중 58건이 **워크스페이스에 닿지 않는다.** 걸러 봤다가
-#   되돌린 것이 옳았지만(질문이 물은 사례가 사라졌다) **표기 없이** 들어오면
-#   LLM 이 워크스페이스 기업 이야기로 끌어 쓴다.
-_UNLINKED_EVIDENCE = "미연결"
-
-
 def _event_types_by_evidence(retrieved: RetrieveResponse) -> dict[str, frozenset[str]]:
-    """근거 id → 그 근거가 달린 **사건들의 event_type**.
-
-    ★연결성 판정(`claim_check._intent_linked`)의 재료다. 관계·히트에서만 온
-      근거는 여기 없고, 그건 「연결 없음」이 아니라 **「판정 불가」**다.
-    """
-    out: dict[str, set[str]] = {}
-    for event in retrieved.events:
-        for evidence_id in event.evidence_ids:
-            out.setdefault(evidence_id, set()).add(event.event_type)
-    return {k: frozenset(v) for k, v in out.items()}
+    """근거 id → 사건들의 event_type. **공용 모듈이 한다.**"""
+    return shared.event_types_by_evidence(_event_refs(retrieved.events))
 
 
 # ★질문 의도와 연결이 없다고 판정된 주장을 답변에서 **뺄까.**
@@ -615,76 +533,17 @@ def _strip_claims(answer: str, claims: list) -> tuple[str, list[str]]:
 
 
 def _evidence_about(retrieved: RetrieveResponse, workspace_keys: set[str]) -> dict[str, str]:
-    """근거 id → **이 근거가 `[사실]` 의 어느 줄에서 왔는가.**
-
-    ★왜 필요한가 — `<evidence>` 태그에 **기업 속성이 없었다**(id·source_type·
-      press·published_at 뿐). 「이 근거가 누구 얘기냐」가 프롬프트에 없고, 있는
-      것은 사건·관계 줄의 `근거: ev_…` 라는 **역방향** 참조뿐이라 LLM 이 근거를
-      읽으며 위 줄들과 역매칭해야 했다. 그 사이에서 **근거가 실제로 말하는 기업이
-      아니라 워크스페이스 기업 중 하나로 귀속되는** 오답이 난다.
-
-    ★**표기만 한다 — 판정하지 않는다**(설계서 §12). 관계 줄의 `_membership`·파급
-      줄의 `_propagation_membership` 과 같은 종류의 결정론적 고리이고, 이제껏
-      **근거에만 없었다.**
-
-    ★**증명할 수 있는 것만 적는다.**
-
-          관계 근거   양끝 기업 이름 + 워크스페이스 소속   ← `Relation` 이 키를 들고 있다
-          사건 근거   사건 id 까지만                      ← ★`Event` 에 기업 키가 없다
-          그 밖       `미연결`                            ← 어느 줄도 참조하지 않는다
-
-      사건 근거를 기업까지 못 짚는 것은 `Event` 스키마에 기업 키가 없기 때문이다
-      (`_events_of()` 가 기업마다 조회하지만 DTO 가 그 출처를 잃는다). **지어내지
-      않고 사건 id 로 넘긴다** — 사건 줄이 `[사실]` 에 있으므로 LLM 이 그 줄에서
-      맥락을 읽을 수 있다.
-    """
-    about: dict[str, list[str]] = {}
-    for relation in retrieved.relations:
-        if not relation.evidence_id:
-            continue
-        marks = []
-        for endpoint in (relation.source, relation.target):
-            if workspace_keys:
-                inside = "워크스페이스" if endpoint.key in workspace_keys else "바깥"
-                marks.append(f"{endpoint.name}={inside}")
-            else:
-                marks.append(endpoint.name)
-        about.setdefault(relation.evidence_id, []).extend(marks)
-    for event in retrieved.events:
-        for evidence_id in event.evidence_ids:
-            about.setdefault(evidence_id, []).append(f"사건 {event.event_id}")
-
-    out: dict[str, str] = {}
-    for evidence in retrieved.evidence:
-        marks = about.get(evidence.evidence_id) or []
-        # 같은 기업이 여러 관계에 걸리면 한 번만 적는다 — 순서는 지킨다.
-        out[evidence.evidence_id] = (" · ".join(dict.fromkeys(marks)) if marks
-                                     else _UNLINKED_EVIDENCE)
-    return out
+    """근거 귀속 — **공용 모듈이 한다**(`app/llm/prompt.py`)."""
+    return shared.evidence_about(_relation_refs(retrieved.relations),
+                                 _event_refs(retrieved.events),
+                                 retrieved.evidence, workspace_keys)
 
 
 def _evidence_block(retrieved: RetrieveResponse,
                     about: Optional[dict[str, str]] = None) -> str:
-    about = about if about is not None else {}
-    blocks = []
-    for evidence in retrieved.evidence:
-        if evidence.missing:
-            continue
-        # ★`press` 를 안 실으면 「어느 언론이 보도했나」를 답할 수 없다
-        #   (설계서 §9-3). 값은 이미 `Evidence` 안에 있다.
-        #   ★신뢰 안 된 텍스트라 델리미터 중화를 거친다 — 속성값에 `"` 가 섞이면
-        #     태그가 깨지므로 따옴표도 함께 없앤다.
-        press = _neutralize_delimiters(evidence.press or "").replace('"', "'")
-        # ★`about` 도 같은 중화를 거친다 — 기업·사건 이름은 뉴스 → LLM 추출 →
-        #   Neo4j 로 들어온 신뢰 안 된 텍스트다.
-        marks = _neutralize_delimiters(
-            about.get(evidence.evidence_id, _UNLINKED_EVIDENCE)).replace('"', "'")
-        blocks.append(
-            f'<evidence id="{evidence.evidence_id}" source_type="{evidence.source_type}" '
-            f'press="{press}" about="{marks}" '
-            f'published_at="{evidence.published_at or ""}">\n'
-            f'{_neutralize_delimiters(evidence.text)}\n</evidence>')
-    return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
+    """`<evidence>` 블록 — **공용 모듈이 한다.** 델리미터 중화가 여기 있었는데,
+    보안에 직접 걸리는 규칙을 두 벌로 두면 한쪽만 고쳐진다."""
+    return shared.evidence_block(retrieved.evidence, about if about is not None else {})
 
 
 def _build_user_prompt(question: str, retrieved: RetrieveResponse,
@@ -694,50 +553,22 @@ def _build_user_prompt(question: str, retrieved: RetrieveResponse,
     workspace_names = decision.workspace_names if decision else None
     workspace_keys = set(workspace_names or ())
     facts = _fact_lines(retrieved, workspace_keys, workspace_names=workspace_names)
-    if decision is not None:
-        note = _TARGET_NOTE_BY_SOURCE[decision.source]
-        if note:
-            # 「검색 방식」 바로 뒤에 둔다 — 규칙 7·13이 둘 다 [사실] 앞머리를
-            # 위치로 참조한다.
-            head, _, rest = facts.partition("\n")
-            facts = f"{head}\n{note}\n{rest}" if rest else f"{head}\n{note}"
-    return (f"질문: {question}\n\n"
-            f"[사실]\n{facts}\n\n"
-            f"[근거]\n{_evidence_block(retrieved, _evidence_about(retrieved, workspace_keys))}")
+    facts = shared.with_target_note(facts, decision.source if decision else None)
+    about = _evidence_about(retrieved, workspace_keys)
+    return shared.assemble(question, facts, retrieved.evidence, about)
 
 
-def _edge_id_for(evidence_id: str, relations: list[Relation]) -> Optional[str]:
-    """근거가 관계에서 왔으면 그 관계의 edge_id 를 돌려준다. 없으면 None."""
-    for relation in relations:
-        if relation.evidence_id == evidence_id:
-            return relation.edge_id
-    return None
+_edge_id_for = shared._edge_id_for
 
 
 def _source_from_evidence(evidence: Evidence, relations: list[Relation]) -> Source:
-    return Source(
-        evidence_id=evidence.evidence_id,
-        edge_id=_edge_id_for(evidence.evidence_id, relations),
-        text=evidence.text,
-        source_doc=evidence.source_doc,
-        source_type=evidence.source_type,
-        published_at=evidence.published_at,
-    )
+    return shared.source_of(evidence, _relation_refs(relations))
 
 
 def _sources_from(evidence_ids: list[str], retrieved: RetrieveResponse) -> list[Source]:
-    """LLM 이 인용한 evidence_id 를 재료 안에서만 찾는다 — 화이트리스트 검증.
-
-    ★없는 id(지어낸 것) · missing=true(원문을 못 찾은 것) 는 조용히 버린다.
-    """
-    by_id = {e.evidence_id: e for e in retrieved.evidence}
-    out: list[Source] = []
-    for eid in dict.fromkeys(evidence_ids):  # 순서를 지키며 중복 id 제거
-        evidence = by_id.get(eid)
-        if evidence is None or evidence.missing:
-            continue
-        out.append(_source_from_evidence(evidence, retrieved.relations))
-    return out
+    """화이트리스트 검증 — **공용 모듈이 한다.**"""
+    return shared.sources_from(evidence_ids, retrieved.evidence,
+                               _relation_refs(retrieved.relations))
 
 
 def _no_material(message: str) -> AskResponse:
@@ -763,8 +594,8 @@ def _unresolved_message(decision: AnchorDecision) -> str:
 
 def _fallback_sources(retrieved: RetrieveResponse) -> list[Source]:
     """LLM 호출이 실패했을 때 — 필터링 근거가 없으니 missing 만 뺀 원본 전부."""
-    return [_source_from_evidence(e, retrieved.relations)
-            for e in retrieved.evidence if not e.missing]
+    return shared.fallback_sources(retrieved.evidence,
+                                   _relation_refs(retrieved.relations))
 
 
 class AnswerService:

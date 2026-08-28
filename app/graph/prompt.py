@@ -23,27 +23,31 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from app.api.schemas import AnchorSource, Evidence, MatchType, Source
+from app.llm import prompt as shared
+from app.llm.prompt import EventRef, RelationRef
 from app.services import material_consistency
-from app.services.answer_service import (_TARGET_NOTE_BY_SOURCE, _UNLINKED_EVIDENCE,
-                                         _match_type_note, _neutralize_delimiters,
-                                         _select_propagation)
 from app.tools.dto import EventDTO, PropagationDTO, RelationDTO
+
+
+# ── 도구 DTO → 공용 참조 타입 ─────────────────────────────────
+# ★공용 모듈은 **자기가 쓰는 필드만** 받는다. 덕 타이핑으로 두 모양을 동시에
+#   받게 하면 어느 쪽이 왔는지 모르는 채로 필드를 더듬게 된다.
+
+def _relation_refs(relations: Sequence[RelationDTO]) -> list[RelationRef]:
+    return [RelationRef(evidence_id=r.evidence_id, edge_id=r.edge_id,
+                        source_key=r.source_key, source_name=r.source,
+                        target_key=r.target_key, target_name=r.target)
+            for r in relations]
+
+
+def _event_refs(events: Sequence[EventDTO]) -> list[EventRef]:
+    return [EventRef(event_id=e.event_id, event_type=e.event_type,
+                     evidence_ids=e.evidence_ids) for e in events]
 
 
 # ══════════════════════════════════════════════════════════════════
 #  [사실]
 # ══════════════════════════════════════════════════════════════════
-
-
-def _membership(key: Optional[str], name: str, workspace_keys: set[str]) -> str:
-    """★「이 기업이 사용자의 워크스페이스 안인가」 — 설계서 §12.
-
-    ★`key` 가 없으면 **표기하지 않는다.** 이름만 있고 노드가 없는 대상을
-      「바깥」이라고 적으면 모르는 것을 아는 척하는 것이 된다.
-    """
-    if not workspace_keys or not key:
-        return name
-    return f"{name}={'워크스페이스' if key in workspace_keys else '바깥'}"
 
 
 def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
@@ -95,9 +99,9 @@ def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
         # ★방향에 **뜻이 있는지**를 적는다. PARTNERS_WITH·COMPETES_WITH 는 Neo4j 가
         #   무방향을 저장 못 해 키 순서로 고정한 인공 방향인데, 화살표만 찍으면
         #   LLM 이 없는 방향을 만든다.
-        ends = (f"{_membership(relation.source_key, relation.source, workspace_keys)} "
+        ends = (f"{shared.membership(relation.source_key, relation.source, workspace_keys)} "
                 f"--{relation.edge_type}({relation.subtype or '-'})--> "
-                f"{_membership(relation.target_key, relation.target, workspace_keys)}")
+                f"{shared.membership(relation.target_key, relation.target, workspace_keys)}")
         # ★`score` 대신 `effective_confidence` 를 준다 — 내부 랭킹 점수를 그대로
         #   주지 않는다(dto.py). corroboration 보정·벌점이 섞인 값이라 「이 사실이
         #   얼마나 확실한가」로 읽히면 안 된다.
@@ -113,9 +117,9 @@ def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
 
     # ★파급은 **프롬프트를 먹는다.** 사건별로 공평하게 나눠 담고, 뺀 몫을 적는다 —
     #   조용히 자르면 「그게 전부」로 읽힌다.
-    kept, dropped = _select_propagation(list(propagation))
+    kept, dropped = shared.select_propagation(list(propagation))
     for prop in kept:
-        target = _membership(prop.key, prop.target, workspace_keys)
+        target = shared.membership(prop.key, prop.target, workspace_keys)
         lines.append(f"파급: {target} ({prop.hops}홉, {prop.stated_note}, "
                      f"경로: {' → '.join(prop.path)})")
     if dropped:
@@ -124,7 +128,7 @@ def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
                      f"{detail}. 없는 것이 아닙니다)")
 
     body = "\n".join(lines) if lines else "(찾은 사실 없음)"
-    return f"{_match_type_note(match_type)}\n{body}"
+    return f"{shared.match_type_note(match_type)}\n{body}"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -135,46 +139,16 @@ def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
 def evidence_about(relations: Sequence[RelationDTO], events: Sequence[EventDTO],
                    evidence: Sequence[Evidence],
                    workspace_keys: set[str]) -> dict[str, str]:
-    """근거 id → **이 근거가 `[사실]` 의 어느 줄에서 왔는가.**
-
-    ★**증명할 수 있는 것만 적는다.** 관계 근거는 양끝 기업까지, 사건 근거는
-      사건 id 까지, 어느 줄도 참조하지 않으면 `미연결`.
-    """
-    about: dict[str, list[str]] = {}
-    for relation in relations:
-        if not relation.evidence_id:
-            continue
-        about.setdefault(relation.evidence_id, []).extend([
-            _membership(relation.source_key, relation.source, workspace_keys),
-            _membership(relation.target_key, relation.target, workspace_keys)])
-    for event in events:
-        for evidence_id in event.evidence_ids:
-            about.setdefault(evidence_id, []).append(f"사건 {event.event_id}")
-
-    out: dict[str, str] = {}
-    for item in evidence:
-        marks = about.get(item.evidence_id) or []
-        out[item.evidence_id] = (" · ".join(dict.fromkeys(marks)) if marks
-                                 else _UNLINKED_EVIDENCE)
-    return out
+    """근거 귀속 — **공용 모듈이 한다**(`app/llm/prompt.py`). 여기서는 도구 DTO 를
+    공용 참조 타입으로 옮겨 넘기기만 한다."""
+    return shared.evidence_about(_relation_refs(relations), _event_refs(events),
+                                 evidence, workspace_keys)
 
 
 def evidence_block(evidence: Sequence[Evidence], about: dict[str, str]) -> str:
-    blocks = []
-    for item in evidence:
-        if item.missing:
-            continue
-        # ★신뢰 안 된 텍스트라 델리미터 중화를 거친다 — 속성값에 `"` 가 섞이면
-        #   태그가 깨지므로 따옴표도 함께 없앤다.
-        press = _neutralize_delimiters(item.press or "").replace('"', "'")
-        marks = _neutralize_delimiters(
-            about.get(item.evidence_id, _UNLINKED_EVIDENCE)).replace('"', "'")
-        blocks.append(
-            f'<evidence id="{item.evidence_id}" source_type="{item.source_type}" '
-            f'press="{press}" about="{marks}" '
-            f'published_at="{item.published_at or ""}">\n'
-            f'{_neutralize_delimiters(item.text)}\n</evidence>')
-    return "\n".join(blocks) if blocks else "(인용 가능한 근거 없음)"
+    """`<evidence>` 블록 — **공용 모듈이 한다.** 델리미터 중화가 여기 있었는데,
+    보안에 직접 걸리는 규칙을 두 벌로 두면 한쪽만 고쳐진다."""
+    return shared.evidence_block(evidence, about)
 
 
 def build_user_prompt(question: str, *, match_type: MatchType, companies,
@@ -188,16 +162,9 @@ def build_user_prompt(question: str, *, match_type: MatchType, companies,
                        relations=relations, propagation=propagation,
                        evidence=evidence, workspace_keys=workspace_keys,
                        workspace_names=workspace_names)
-    note = _TARGET_NOTE_BY_SOURCE[anchor_source]
-    if note:
-        # 「검색 방식」 바로 뒤에 둔다 — 규칙 7·13이 둘 다 [사실] 앞머리를
-        # 위치로 참조한다.
-        head, _, rest = facts.partition("\n")
-        facts = f"{head}\n{note}\n{rest}" if rest else f"{head}\n{note}"
+    facts = shared.with_target_note(facts, anchor_source)
     about = evidence_about(relations, events, evidence, workspace_keys)
-    return (f"질문: {question}\n\n"
-            f"[사실]\n{facts}\n\n"
-            f"[근거]\n{evidence_block(evidence, about)}")
+    return shared.assemble(question, facts, evidence, about)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -205,37 +172,19 @@ def build_user_prompt(question: str, *, match_type: MatchType, companies,
 # ══════════════════════════════════════════════════════════════════
 
 
-def _source_of(item: Evidence, relations: Sequence[RelationDTO]) -> Source:
-    edge_id = next((r.edge_id for r in relations
-                    if r.evidence_id == item.evidence_id), None)
-    return Source(evidence_id=item.evidence_id, edge_id=edge_id, text=item.text,
-                  source_doc=item.source_doc, source_type=item.source_type,
-                  published_at=item.published_at)
-
-
 def sources_from(evidence_ids: Sequence[str], evidence: Sequence[Evidence],
                  relations: Sequence[RelationDTO]) -> list[Source]:
-    """LLM 이 인용한 id 를 **재료 안에서만** 찾는다 — 없는 id·`missing` 은 버린다."""
-    by_id = {e.evidence_id: e for e in evidence}
-    out: list[Source] = []
-    for eid in dict.fromkeys(evidence_ids):   # 순서를 지키며 중복 제거
-        item = by_id.get(eid)
-        if item is None or item.missing:
-            continue
-        out.append(_source_of(item, relations))
-    return out
+    """화이트리스트 검증 — **공용 모듈이 한다.** 인용 가능한 id 를 정하는 자리라
+    두 벌로 두면 한쪽만 느슨해져도 아무도 모른다."""
+    return shared.sources_from(evidence_ids, evidence, _relation_refs(relations))
 
 
 def fallback_sources(evidence: Sequence[Evidence],
                      relations: Sequence[RelationDTO]) -> list[Source]:
-    """LLM 호출이 실패했을 때 — 필터링 근거가 없으니 `missing` 만 뺀 원본 전부."""
-    return [_source_of(e, relations) for e in evidence if not e.missing]
+    """LLM 호출이 실패했을 때 — `missing` 만 뺀 원본 전부."""
+    return shared.fallback_sources(evidence, _relation_refs(relations))
 
 
 def event_types_by_evidence(events: Sequence[EventDTO]) -> dict[str, frozenset[str]]:
-    """근거 id → 그 근거가 달린 **사건들의 event_type**. 연결성 판정의 재료다."""
-    out: dict[str, set[str]] = {}
-    for event in events:
-        for evidence_id in event.evidence_ids:
-            out.setdefault(evidence_id, set()).add(event.event_type)
-    return {k: frozenset(v) for k, v in out.items()}
+    """근거 id → 그 근거가 달린 사건들의 event_type. 연결성 판정의 재료다."""
+    return shared.event_types_by_evidence(_event_refs(events))
