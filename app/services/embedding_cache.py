@@ -64,6 +64,7 @@ import hashlib
 import os
 from typing import Callable, Optional, Sequence
 
+from app.core import observe
 from app.core.config import EMBEDDING_MODEL
 from app.core.trace import trace_logger
 
@@ -181,6 +182,8 @@ def embed_with_cache(texts: list[str], real: Embed,
                          for t, v in zip(missing, fresh)])
                 for t, v in zip(missing, fresh):
                     found[_key(t)] = [float(x) for x in v]
+            observe.record_embed(texts=len(wanted),
+                                 hits=len(wanted) - len(missing), misses=len(missing))
             log.info("embed.cache model=%s wanted=%d hit=%d miss=%d",
                      model, len(wanted), len(wanted) - len(missing), len(missing))
             return [found[_key(t)] for t in texts]
@@ -193,6 +196,9 @@ def embed_with_cache(texts: list[str], real: Embed,
             # 「캐시를 물렸다」고 믿는 채로 흔들린 값을 재게 된다.
             raise EmbeddingCacheMiss(
                 f"캐시를 쓸 수 없다 — {STRICT_ENV} 가 켜져 있어 멈춘다 ({exc!r})") from exc
+        # ★폴백도 **호출로 센다.** 안 세면 관측이 「임베딩을 안 썼다」로 보이는데
+        #   실제로는 캐시 없이 전건을 계산한, 가장 흔들린 실행이다.
+        observe.record_embed(texts=len(texts), hits=0, misses=len(texts))
         log.warning("embed.cache 사용 불가 — 직접 계산으로 넘어간다. "
                     "★이 실행의 임베딩은 **고정이 아니다** (%r)", exc)
         return [list(v) for v in real(texts)]

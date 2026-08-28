@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from app.api.schemas import AskResponse
+from app.core import observe
 from app.core.trace import trace_logger
 from app.graph.state import AskState
 from app.llm.adapter import LLMAdapter, LangChainAdapter
@@ -100,6 +101,15 @@ def verify_sources(state: AskState) -> AskState:
     sources = (prompt.fallback_sources(evidence, relations) if failed
                else prompt.sources_from(cited, evidence, relations))
     accepted = [source.evidence_id for source in sources]
+
+    # ★**최종 인용 관계의 링** — 도구가 본 분포와 다를 수 있고, 그 차이가
+    #   「링 순서가 답변까지 살아갔나」다. 근거 id 를 관계로 되짚어 링을 센다.
+    #   ★사건·뉴스 근거에는 링이 없다 — Ring 0 으로 뭉뚱그리지 않는다.
+    by_evidence = {r.evidence_id: r.edge_id for r in relations if r.evidence_id}
+    accepted_set = set(accepted)
+    cited_edges = [by_evidence[eid] for eid in accepted_set if eid in by_evidence]
+    observe.record_cited_relations(
+        cited_edges, without_ring=len(accepted_set) - len(cited_edges))
 
     # ★「최종 근거가 어디서 만들어졌는가」에 답하는 줄이다. `dropped` 는 LLM 이
     #   들었지만 화이트리스트가 버린 id — 지어낸 것이거나 원문을 못 찾은 것이다.

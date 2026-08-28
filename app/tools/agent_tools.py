@@ -45,6 +45,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Optional, Sequence
 
+from app.core import observe
 from app.core.trace import trace_logger
 from app.tools import company_tools, graph_tools, scope, search_tools
 from app.tools.errors import ToolError
@@ -86,16 +87,23 @@ def _dump(items: Sequence[Any]) -> str:
 
 
 def _guard(tool: str, fn, *args, **kwargs) -> str:
-    """도구 하나를 부르고 **결과를 두 갈래로** 내보낸다. 실패는 문자열로."""
+    """도구 하나를 부르고 **결과를 두 갈래로** 내보낸다. 실패는 문자열로.
+
+    ★관측도 여기서 한다 — 7종이 **전부 이 깔때기를 지나므로** 도구마다 세는
+      코드를 붙이면 한 곳만 빠뜨려도 「그 도구는 안 불렸다」로 읽힌다.
+      `observe` 는 버킷이 안 열려 있으면 no-op 이라 운영 경로에 비용이 없다.
+    """
     try:
         got = fn(*args, **kwargs)
     except ToolError as exc:
         # ★Agent 가 읽고 고칠 수 있게 문자열로. 재료로는 새지 않는다
+        observe.record_tool_error(tool)
         log.info("agent_tool.%s 거부 — %s", tool, exc)
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
     items = [got] if (got is not None and not isinstance(got, list)) else (got or [])
     _record(tool, items)
+    observe.record_tool(tool, len(items))
     log.info("agent_tool.%s -> %d", tool, len(items))
     return _dump(items)
 

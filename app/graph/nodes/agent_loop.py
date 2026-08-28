@@ -32,6 +32,7 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from app.api.schemas import Evidence
+from app.core import observe
 from app.core.trace import trace_logger
 from app.graph import budget
 from app.graph.state import AskState
@@ -144,6 +145,9 @@ def should_continue(state: AskState) -> str:
       덜 불렀어도 **있는 재료로 답하게** 하는 것이 옳다(계약 4).
     """
     if budget.is_exhausted(state):
+        # ★관측 — **루프가 잘린 것**과 「끝난 뒤 파급 예산이 찼다」를 가른다.
+        #   State 의 `budget_exhausted` 만 보면 둘이 같은 값으로 보인다.
+        observe.record_agent_stopped_by_budget()
         log.info("agent.stop 예산 소진 — 남은 재료로 마감한다")
         return "evidence_validation"
     messages = state.get("messages") or []
@@ -182,6 +186,8 @@ def run_tools(state: AskState) -> AskState:
     tool_results = {**(state.get("tool_results") or {}), **merged}
 
     spent = budget.spend(state, tool_calls_used=len(calls), events_used=events)
+    # ★관측 — 예산이 세는 것과 **같은 값**을 센다. 따로 세면 두 벌이 갈린다.
+    observe.record_tool_calls(len(calls))
     log.info("run_tools calls=%d collected=%s", len(calls),
              {k: len(v) for k, v in collected.items()})
     return {"messages": list(out.get("messages") or []),

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
+from app.core import observe
 from app.core.trace import trace_logger
 from app.services import (company_service, evidence_selector, relation_selector,
                           relation_service)
@@ -186,6 +187,9 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                    anchor_keys=set(ctx.anchor_keys))]
     limit = _MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)   # ③ 인자가 아니다
     kept, cut = ordered[:limit], ordered[limit:]
+    # ★관측만 한다 — **자르는 규칙도 순서도 건드리지 않는다.** 이 줄을 지워도
+    #   `kept` 는 한 건도 안 바뀐다. Phase 8 은 ranking 을 고정한 채 재는 단계다.
+    observe.record_rings(by_ring, kept, len(cut))
     log.info("tools.relations rings %s -> kept=%d cut=%d matched=%s direction=%s",
              {ring: len(rows) for ring, rows in sorted(by_ring.items())},
              len(kept), len(cut), sorted(matched), direction)

@@ -1,0 +1,228 @@
+"""관측 — **재기만 한다. 아무 동작도 바꾸지 않는다.**
+
+Phase 8 의 완료 기준은 「Agent 가 답을 더 잘 쓰나」가 아니라 **「Agent 가 무엇을
+얼마나 썼나」**다. 그걸 재려면 한 질문이 그래프를 지나는 동안 흩어져 일어나는
+일들을 한 자리에 모아야 한다:
+
+    도구        몇 번 불렀나 · 어느 도구를 · 거부당한 것은 몇 건인가
+    임베딩      몇 번 계산했나 · 캐시가 몇 건 맞고 몇 건 빗나갔나
+    링(ring)    도구가 본 관계의 링 분포 · 상한에 남은 것과 잘린 것
+    인용        **최종 답변이 인용한 관계**의 링 분포
+
+★**이 모듈은 정책이 아니다.** 값을 읽어 무엇을 자르거나 순서를 바꾸지 않는다.
+  Phase 8 은 ranking 을 **고정한 채로** Agent 의 효과와 비용을 재는 단계이고,
+  링 랭킹을 바꿀지는 이 관측 결과를 보고 나서 정한다. 그래서 여기에 임계값이
+  없다 — 있으면 재는 도구가 아니라 판정기가 된다.
+
+★**버킷이 안 열려 있으면 전부 no-op 이다.** 운영 `/ask` 는 버킷을 열지 않는다.
+  `agent_tools._COLLECTED` 와 같은 규약이다 — 관측을 켜는 것은 **부르는 쪽**의
+  일이고, 재는 코드가 스스로 켜지 않는다. 그래서 운영 경로에 비용이 없다.
+
+★**`log.info` 는 버킷과 무관하게 남긴다.** 버킷은 평가셋이 구조화된 값을 읽는
+  통로이고, 로그는 운영에서 같은 사실을 되짚는 통로다. 둘 중 하나만 두면
+  「평가에서는 보이는데 운영에서는 안 보이는」 값이 생긴다.
+
+사용:
+
+    with observe.observing() as seen:
+        response = run_ask(request)
+    seen.tool_calls, seen.tools_used, seen.cited_rings   # ...
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Iterator, Mapping, Optional, Sequence
+
+from app.core.trace import trace_logger
+
+log = trace_logger(__name__)
+
+
+@dataclass
+class Observation:
+    """한 질문이 그래프를 지나며 남긴 관측치. **여기 있는 값은 전부 사후다** —
+    어느 노드도 이 값을 읽고 행동을 바꾸지 않는다."""
+
+    # ── 도구 ──────────────────────────────────────────────────
+    # Agent 가 **요청한** 호출 수(누적). 예산이 세는 것과 같은 값이다.
+    tool_calls: int = 0
+    # 실제로 결과를 낸 도구별 호출 수. `{도구이름: 횟수}`
+    tools_used: Counter = field(default_factory=Counter)
+    # 도구별 결과 건수 합. 「불렀는데 0건」과 「안 불렀다」를 가른다.
+    tool_items: Counter = field(default_factory=Counter)
+    # 범위 밖 key 등으로 **거부된** 호출. ★재료를 늘리지 않은 호출이다.
+    tool_errors: Counter = field(default_factory=Counter)
+
+    # ── 임베딩 ────────────────────────────────────────────────
+    # `embed_with_cache` 진입 횟수. 텍스트 수가 아니라 **호출 수**다.
+    embed_calls: int = 0
+    embed_texts: int = 0
+    embed_cache_hits: int = 0
+    # ★빗나감은 「실제로 계산했다」는 뜻이다 — 그 실행은 값이 흔들릴 수 있다
+    #   (현황서 §8-13). `EMBED_CACHE_STRICT=1` 이면 여기 오기 전에 멈춘다.
+    embed_cache_misses: int = 0
+
+    # ── 예산 ──────────────────────────────────────────────────
+    # ★**Agent 루프가 예산 때문에 잘렸는가.** State 의 `budget_exhausted` 와
+    #   같은 말이 아니다 — 저건 `fetch_propagation` 이 루프 **뒤에** 파급 예산을
+    #   채워도 켜진다. 둘을 섞으면 「상한을 올려야 하나」의 답이 갈린다:
+    #   루프가 잘렸으면 도구 예산 얘기고, 뒤에서 찬 것이면 파급 예산 얘기다.
+    agent_stopped_by_budget: bool = False
+
+    # ── 링(ring) ──────────────────────────────────────────────
+    # 도구가 **본** 관계의 링 분포. 자르기 전이다.
+    ring_seen: Counter = field(default_factory=Counter)
+    # 상한 안에 **남은** 것의 링 분포.
+    ring_kept: Counter = field(default_factory=Counter)
+    relations_kept: int = 0
+    relations_cut: int = 0
+    # edge_id → ring. ★인용된 관계의 링을 되짚으려고 둔다.
+    ring_by_edge: dict[str, int] = field(default_factory=dict)
+
+    # ── 인용 ──────────────────────────────────────────────────
+    # **최종 답변이 인용한** 관계의 링 분포. 도구가 본 분포와 다를 수 있고,
+    # 그 차이가 「링 순서가 답변까지 살아갔나」다.
+    cited_rings: Counter = field(default_factory=Counter)
+    # 인용됐지만 관계로 되짚지 못한 근거 — 사건·뉴스 근거는 링이 없다.
+    cited_without_ring: int = 0
+
+    def summary(self) -> dict:
+        """보고서·로그가 읽는 납작한 dict. **정렬을 여기서 못 박는다** —
+        Counter 를 그대로 내보내면 순서가 실행마다 달라져 문서 diff 가 커진다."""
+        return {
+            "tool_calls": self.tool_calls,
+            "tools_used": dict(sorted(self.tools_used.items())),
+            "tool_items": dict(sorted(self.tool_items.items())),
+            "tool_errors": dict(sorted(self.tool_errors.items())),
+            "embed_calls": self.embed_calls,
+            "embed_texts": self.embed_texts,
+            "embed_cache_hits": self.embed_cache_hits,
+            "embed_cache_misses": self.embed_cache_misses,
+            "agent_stopped_by_budget": self.agent_stopped_by_budget,
+            "ring_seen": dict(sorted(self.ring_seen.items())),
+            "ring_kept": dict(sorted(self.ring_kept.items())),
+            "relations_kept": self.relations_kept,
+            "relations_cut": self.relations_cut,
+            "cited_rings": dict(sorted(self.cited_rings.items())),
+            "cited_without_ring": self.cited_without_ring,
+        }
+
+
+_BUCKET: ContextVar[Optional[Observation]] = ContextVar("observation", default=None)
+
+
+@contextmanager
+def observing() -> Iterator[Observation]:
+    """이 블록 안에서 일어난 관측을 모은다.
+
+    ★**요청 하나를 통째로 감싸는 자리에서 연다.** 노드 안에서 열면 LangGraph 가
+      노드마다 컨텍스트를 복사하므로 다음 노드의 관측이 안 들어온다
+      (`agent_tools.collecting()` 이 State 로 옮겨 담아야 했던 것과 같은 이유).
+      여기는 `run_ask()` **바깥**에서 열리므로 그 문제가 없다 — 복사본이 같은
+      객체를 물고 들어가고, 우리는 객체를 **변이**시킨다.
+    """
+    seen = Observation()
+    token = _BUCKET.set(seen)
+    try:
+        yield seen
+    finally:
+        _BUCKET.reset(token)
+
+
+def current() -> Optional[Observation]:
+    """열려 있으면 버킷, 아니면 `None`. **부르는 쪽이 None 을 견뎌야 한다.**"""
+    return _BUCKET.get()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  기록 — 전부 「열려 있으면 담고, 아니면 조용히 넘어간다」
+# ══════════════════════════════════════════════════════════════════
+
+
+def record_tool_calls(count: int) -> None:
+    """Agent 가 이번 턴에 **요청한** 도구 호출 수."""
+    seen = _BUCKET.get()
+    if seen is not None:
+        seen.tool_calls += count
+
+
+def record_agent_stopped_by_budget() -> None:
+    """★Agent 루프가 **예산 때문에** 마감으로 전이했다. 도구를 더 부르려 했는데
+    못 부른 것이라, 재료가 적은 이유가 「Agent 가 충분하다고 판단해서」가 아니다."""
+    seen = _BUCKET.get()
+    if seen is not None:
+        seen.agent_stopped_by_budget = True
+
+
+def record_tool(tool: str, items: int) -> None:
+    """도구 하나가 결과를 냈다. `items` 는 돌려준 건수다."""
+    seen = _BUCKET.get()
+    if seen is not None:
+        seen.tools_used[tool] += 1
+        seen.tool_items[tool] += items
+
+
+def record_tool_error(tool: str) -> None:
+    """도구가 거부했다 — 범위 밖 key 등. **재료를 늘리지 않은 호출이다.**"""
+    seen = _BUCKET.get()
+    if seen is not None:
+        seen.tool_errors[tool] += 1
+
+
+def record_embed(*, texts: int, hits: int, misses: int) -> None:
+    """임베딩 한 번. `misses` 가 0 이 아니면 그 실행은 **계산을 했다**."""
+    seen = _BUCKET.get()
+    if seen is not None:
+        seen.embed_calls += 1
+        seen.embed_texts += texts
+        seen.embed_cache_hits += hits
+        seen.embed_cache_misses += misses
+
+
+def record_rings(by_ring: Mapping[int, Sequence], kept: Sequence,
+                 cut_count: int) -> None:
+    """관계를 링으로 갈라 본 결과. **자르기 전 분포와 남은 것을 함께** 담는다.
+
+    ★`kept` 는 원시 row 리스트다(`_relation_dto` 로 만들기 전). `edge_id` 와
+      링을 짝지어 둬야 나중에 **인용된 관계의 링**을 되짚을 수 있다.
+    """
+    seen = _BUCKET.get()
+    if seen is None:
+        return
+    for ring, rows in by_ring.items():
+        seen.ring_seen[ring] += len(rows)
+        for row in rows:
+            edge_id = row.get("edge_id")
+            if edge_id:
+                seen.ring_by_edge[str(edge_id)] = ring
+    for row in kept:
+        edge_id = row.get("edge_id")
+        ring = seen.ring_by_edge.get(str(edge_id)) if edge_id else None
+        if ring is not None:
+            seen.ring_kept[ring] += 1
+    seen.relations_kept += len(kept)
+    seen.relations_cut += cut_count
+
+
+def record_cited_relations(edge_ids: Sequence[Optional[str]],
+                           without_ring: int = 0) -> None:
+    """최종 답변이 인용한 관계의 링을 센다.
+
+    ★링을 못 찾은 것은 **0 으로 세지 않는다.** 사건·뉴스 근거에는 링이 없고,
+      그걸 Ring 0 으로 뭉뚱그리면 「워크스페이스 안쪽이 인용됐다」는 거짓 신호가
+      된다. 따로 `cited_without_ring` 에 담는다.
+    """
+    seen = _BUCKET.get()
+    if seen is None:
+        return
+    for edge_id in edge_ids:
+        ring = seen.ring_by_edge.get(str(edge_id)) if edge_id else None
+        if ring is None:
+            seen.cited_without_ring += 1
+        else:
+            seen.cited_rings[ring] += 1
+    seen.cited_without_ring += without_ring
