@@ -201,6 +201,26 @@ def _with_anchor_backstop(companies: list[RelationEndpoint],
     return kept
 
 
+def has_starting_point(request: AskRequest) -> bool:
+    """재료를 모을 **출발점**이 있나 — 담은 것이든 보고 있는 것이든 (설계서 §16-2).
+
+    ★**한 벌만 둔다.** 그래프(`material.has_workspace`)와 대조 기준선
+      (`AnswerService.ask`)이 같은 판정을 해야 하는데, 두 곳에 적으면 반드시
+      갈린다 — 갈리면 `/ask` 두 입구가 같은 요청을 다르게 거절한다.
+
+    ★**빈 key 는 안 센다.** `scope.anchor_scope()` 가 `frozenset(k for k in keys
+      if k)` 로 거르는 것과 같은 규약이다. `[""]` 는 길이가 1 이라 그냥 `bool()`
+      로 보면 게이트가 열리는데, 그 뒤 `names_of([""])` 는 아무것도 못 찾아
+      **출발점이 없는 채로 검색까지 간다** — 거절이 아니라 빈 답이 나가는 길이다.
+
+    ★**`question` 은 출발점이 아니다.** 「근거 검색으로 관련 기업을 찾는」
+      discovered 경로가 붙으면 그때 이 판정이 검색 **뒤로** 옮겨져야 한다 —
+      찾았는지는 검색을 해 봐야 알기 때문이다. 지금은 요청에 실려 오는 값만
+      보므로 검색 앞에 있어도 순환이 없다.
+    """
+    return any(k for k in (*request.workspace_keys, *request.context_keys))
+
+
 def _hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
     """검색 히트를 재료로 믿어도 되나.
 
@@ -248,9 +268,15 @@ class RetrieveService:
 
         # ★이름 조회는 **경계에서 한 번**이다(설계서 §16-3). ①b 는 이 결과를
         #   메모리에서 대조만 한다 — 「새 검색을 하지 않는다」(§10 ①b).
+        # ★`context_keys` 도 같은 함수로 붙인다. **그래프 경로와 같아야 한다** —
+        #   `material.resolve_anchor` 와 이 메서드가 갈리면 `/ask` 와 `/retrieve`
+        #   가 같은 요청에 다른 앵커를 낸다(계약 6 parity).
         workspace_names = workspace_service.names_of(request.workspace_keys)
+        context_names = (workspace_service.names_of(request.context_keys)
+                         if request.context_keys else {})
         decision = query_understanding.decide_anchor(
-            request.question, query.resolved_entities, workspace_names)
+            request.question, query.resolved_entities, workspace_names,
+            context_names)
         return query, result, decision
 
     def retrieve(self, request: AskRequest) -> RetrieveResponse:

@@ -231,7 +231,7 @@ def wired(monkeypatch, query, result, event, relation, evidence, decision, fake_
     monkeypatch.setattr(material.workspace_service, "names_of",
                         lambda keys: dict(decision.workspace_names))
     monkeypatch.setattr(material.query_understanding, "decide_anchor",
-                        lambda question, resolved, names: decision)
+                        lambda question, resolved, names, context=None: decision)
     for name in ("get_events", "get_relations", "get_propagation"):
         monkeypatch.setattr(material.graph_tools, name, getattr(tools, name))
     monkeypatch.setattr(material.relation_service, "evidence_for_ids",

@@ -898,6 +898,16 @@ class AnchorSource(str, Enum):
 
     # 질문이 대상을 지정했고 그 대상이 해소됐다.
     QUERY = "query"
+    # ★질문이 대상을 지정하지 않았지만 **사용자가 지금 보고 있는 기업**이 있다.
+    #
+    #   ★`workspace` 와 **뭉개지 않는다.** 「담아 둔 것」과 「보고 있는 것」은
+    #     사용자가 한 일이 다르다 — 기업 상세 페이지에서 「이 회사 노조 리스크
+    #     어때?」라고 물으면 답은 **그 회사**이지 담아 둔 기업이 아니다. 한 값으로
+    #     묶으면 「질문이 대상을 지정하지 않아 워크스페이스 기업들을 대상으로
+    #     삼았습니다」라는 문구가 사실이 아닌 채로 나간다 —
+    #     `prompt.with_target_note()` 가 「판정이 없는데 형태를 지시하면 그게 곧
+    #     거짓말이다」라고 못 박은 그 자리다.
+    CONTEXT = "context"
     # 질문이 대상을 지정하지 않아 **워크스페이스 기업**을 대상 문맥으로 삼았다.
     WORKSPACE = "workspace"
     # ★질문이 대상을 지정했는데 **못 찾았다.** 워크스페이스로 갈아타지 않는다 —
@@ -924,8 +934,10 @@ class Anchor(BaseModel):
         examples=["00164779"])
     name: str = Field(description="표시·해석용. **식별 기준이 아니다**",
                       examples=["SK하이닉스"])
-    source: Literal[AnchorSource.QUERY, AnchorSource.WORKSPACE] = Field(
+    source: Literal[AnchorSource.QUERY, AnchorSource.CONTEXT,
+                    AnchorSource.WORKSPACE] = Field(
         description="`query` — 질문이 지정한 대상. "
+                    "`context` — 사용자가 지금 보고 있는 기업. "
                     "`workspace` — 워크스페이스 기업을 대상 문맥으로 삼았다")
 
 
@@ -992,6 +1004,7 @@ class AskResponse(BaseModel):
     anchor_source: Optional[AnchorSource] = Field(
         None,
         description="이 답이 **무엇을 대상으로** 쓰였나 — `query`(질문이 지정한 대상) / "
+                    "`context`(사용자가 지금 보고 있는 기업) / "
                     "`workspace`(워크스페이스 기업을 대상 문맥으로 해석) / "
                     "`unresolved`(대상을 못 찾음). **`match_type` 과 별개 축이다.** "
                     "판정기가 붙기 전에는 `null` 이다")
@@ -1105,6 +1118,26 @@ class AskRequest(BaseModel):
                     "나오고 순서만 달라진다(설계서 §3). `corp_code` 가 없는 기업은 "
                     "`norm_name` 으로 온다(설계서 §16-1)",
         examples=[["00126380", "00164779"]])
+    # ★**「담은 것」이 아니라 「보고 있는 것」이다.** 기업 상세·검색 결과 화면에서
+    #   묻는 질문은 대상을 문장에 안 쓴다 — 「이 회사 노조 리스크 어때?」의 「이
+    #   회사」는 화면이 알고 문장은 모른다. 그 값을 여기로 받는다.
+    #
+    # ★`workspace_keys` 와 **갈라 받는 이유**는 둘이 답변에서 하는 일이 다르기
+    #   때문이다. 담은 것은 「그래서 내 기업에 무슨 뜻인가」로 답을 좁히는
+    #   랭킹 문맥이고, 보고 있는 것은 **대상 그 자체**다. 한 필드로 받으면
+    #   `anchor_source` 가 둘을 못 가르고, 프롬프트도 못 가른다.
+    #
+    # ★**랭킹 문맥으로는 쓰지 않는다**(지금은). 검색 계층에 넘기지 않으므로
+    #   `_ring_of`·`workspace_priority` 의 뜻이 안 바뀐다 — 앵커 판정에만 쓴다.
+    #   넓힐지는 실측 뒤에 정할 일이다.
+    context_keys: list[str] = Field(
+        default_factory=list,
+        description="사용자가 **지금 보고 있는** 기업의 `corp_code` 배열 — 기업 상세 "
+                    "페이지·검색 결과에서 물을 때 화면이 넘긴다. `workspace_keys` 와 "
+                    "**별개 축이다**: 질문이 대상을 지정하지 않았을 때 이쪽이 "
+                    "**워크스페이스보다 먼저** 대상이 된다(`anchor_source=context`). "
+                    "`corp_code` 가 없는 기업은 `norm_name` 으로 온다(설계서 §16-1)",
+        examples=[["00164742"]])
 
     @field_validator("question")
     @classmethod

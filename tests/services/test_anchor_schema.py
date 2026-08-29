@@ -15,11 +15,25 @@ from app.api.schemas import (Anchor, AnchorSource, AskResponse, MatchType,
                              RelationEndpoint, RetrieveResponse)
 
 
-# ── AnchorSource — 설계서 §14-3 의 세 값 ────────────────────────────────
-def test_anchor_source_has_exactly_three_values():
+# ── AnchorSource — 설계서 §14-3 의 세 값 + `context` ────────────────────
+def test_anchor_source_has_exactly_four_values():
     """★값이 늘면 답변 형태 분기(§14-6)와 `unresolved` 처리(§14-4)가 함께
-    바뀌어야 한다 — 조용히 늘어나지 않게 못 박는다."""
-    assert {s.value for s in AnchorSource} == {"query", "workspace", "unresolved"}
+    바뀌어야 한다 — 조용히 늘어나지 않게 못 박는다.
+
+    ★**`context` 가 늘어난 것은 2026-08-29 이고, 이 테스트가 그것을 잡았다.**
+      함께 바뀐 자리를 여기 적어 둔다 — 다음에 값이 늘 때 무엇을 따라 고쳐야
+      하는지가 이 목록이다:
+
+          Anchor.source              Literal 에 추가 (안 하면 pydantic 이 막는다)
+          TARGET_NOTE_BY_SOURCE      표기 문구 (전수 분기 dict — 빠뜨리면 KeyError)
+          _SYSTEM_PROMPT             그 대상일 때의 지시. ★[워크스페이스] 절의
+                                     범위와 최종검증 12번을 함께 좁혀야 한다
+          decide_anchor()            판정 분기와 **순서**
+          _has_starting_point()      게이트가 그 출발점을 통과시키나
+          halt_no_material()         문구 분기
+    """
+    assert {s.value for s in AnchorSource} == {
+        "query", "context", "workspace", "unresolved"}
 
 
 # ── Anchor — 재료 앵커 한 건 ─────────────────────────────────────────────

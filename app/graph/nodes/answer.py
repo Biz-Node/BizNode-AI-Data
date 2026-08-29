@@ -56,7 +56,8 @@ def build_prompt(state: AskState) -> AskState:
         match_type=state["match_type"], companies=state["companies"],
         events=state["events"], relations=state["relations"],
         propagation=state["propagation"], evidence=state["evidence"],
-        anchor_source=decision.source, workspace_names=decision.workspace_names)
+        anchor_source=decision.source, workspace_names=decision.workspace_names,
+        context_names=decision.context_names)
 
     # ★프롬프트는 **길이만** 남긴다 — 본문에 시스템 지시문과 근거 원문이 통째로
     #   들어 있어, 그대로 찍으면 로그가 근거 사본이 된다(설계서 §13-2).
@@ -184,6 +185,11 @@ def check_claims(state: AskState) -> AskState:
 
     # ★연결성 없는 주장 — **기본은 관측만** 한다(`_STRIP_UNLINKED_CLAIMS`).
     cut = claim_check.unlinked(checked)
+    # ★**버킷에도 담는다**(2026-08-29). 여태 이 값은 아래 로그 한 줄에만 있어서,
+    #   평가셋이 「오탐률」을 재려면 사람이 로그를 긁어야 했다. 플래그를 켤지는
+    #   오탐률을 보고 정하는데, 그 통로가 없으면 정할 수가 없다.
+    #   ★관측일 뿐이다 — 여기서 아무것도 안 지운다.
+    observe.record_claim_links(checked, cut)
     if cut:
         log.info("claim.unlinked count=%d strip=%s texts=%s",
                  len(cut), _STRIP_UNLINKED_CLAIMS, [c.text for c in cut])
@@ -217,8 +223,14 @@ def halt_no_material(state: AskState) -> AskState:
 
     ★들어오는 길이 둘이고 **사용자가 할 일이 다르다.** 하나는 기업을 추가해야
       하고, 하나는 다른 이름으로 물어야 한다. 어느 길로 왔는지는 State 로
-      판정한다 — 워크스페이스가 비었으면 앵커 판정 자체가 없다.
+      판정한다 — 출발점이 하나도 없으면 앵커 판정 자체가 없다.
+
+    ★**`context_keys` 도 본다.** 게이트가 `workspace_keys or context_keys` 로
+      넓어졌으므로, `workspace_keys` 만 보면 「보고 있는 기업은 있는데 이름을
+      못 찾아」 온 길에 「담긴 기업이 없다」는 엉뚱한 문구가 나간다 — 그때
+      `decision` 은 실재하고 사용자가 할 일은 다시 묻는 것이다.
     """
-    if not state["request"].workspace_keys:
+    request = state["request"]
+    if not (request.workspace_keys or request.context_keys):
         return {"response": _no_material(_NO_WORKSPACE_MESSAGE)}
     return {"response": _no_material(_unresolved_message(state["decision"]))}

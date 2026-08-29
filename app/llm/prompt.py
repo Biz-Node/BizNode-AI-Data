@@ -79,6 +79,12 @@ NOTE_BY_MATCH_TYPE: dict[MatchType, str] = {
 
 TARGET_NOTE_BY_SOURCE: dict[AnchorSource, str] = {
     AnchorSource.QUERY: "답변 대상: 질문 — 질문이 지정한 대상에 대해 답합니다.",
+    # ★워크스페이스와 **다른 문구**다. 「질문이 대상을 지정하지 않았다」까지는
+    #   같지만 그다음이 갈린다 — 여기는 대상이 **하나로 정해져 있고**, 저쪽은
+    #   담아 둔 기업들을 문맥으로 삼은 것이다. 같은 문구를 쓰면 LLM 이 보고 있는
+    #   기업을 워크스페이스 기업으로 읽는다.
+    AnchorSource.CONTEXT: ("답변 대상: 보고 있는 기업 — 질문이 대상을 지정하지 않아 "
+                           "사용자가 지금 보고 있는 기업을 대상으로 삼았습니다."),
     AnchorSource.WORKSPACE: ("답변 대상: 워크스페이스 — 질문이 대상을 지정하지 않아 "
                              "워크스페이스 기업들을 대상으로 삼았습니다."),
     # `unresolved` 는 애초에 LLM 을 부르지 않는다(설계서 §14-4).
