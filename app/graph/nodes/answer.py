@@ -108,6 +108,10 @@ def verify_sources(state: AskState) -> AskState:
     by_evidence = {r.evidence_id: r.edge_id for r in relations if r.evidence_id}
     accepted_set = set(accepted)
     cited_edges = [by_evidence[eid] for eid in accepted_set if eid in by_evidence]
+    # ★관계로 못 되짚은 것은 **개수로** 넘긴다. 배열 근거까지 훑는 2차 조회를
+    #   한 번 넣었다가 뺐다(Phase 13 → 15) — `RelationDTO.evidence_id` 가
+    #   「배열은 이 관계 하나의 출처가 아니다」로 못 박은 계약을 관측만 우회하게
+    #   되고, `Source.edge_id`(= `_edge_id_for`, 단수)와도 갈렸다.
     observe.record_cited_relations(
         cited_edges, without_ring=len(accepted_set) - len(cited_edges))
 

@@ -91,8 +91,17 @@ class Observation:
     # **최종 답변이 인용한** 관계의 링 분포. 도구가 본 분포와 다를 수 있고,
     # 그 차이가 「링 순서가 답변까지 살아갔나」다.
     cited_rings: Counter = field(default_factory=Counter)
-    # 인용됐지만 관계로 되짚지 못한 근거 — 사건·뉴스 근거는 링이 없다.
+    # 인용됐지만 **관계가 아닌** 근거 — 사건·검색히트·뉴스. **링이 없는 것이 정상이다.**
     cited_without_ring: int = 0
+    # ★**관계인데 링을 못 찾은 인용. 0 이 아니면 결함 신호다.**
+    #
+    #   위와 갈라 두는 이유 — 한 숫자에 섞여 있으면 `cited_rings {}` 를 읽을 수가
+    #   없다. 「인용이 전부 사건·뉴스 근거였다」(정상)와 「관계를 인용했는데 되짚기가
+    #   끊겼다」(결함)가 같은 값으로 보이기 때문이다.
+    #
+    #   `graph_tools` 의 `suspect_dropped` 와 **같은 관례**다 — 위쪽 규칙대로면
+    #   여기 올 수 없는 것이 오면, 조용히 넘기지 않고 세어서 남긴다.
+    cited_relation_without_ring: int = 0
 
     def summary(self) -> dict:
         """보고서·로그가 읽는 납작한 dict. **정렬을 여기서 못 박는다** —
@@ -113,6 +122,7 @@ class Observation:
             "relations_cut": self.relations_cut,
             "cited_rings": dict(sorted(self.cited_rings.items())),
             "cited_without_ring": self.cited_without_ring,
+            "cited_relation_without_ring": self.cited_relation_without_ring,
         }
 
 
@@ -246,17 +256,51 @@ def record_cited_relations(edge_ids: Sequence[Optional[str]],
                            without_ring: int = 0) -> None:
     """최종 답변이 인용한 관계의 링을 센다.
 
-    ★링을 못 찾은 것은 **0 으로 세지 않는다.** 사건·뉴스 근거에는 링이 없고,
-      그걸 Ring 0 으로 뭉뚱그리면 「워크스페이스 안쪽이 인용됐다」는 거짓 신호가
-      된다. 따로 `cited_without_ring` 에 담는다.
+    `edge_ids` 는 **관계로 되짚힌 인용**이고, `without_ring` 은 부르는 쪽이 이미
+    「관계가 아니다」로 판정한 인용 수다(`answer.verify_sources`).
+
+    ★링을 못 찾은 것은 **0 으로 세지 않는다.** Ring 0 으로 뭉뚱그리면
+      「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다.
+
+    ★**「링이 없다」를 두 통으로 가른다**(2026-08-29 · Phase 11):
+
+          cited_without_ring            관계가 아닌 근거 — **정상**
+          cited_relation_without_ring   관계인데 링을 못 찾음 — **결함 신호**
+
+      섞어 두면 `cited_rings {}` 를 읽을 수가 없다. 「인용이 전부 사건·뉴스
+      근거였다」와 「되짚기가 끊겼다」가 같은 숫자로 보이기 때문이다.
+
+    ★**`evidence_ids` 배열로 2차 조회하지 않는다** — 한 번 넣었다가 뺐다
+      (2026-08-29 · Phase 13 → 15). 이유는 계약이다:
+
+          `app/tools/dto.py` 의 `RelationDTO.evidence_id` 가 못 박는다 —
+          「`evidence_ids` 배열은 여러 근거의 합집합이라 **이 관계 하나의 출처가
+          아니다**」. 배열을 안 싣는 것은 결함이 아니라 **결정**이다.
+
+      이 저장소는 **수집은 넓게, 귀속은 좁게** 로 일관돼 있다. 수집(`graph_searcher.
+      _evidence_refs` · `relation_service._evidence`)은 배열을 포함하지만, 귀속
+      (`RelationDTO` · `prompt.about` · `prompt._edge_id_for`)은 **단수만** 본다.
+
+      관측만 배열로 되짚으면 **응답과 갈린다** — 배열 근거가 인용되면
+      `Source.edge_id` 는 `None` 인데 여기서만 링을 붙이게 된다. 이 모듈은
+      **재기만 하는 자리**이고, 재는 대상은 실제로 일어난 일이어야 한다.
+
+      그리고 `ring_by_edge` 는 자르기 **전**(`by_ring` 전체)을 담으므로, 2차 조회는
+      **잘린 관계**의 링까지 인용 분포에 넣는다 — 보고서의 「본 것 / kept / 인용」
+      세 열이 같은 모집단을 전제하는데 그것이 깨진다(kept 0 인데 인용 > 0).
     """
     seen = _BUCKET.get()
     if seen is None:
         return
     for edge_id in edge_ids:
-        ring = seen.ring_by_edge.get(str(edge_id)) if edge_id else None
+        if not edge_id:
+            # ★`edge_ids` 에 오는 것은 **전부 관계**다(부르는 쪽이 이미 갈라 놨다).
+            #   그러니 빈 값도 「관계가 아니다」가 아니라 **결함**이다.
+            seen.cited_relation_without_ring += 1
+            continue
+        ring = seen.ring_by_edge.get(str(edge_id))
         if ring is None:
-            seen.cited_without_ring += 1
+            seen.cited_relation_without_ring += 1
         else:
             seen.cited_rings[ring] += 1
     seen.cited_without_ring += without_ring
