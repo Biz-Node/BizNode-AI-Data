@@ -261,6 +261,38 @@ def build(runs: dict[str, CaseRun]) -> str:
         f"(**0 이어야 정상**).")
     add()
 
+    # ── 3-1. ★앵커별로 갈라 본다 — 안 가르면 두 모집단이 섞인다 ──────────
+    #
+    #   ★`workspace_keys` 가 비면 `_ring_of` 는 **전부 R3** 을 낸다(양끝이 둘 다
+    #     밖이다). `context_keys` 가 생기며 그런 요청이 실제로 들어올 수 있게
+    #     됐으므로(2026-08-29), 한 분포로 합치면 「R3 이 늘었다」가 **랭킹이
+    #     바뀐 것인지 워크스페이스 없는 케이스가 섞인 것인지** 구별되지 않는다.
+    #
+    #   ★평가 §10-3 에서 한 번 당한 것과 **같은 종류**다. 그때는 「호출 × 관계」로
+    #     세어 수치가 도구 선택에 흔들렸고, 이번엔 두 모집단이 한 표에 들어온다 —
+    #     둘 다 **수치 변화를 랭킹에 귀속시킬 수 없게** 만든다.
+    by_source: dict[str, Counter] = {}
+    for run in runs.values():
+        if not run.observed.ring_seen:
+            continue
+        source = run.anchor_source.value if run.anchor_source else "—"
+        by_source.setdefault(source, Counter()).update(run.observed.ring_seen)
+    if len(by_source) > 1:
+        add("### 3-1. 앵커별 링 분포 — ★합치면 안 되는 이유")
+        add()
+        add("워크스페이스가 비면 `_ring_of` 는 **전부 R3** 입니다(양끝이 둘 다 밖). "
+            "그런 케이스가 섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다.")
+        add()
+        add("| anchor_source | 케이스 | 도구가 본 관계의 링 분포 |")
+        add("|---|---:|---|")
+        for source in sorted(by_source):
+            cases = sum(1 for run in runs.values()
+                        if run.observed.ring_seen
+                        and (run.anchor_source.value if run.anchor_source
+                             else "—") == source)
+            add(f"| `{source}` | {cases} | {_rings(by_source[source])} |")
+        add()
+
     # ★읽는 사람이 표를 보고 스스로 물어야 할 것을 대신 짚어 준다. **판정이
     #   아니다** — 링 랭킹을 바꿀지는 이 수치를 보고 사람이 정한다.
     notes: list[str] = []
@@ -296,8 +328,51 @@ def build(runs: dict[str, CaseRun]) -> str:
             add(f"- {note}")
         add()
 
-    # ── 4. 케이스 ─────────────────────────────────────────────
-    add("## 4. 케이스")
+    # ── 4. 주장 연결성 — ★`_STRIP_UNLINKED_CLAIMS` 를 켤지 정하는 자리 ──
+    #
+    #   ★**이 절은 오탐률을 재라고 있는 것이지, 오탐률을 말하지 않는다.**
+    #     「연결 없음」으로 판정된 주장이 **정말로** 질문과 무관했는지는 문장을
+    #     읽어야 정해진다. 그래서 개수만이 아니라 본문을 싣는다 — 사람이 세는
+    #     것이 이 절의 용도다.
+    add("## 4. 주장 연결성 — `_STRIP_UNLINKED_CLAIMS` 를 켤 수 있나")
+    add()
+    checked_total = sum(run.observed.claims_total for run in runs.values())
+    unlinked_total = sum(run.observed.claims_unlinked for run in runs.values())
+    unknown_total = sum(run.observed.claims_link_unknown for run in runs.values())
+    add(f"주장 **{checked_total}**건 중 "
+        f"연결 없음 **{unlinked_total}** · 판정 불가 **{unknown_total}**건입니다.")
+    add()
+    add("- **연결 없음**(`intent_linked is False`) — 든 근거가 질문이 지목한 사건 "
+        "종류에서 오지 않았습니다. 플래그를 켜면 **이것들이 답변에서 지워집니다**.")
+    add("- **판정 불가**(`None`) — 질문이 사건 종류를 하나도 지목하지 않았거나 "
+        "근거의 출처를 모릅니다. ★**차단 대상이 아닙니다** — 「연결 없음」과 "
+        "섞으면 관계 질의가 통째로 막힌 것처럼 보입니다.")
+    add()
+    if unlinked_total:
+        add("### 연결 없음으로 판정된 주장 — ★사람이 읽고 오탐을 세는 자리")
+        add()
+        add("플래그를 켜기 전에 **이 표의 문장이 정말 질문과 무관한지** 한 건씩 "
+            "봐야 합니다. 멀쩡한 문장이 여기 있으면 그것이 오탐이고, 오탐이 "
+            "많으면 켜서는 안 됩니다.")
+        add()
+        add("| 케이스 | 질문 | 지워질 주장 | 든 근거 |")
+        add("|---|---|---|---|")
+        for case in CASES:
+            run = runs[case.id]
+            for text, evidence_ids in run.observed.unlinked_claims:
+                # ★파이프를 지운다 — 표 안에서 열을 갈라 버린다.
+                safe = text.replace("|", "／").strip()
+                add(f"| `{case.id}` | {case.question} | {safe} | "
+                    f"{' · '.join(evidence_ids) or '—'} |")
+        add()
+    else:
+        add("★**연결 없음으로 판정된 주장이 하나도 없습니다.** 이 실행만으로는 "
+            "플래그를 켜도 안전한지 알 수 없습니다 — 지울 것이 없었다는 뜻이지 "
+            "판정이 정확하다는 뜻이 아닙니다.")
+        add()
+
+    # ── 5. 케이스 ─────────────────────────────────────────────
+    add("## 5. 케이스")
     add()
     for index, case in enumerate(CASES, start=1):
         run = runs[case.id]

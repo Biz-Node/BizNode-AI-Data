@@ -8,6 +8,7 @@ Phase 8 의 완료 기준은 「Agent 가 답을 더 잘 쓰나」가 아니라 
     임베딩      몇 번 계산했나 · 캐시가 몇 건 맞고 몇 건 빗나갔나
     링(ring)    도구가 본 관계의 링 분포 · 상한에 남은 것과 잘린 것
     인용        **최종 답변이 인용한 관계**의 링 분포
+    주장        질문 의도와 **연결이 없다고 판정된** 주장 — 개수와 **본문**
 
 ★**이 모듈은 정책이 아니다.** 값을 읽어 무엇을 자르거나 순서를 바꾸지 않는다.
   Phase 8 은 ranking 을 **고정한 채로** Agent 의 효과와 비용을 재는 단계이고,
@@ -103,6 +104,31 @@ class Observation:
     #   여기 올 수 없는 것이 오면, 조용히 넘기지 않고 세어서 남긴다.
     cited_relation_without_ring: int = 0
 
+    # ── 주장 연결성 (claim_check) ─────────────────────────────
+    # ★**`_STRIP_UNLINKED_CLAIMS` 를 켤지 정하려고 재는 값**이다. 플래그가
+    #   `False` 라 지금은 아무것도 안 지우는데, 켜려면 **오탐률**을 먼저 알아야
+    #   한다 — 「연결 없음」으로 판정된 주장이 실제로 틀린 것이었나.
+    #
+    #   지금까지 그 값은 `log.info("claim.unlinked ...")` 한 줄에만 있었다.
+    #   로그는 운영에서 되짚는 통로이고, **평가셋이 구조화된 값으로 읽을 통로가
+    #   없었다** — 20 케이스를 돌려도 사람이 로그를 긁어야 했다.
+    #
+    #   ★이름을 `claims_total` 로 둔다 — `claim_check.summarize()["claims"]` 와
+    #     같은 뜻이다. `claims_checked` 를 안 쓰는 이유는 **다른 브랜치가 그
+    #     이름을 `bool`(노드를 지났나)로 쓰고 있어서**다. 같은 이름에 다른 타입이
+    #     두 벌 있으면 합칠 때 조용히 한쪽이 이긴다.
+    claims_total: int = 0
+    # `intent_linked is False` — 질문이 지목한 사건 종류에서 온 근거가 아니다.
+    claims_unlinked: int = 0
+    # ★`intent_linked is None` — **판정 불가**다. 「연결 없음」과 섞으면 관계
+    #   질의(「삼성전자에 납품하는 기업」)가 통째로 차단된 것처럼 보인다
+    #   (`claim_check.summarize` 가 갈라 세는 것과 같은 이유).
+    claims_link_unknown: int = 0
+    # ★**사람이 읽어야 하는 값이다.** 오탐률은 숫자로 안 나온다 — 「이 주장이
+    #   정말 질문과 무관했나」는 문장을 봐야 정해진다. 그래서 개수가 아니라
+    #   본문과 근거 id 를 담는다. `(주장, 든 근거 id들)`.
+    unlinked_claims: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+
     def summary(self) -> dict:
         """보고서·로그가 읽는 납작한 dict. **정렬을 여기서 못 박는다** —
         Counter 를 그대로 내보내면 순서가 실행마다 달라져 문서 diff 가 커진다."""
@@ -123,6 +149,13 @@ class Observation:
             "cited_rings": dict(sorted(self.cited_rings.items())),
             "cited_without_ring": self.cited_without_ring,
             "cited_relation_without_ring": self.cited_relation_without_ring,
+            "claims_total": self.claims_total,
+            "claims_unlinked": self.claims_unlinked,
+            "claims_link_unknown": self.claims_link_unknown,
+            # ★`unlinked_claims`(본문)는 **안 담는다.** 이 dict 는 로그 한 줄로
+            #   찍히는데, 주장 문장을 실으면 로그가 답변 사본이 된다(설계서
+            #   §13-2 가 프롬프트에 대해 못 박은 것과 같은 이유).
+            #   문장은 버킷에서 직접 읽는다 — 평가셋 보고서가 그렇게 한다.
         }
 
 
@@ -195,6 +228,37 @@ def record_embed(*, texts: int, hits: int, misses: int) -> None:
         seen.embed_texts += texts
         seen.embed_cache_hits += hits
         seen.embed_cache_misses += misses
+
+
+def record_claim_links(checked: Sequence, unlinked: Sequence) -> None:
+    """주장 연결성 판정의 결과. **재기만 한다 — 아무것도 안 지운다.**
+
+    ★`_STRIP_UNLINKED_CLAIMS` 를 켤지 정하려면 **오탐률**이 필요하고, 오탐률은
+      개수가 아니라 **문장**을 봐야 정해진다. 그래서 본문과 근거 id 를 담는다.
+
+    ★`checked` 는 `claim_check.check()` 의 결과 전부, `unlinked` 는 그중
+      `claim_check.unlinked()` 가 고른 것이다. **부르는 쪽이 이미 갈라 놓은
+      것을 다시 갈라 세지 않는다** — `unlinked()` 가 이 저장소에서 유일하게
+      판정에 가까운 함수이고, 여기서 그 규칙을 흉내 내면 두 벌이 된다.
+
+    ★`intent_linked is None`(판정 불가)을 **따로 센다.** 「연결 없음」과 섞으면
+      관계 질의가 통째로 차단된 것처럼 보인다 — `claim_check.summarize` 가
+      `unlinked` 와 `link_unknown` 을 가른 것과 같은 이유다.
+
+    ★**호출은 요청당 한 번**이다(`check_claims` 노드). `record_rings` 와 달리
+      중복을 접지 않는 이유가 그것이다 — 접을 반복 호출이 없다.
+    """
+    seen = _BUCKET.get()
+    if seen is None:
+        return
+    seen.claims_total += len(checked)
+    seen.claims_unlinked += len(unlinked)
+    seen.claims_link_unknown += sum(
+        1 for c in checked if getattr(c, "intent_linked", None) is None)
+    for claim in unlinked:
+        seen.unlinked_claims.append(
+            (str(getattr(claim, "text", "")),
+             tuple(str(i) for i in getattr(claim, "evidence_ids", ()) or ())))
 
 
 def record_rings(by_ring: Mapping[int, Sequence], kept: Sequence,

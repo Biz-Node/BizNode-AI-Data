@@ -177,6 +177,11 @@ def check_claims(state: AskState) -> AskState:
 
     # ★연결성 없는 주장 — **기본은 관측만** 한다(`_STRIP_UNLINKED_CLAIMS`).
     cut = claim_check.unlinked(checked)
+    # ★**버킷에도 담는다**(2026-08-29). 여태 이 값은 아래 로그 한 줄에만 있어서,
+    #   평가셋이 「오탐률」을 재려면 사람이 로그를 긁어야 했다. 플래그를 켤지는
+    #   오탐률을 보고 정하는데, 그 통로가 없으면 정할 수가 없다.
+    #   ★관측일 뿐이다 — 여기서 아무것도 안 지운다.
+    observe.record_claim_links(checked, cut)
     if cut:
         log.info("claim.unlinked count=%d strip=%s texts=%s",
                  len(cut), _STRIP_UNLINKED_CLAIMS, [c.text for c in cut])
