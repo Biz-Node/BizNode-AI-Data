@@ -252,20 +252,23 @@ def cmd_ask(args) -> None:
               f"남은 것 {dict(sorted(seen.ring_kept.items()))} "
               f"(kept {seen.relations_kept} · cut {seen.relations_cut})")
         print(f"          최종 인용 링 {dict(sorted(seen.cited_rings.items()))} · "
-              f"링 없는 인용 {seen.cited_without_ring}건")
+              f"관계 아닌 근거 인용 {seen.cited_without_ring}건 (정상)")
+        if seen.cited_relation_without_ring:
+            print(f"          ★관계인데 링을 못 찾은 인용 "
+                  f"{seen.cited_relation_without_ring}건 — 결함 신호다")
 
     # ★예산 — 「루프가 잘렸나」와 「끝난 뒤 플래그가 켜졌나」는 다른 사건이다.
     caps = {"tool_calls_used": budget.MAX_TOOL_CALLS,
-            "events_used": budget.MAX_EVENTS,
-            "propagations_used": budget.MAX_PROPAGATIONS}
+            "events_used": budget.MAX_EVENTS}
     spent = " · ".join(f"{n.replace('_used', '')} {state.get(n) or 0}/{c}"
                        for n, c in caps.items())
-    print(f"  [예산]  {spent}")
+    print(f"  [예산]  {spent} · 파급 {state.get('propagations_used') or 0}"
+          f"/{budget.MAX_PROPAGATIONS} (★세기만 — 소진 판정 아님)")
     if seen.agent_stopped_by_budget:
         print("          ★Agent 루프가 예산으로 잘렸다 — 재료가 적은 이유다")
     elif state.get("budget_exhausted"):
-        print("          플래그는 켜졌으나 루프는 안 잘렸다 "
-              "(fetch_propagation 이 루프 뒤에 채웠다)")
+        print("          ★플래그는 켜졌는데 루프는 안 잘렸다 — 2026-08-29 이후로는 "
+              "안 나와야 한다(파급이 소진 판정에서 빠졌다). 나오면 조사할 것")
 
     print(f"  [임베딩] {seen.embed_calls}회 · 캐시 적중 {seen.embed_cache_hits} · "
           f"빗나감 {seen.embed_cache_misses}")

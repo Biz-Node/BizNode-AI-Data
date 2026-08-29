@@ -83,6 +83,11 @@ class Observation:
     # edge_id → ring. ★인용된 관계의 링을 되짚으려고 둔다. 겸해서 **중복 계수를
     #   막는 열쇠**다 — 여기 이미 있으면 그 관계는 다시 안 센다.
     ring_by_edge: dict[str, int] = field(default_factory=dict)
+    # ★evidence_id → ring. **단수와 `evidence_ids` 배열을 모두 담는다.**
+    #   `ring_by_edge` 만으로는 배열에만 있는 근거가 인용될 때 되짚기가 끊긴다 —
+    #   부르는 쪽(`answer.verify_sources`)의 `by_evidence` 가 DTO 의 **단수**
+    #   `evidence_id` 로만 만들어지기 때문이다(실측 1,631개 · 840 엣지).
+    ring_by_evidence: dict[str, int] = field(default_factory=dict)
     # kept 로 센 edge_id. ★`ring_by_edge` 와 따로 둔다 — 「봤다」와 「남았다」는
     #   다른 사건이고, 한 관계가 본 뒤에 잘릴 수도 있다.
     _kept_edges: set[str] = field(default_factory=set)
@@ -91,8 +96,17 @@ class Observation:
     # **최종 답변이 인용한** 관계의 링 분포. 도구가 본 분포와 다를 수 있고,
     # 그 차이가 「링 순서가 답변까지 살아갔나」다.
     cited_rings: Counter = field(default_factory=Counter)
-    # 인용됐지만 관계로 되짚지 못한 근거 — 사건·뉴스 근거는 링이 없다.
+    # 인용됐지만 **관계가 아닌** 근거 — 사건·검색히트·뉴스. **링이 없는 것이 정상이다.**
     cited_without_ring: int = 0
+    # ★**관계인데 링을 못 찾은 인용. 0 이 아니면 결함 신호다.**
+    #
+    #   위와 갈라 두는 이유 — 한 숫자에 섞여 있으면 `cited_rings {}` 를 읽을 수가
+    #   없다. 「인용이 전부 사건·뉴스 근거였다」(정상)와 「관계를 인용했는데 되짚기가
+    #   끊겼다」(결함)가 같은 값으로 보이기 때문이다.
+    #
+    #   `graph_tools` 의 `suspect_dropped` 와 **같은 관례**다 — 위쪽 규칙대로면
+    #   여기 올 수 없는 것이 오면, 조용히 넘기지 않고 세어서 남긴다.
+    cited_relation_without_ring: int = 0
 
     def summary(self) -> dict:
         """보고서·로그가 읽는 납작한 dict. **정렬을 여기서 못 박는다** —
@@ -113,6 +127,7 @@ class Observation:
             "relations_cut": self.relations_cut,
             "cited_rings": dict(sorted(self.cited_rings.items())),
             "cited_without_ring": self.cited_without_ring,
+            "cited_relation_without_ring": self.cited_relation_without_ring,
         }
 
 
@@ -224,6 +239,13 @@ def record_rings(by_ring: Mapping[int, Sequence], kept: Sequence,
                 continue                      # 이미 본 관계 — 두 번 세지 않는다
             seen.ring_by_edge[edge_id] = ring
             seen.ring_seen[ring] += 1
+            # ★근거 id 로도 되짚을 수 있게 둔다 — **단수와 배열 전부**.
+            #   `setdefault` 는 `ring_by_edge` 와 같은 규약이다(첫 목격이 이긴다) —
+            #   한 근거가 여러 관계를 뒷받침해서 유일하지 않다(11,060 엣지에 근거 9,228개).
+            for evidence_id in (row.get("evidence_id"),
+                                *(row.get("evidence_ids") or [])):
+                if evidence_id:
+                    seen.ring_by_evidence.setdefault(str(evidence_id), ring)
     for row in kept:
         edge_id = row.get("edge_id")
         if not edge_id:
@@ -243,20 +265,51 @@ def record_rings(by_ring: Mapping[int, Sequence], kept: Sequence,
 
 
 def record_cited_relations(edge_ids: Sequence[Optional[str]],
-                           without_ring: int = 0) -> None:
+                           other_evidence_ids: Sequence[str] = ()) -> None:
     """최종 답변이 인용한 관계의 링을 센다.
 
-    ★링을 못 찾은 것은 **0 으로 세지 않는다.** 사건·뉴스 근거에는 링이 없고,
-      그걸 Ring 0 으로 뭉뚱그리면 「워크스페이스 안쪽이 인용됐다」는 거짓 신호가
-      된다. 따로 `cited_without_ring` 에 담는다.
+    `edge_ids` 는 **관계로 되짚힌 인용**이고, `other_evidence_ids` 는 부르는 쪽이
+    「관계가 아니다」로 넘긴 근거 id 들이다(`answer.verify_sources`).
+
+    ★**개수가 아니라 id 를 받는다**(2026-08-29 · Phase 13). 부르는 쪽의 되짚기는
+      DTO 의 **단수** `evidence_id` 만 보므로, 엣지의 `evidence_ids` 배열에만 있는
+      근거는 관계인데도 「아니다」로 넘어온다. 여기서 `ring_by_evidence` 로 **2차
+      조회**해 되찾는다 — 개수만 받으면 되찾을 방법이 없다.
+
+    ★링을 못 찾은 것은 **0 으로 세지 않는다.** Ring 0 으로 뭉뚱그리면
+      「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다.
+
+    ★**「링이 없다」를 두 통으로 가른다**(2026-08-29 · Phase 11):
+
+          cited_without_ring            관계가 아닌 근거 — **정상**
+          cited_relation_without_ring   관계인데 링을 못 찾음 — **결함 신호**
+
+      섞어 두면 `cited_rings {}` 를 읽을 수가 없다. 「인용이 전부 사건·뉴스
+      근거였다」와 「되짚기가 끊겼다」가 같은 숫자로 보이기 때문이다.
+
+    ★**배열 근거 누락은 해소됐다**(2026-08-29 · Phase 13). 아래 2차 조회가
+      `evidence_ids` 배열까지 훑는다. `RelationDTO` 는 **안 건드렸다** —
+      `agent_tools._dump` 가 DTO 를 Agent 에게 그대로 보내 재료가 바뀌기 때문에,
+      `company_service._relation()` 의 raw row 에만 배열을 실었다.
     """
     seen = _BUCKET.get()
     if seen is None:
         return
     for edge_id in edge_ids:
-        ring = seen.ring_by_edge.get(str(edge_id)) if edge_id else None
+        if not edge_id:
+            # ★`edge_ids` 에 오는 것은 **전부 관계**다(부르는 쪽이 이미 갈라 놨다).
+            #   그러니 빈 값도 「관계가 아니다」가 아니라 **결함**이다.
+            seen.cited_relation_without_ring += 1
+            continue
+        ring = seen.ring_by_edge.get(str(edge_id))
         if ring is None:
-            seen.cited_without_ring += 1
+            seen.cited_relation_without_ring += 1
         else:
             seen.cited_rings[ring] += 1
-    seen.cited_without_ring += without_ring
+    # ★2차 조회 — 「관계가 아니다」로 넘어온 것 중에도 **관계의 근거가 섞인다.**
+    for evidence_id in other_evidence_ids:
+        ring = seen.ring_by_evidence.get(str(evidence_id)) if evidence_id else None
+        if ring is None:
+            seen.cited_without_ring += 1      # 사건·검색히트·뉴스 — 정상
+        else:
+            seen.cited_rings[ring] += 1       # ★배열에만 있던 관계 근거를 되찾았다

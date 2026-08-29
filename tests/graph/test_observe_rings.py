@@ -18,8 +18,15 @@ from __future__ import annotations
 from app.core import observe
 
 
-def _row(edge_id: str) -> dict:
-    return {"edge_id": edge_id}
+def _row(edge_id: str, *, evidence_id: str = "", evidence_ids=()) -> dict:
+    """원시 관계 row. ★`evidence_ids` 는 **엣지 근거의 배열**이다 —
+    `company_service._relation()` 이 도구 계층 전용으로 싣는다."""
+    row: dict = {"edge_id": edge_id}
+    if evidence_id:
+        row["evidence_id"] = evidence_id
+    if evidence_ids:
+        row["evidence_ids"] = list(evidence_ids)
+    return row
 
 
 def test_same_relation_seen_twice_counts_once():
@@ -90,16 +97,77 @@ def test_ring_of_a_relation_is_remembered_from_the_first_sighting():
 
     assert seen.cited_rings[1] == 1
     assert seen.cited_without_ring == 0
+    assert seen.cited_relation_without_ring == 0
 
+
+# ══════════════════════════════════════════════════════════════════
+#  ★「링이 없다」는 두 가지 다른 사건이다 (2026-08-29 · Phase 11)
+# ══════════════════════════════════════════════════════════════════
 
 def test_citation_without_a_known_relation_is_not_ring_zero():
-    """★링을 못 찾은 인용을 **Ring 0 으로 뭉뚱그리지 않는다** — 사건·뉴스 근거에는
-    링이 없고, 0 으로 세면 「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다."""
+    """★링을 못 찾은 인용을 **Ring 0 으로 뭉뚱그리지 않는다** — 0 으로 세면
+    「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다."""
     with observe.observing() as seen:
         observe.record_cited_relations(["모르는edge"])
 
     assert seen.cited_rings == {}
-    assert seen.cited_without_ring == 1
+    assert 0 not in seen.cited_rings
+
+
+def test_a_relation_that_lost_its_ring_is_counted_apart_from_normal_ones():
+    """★**관계인데 링을 못 찾은 것**은 결함 신호다 — 정상과 같은 통에 넣지 않는다.
+
+    `record_rings` 는 `get_relations` 가 돌려준 관계를 전부 `ring_by_edge` 에
+    담으므로, 인용된 edge_id 가 거기 없다는 것은 위쪽 규칙이 바뀌었다는 뜻이다.
+    """
+    with observe.observing() as seen:
+        observe.record_cited_relations(["모르는edge"])
+
+    assert seen.cited_relation_without_ring == 1
+    assert seen.cited_without_ring == 0, "관계가 아닌 근거를 세는 통은 안 는다"
+
+
+def test_non_relation_citations_go_to_the_normal_bucket():
+    """★사건·검색히트·뉴스 근거는 **링이 없는 것이 정상**이다.
+
+    부르는 쪽(`answer.verify_sources`)이 「관계가 아니다」로 판정해 `without_ring`
+    으로 넘긴다 — 그 수는 결함 통을 늘리지 않는다.
+    """
+    with observe.observing() as seen:
+        observe.record_cited_relations([], other_evidence_ids=["ev_a", "ev_b", "ev_c"])
+
+    assert seen.cited_without_ring == 3
+    assert seen.cited_relation_without_ring == 0
+
+
+def test_the_two_buckets_never_absorb_each_other():
+    """★**섞이면 `cited_rings {}` 를 읽을 수가 없다.**
+
+    「인용이 전부 사건·뉴스 근거였다」(정상)와 「관계를 인용했는데 되짚기가
+    끊겼다」(결함)가 같은 값으로 보이기 때문이다. 한 번에 둘 다 일어나도
+    각자의 통에만 담긴다.
+    """
+    with observe.observing() as seen:
+        observe.record_rings({2: [_row("known")]}, [_row("known")], cut_count=0)
+        observe.record_cited_relations(
+            ["known", "잃어버린edge"],
+            other_evidence_ids=[f"ev_{n}" for n in range(5)])
+
+    assert seen.cited_rings == {2: 1}
+    assert seen.cited_relation_without_ring == 1
+    assert seen.cited_without_ring == 5
+
+
+def test_summary_carries_both_buckets():
+    """★보고서·로그가 읽는 dict 에 **둘 다** 실린다 — 하나만 실으면 갈라 둔
+    뜻이 문서에서 다시 합쳐진다."""
+    with observe.observing() as seen:
+        observe.record_cited_relations(["모르는edge"],
+                                       other_evidence_ids=["ev_x", "ev_y"])
+
+    summary = seen.summary()
+    assert summary["cited_without_ring"] == 2
+    assert summary["cited_relation_without_ring"] == 1
 
 
 def test_observation_is_a_noop_when_no_bucket_is_open():
@@ -108,3 +176,61 @@ def test_observation_is_a_noop_when_no_bucket_is_open():
     observe.record_rings({1: [_row("q")]}, [_row("q")], cut_count=0)
     observe.record_tool("get_relations", 3)
     observe.record_cited_relations(["q"])      # 죽지 않는다
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ★배열에만 있는 엣지 근거도 링을 되짚는다 (2026-08-29 · Phase 13)
+# ══════════════════════════════════════════════════════════════════
+
+def test_evidence_in_the_array_still_finds_its_ring():
+    """★**이것이 Phase 13 이 고친 것이다.**
+
+    엣지 근거는 단수 `evidence_id` 말고 `evidence_ids` **배열**에도 있는데
+    (실측 1,631개 · 840 엣지), 부르는 쪽의 되짚기는 DTO 의 **단수**만 본다.
+    그래서 배열에만 있는 근거가 인용되면 「관계가 아니다」로 넘어온다 —
+    관측 계층이 2차로 되짚지 않으면 **정상 통으로 새서 결함이 안 보인다.**
+    """
+    row = _row("e1", evidence_id="ev_single", evidence_ids=["ev_single", "ev_array"])
+    with observe.observing() as seen:
+        observe.record_rings({2: [row]}, [row], cut_count=0)
+        # 부르는 쪽은 배열 id 를 관계로 못 알아본다 → `other_evidence_ids` 로 온다
+        observe.record_cited_relations([], other_evidence_ids=["ev_array"])
+
+    assert seen.cited_rings == {2: 1}, "★배열에만 있던 관계 근거를 되찾아야 한다"
+    assert seen.cited_without_ring == 0
+
+
+def test_the_singular_evidence_also_resolves():
+    """단수 근거도 같은 2차 조회로 되짚힌다 — 두 경로가 갈리지 않는다."""
+    row = _row("e1", evidence_id="ev_single", evidence_ids=["ev_array"])
+    with observe.observing() as seen:
+        observe.record_rings({1: [row]}, [row], cut_count=0)
+        observe.record_cited_relations([], other_evidence_ids=["ev_single"])
+
+    assert seen.cited_rings == {1: 1}
+
+
+def test_evidence_that_belongs_to_no_relation_stays_in_the_normal_bucket():
+    """★사건·검색히트·뉴스 근거는 **여전히 정상 통**이다 — 2차 조회가 그걸 삼키면
+    「링 없는 인용」이 0 이 되어 원래 재려던 것을 못 재게 된다."""
+    row = _row("e1", evidence_id="ev_rel")
+    with observe.observing() as seen:
+        observe.record_rings({1: [row]}, [row], cut_count=0)
+        observe.record_cited_relations([], other_evidence_ids=["ev_news", "ev_event"])
+
+    assert seen.cited_rings == {}
+    assert seen.cited_without_ring == 2
+    assert seen.cited_relation_without_ring == 0
+
+
+def test_the_first_sighting_wins_for_evidence_too():
+    """★한 근거가 여러 관계를 뒷받침한다(11,060 엣지에 근거 9,228개). `ring_by_edge`
+    와 같은 규약으로 **첫 목격**을 남긴다 — 안 그러면 호출 순서에 값이 흔들린다."""
+    first = _row("e1", evidence_id="ev_shared")
+    later = _row("e2", evidence_id="ev_shared")
+    with observe.observing() as seen:
+        observe.record_rings({0: [first]}, [first], cut_count=0)
+        observe.record_rings({3: [later]}, [later], cut_count=0)
+        observe.record_cited_relations([], other_evidence_ids=["ev_shared"])
+
+    assert seen.cited_rings == {0: 1}, "첫 목격의 링이 이긴다"

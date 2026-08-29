@@ -108,8 +108,12 @@ def verify_sources(state: AskState) -> AskState:
     by_evidence = {r.evidence_id: r.edge_id for r in relations if r.evidence_id}
     accepted_set = set(accepted)
     cited_edges = [by_evidence[eid] for eid in accepted_set if eid in by_evidence]
-    observe.record_cited_relations(
-        cited_edges, without_ring=len(accepted_set) - len(cited_edges))
+    # ★관계로 못 되짚은 것은 **개수가 아니라 id 로** 넘긴다(2026-08-29 · Phase 13).
+    #   `by_evidence` 는 DTO 의 **단수** `evidence_id` 로만 만들어지는데 엣지 근거는
+    #   `evidence_ids` 배열에도 있다(실측 1,631개 · 840 엣지). 관측 계층이 배열까지
+    #   훑어 2차로 되짚으므로, 개수만 넘기면 그 되찾기를 못 한다.
+    others = [eid for eid in accepted_set if eid not in by_evidence]
+    observe.record_cited_relations(cited_edges, other_evidence_ids=others)
 
     # ★「최종 근거가 어디서 만들어졌는가」에 답하는 줄이다. `dropped` 는 LLM 이
     #   들었지만 화이트리스트가 버린 id — 지어낸 것이거나 원문을 못 찾은 것이다.

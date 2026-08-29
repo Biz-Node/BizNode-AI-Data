@@ -263,6 +263,17 @@ def _relation(src: dict, tgt: dict, etype: str, p: dict,
         #   이 저장소의 규칙이고(`graph_service._HIDE` 와 같다), 원시 플래그를
         #   실으면 도구가 그 규칙을 모른 채 `wrong_type` 까지 지운다.
         "verdict": _verdict(p),
+        #   `evidence_ids` — ★**엣지 근거는 단수 말고 배열에도 있다.**
+        #   `relation_service._evidence()` 가 `(evidence_id, *evidence_ids)` 를 함께
+        #   읽는데(같은 파일 :120) 이 row 는 단수만 실어, 배열에만 있는 근거가
+        #   인용되면 「이 근거가 어느 관계 것인가」를 되짚을 수 없었다.
+        #   실측(2026-08-29): 배열을 가진 엣지 875건 · **단수로 못 닿는 근거 id
+        #   1,631개 · 840 엣지**.
+        #   ★`RelationDTO` 에 넣지 **않는 이유** — `agent_tools._dump` 가
+        #   `model_dump` 로 DTO 를 Agent 에게 그대로 보내므로 필드를 더하면
+        #   **Agent 가 보는 재료가 바뀐다.** 위 둘과 같이 raw dict 에만 두면
+        #   도구 계층만 읽고 API 는 못 본다.
+        "evidence_ids": [str(e) for e in (p.get("evidence_ids") or []) if e],
         "refresh_cycle_days": int(cycle) if cycle is not None else None,
         "days_since": fr.days_since,
         "days_until_refresh": left,

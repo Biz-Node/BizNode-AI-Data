@@ -252,15 +252,35 @@ def fetch_propagation(state: AskState) -> AskState:
     ★`is_risk` 가 아닌 사건은 계산하지 않는다. 상한은 도구 안에 있다(원칙 ③).
     """
     risky = [e.event_id for e in state["events"] if e.is_risk]
-    # ★**총량 예산이 여기서도 실제로 자른다**(계약 4). 세기만 하고 안 자르면
-    #   카운터가 관측값으로 전락한다 — 상한은 막으라고 있는 것이다.
+    # ★**backstop 절단이다 — 지금은 한 번도 물지 않는다**(2026-08-29 실측).
+    #   `get_propagation` 이 목록 전체에 자기 상한 3 을 먼저 걸어
+    #   (`_MAX_RISK_EVENTS_FOR_PROPAGATION`) 늘 그쪽이 더 빡빡하다. 그래도 남기는
+    #   이유는 도구 상한이 올라가면 이 줄이 그때 무는 자리이기 때문이다.
+    #
+    # ★`propagations_used` 는 **소진 판정 대상이 아니다**(`budget._CAPS`). 여기는
+    #   Agent 루프 밖이라 「더 못 부르게 막는다」가 성립하지 않는다 — 세기만 한다.
     room = budget.remaining(state)["propagations_used"]
     if len(risky) > room:
         log.info("fetch_propagation 예산으로 자른다 %d -> %d", len(risky), room)
         risky = risky[:room]
     propagation = graph_tools.get_propagation(risky)
+    # ★**넘긴 사건 수로 센다 — 자른 것과 같은 단위여야 한다.**
+    #
+    #   전에는 `len(propagation)`(파급 **행** 수)을 썼다. 자르는 쪽은 `risky`
+    #   (사건 수)를 자르는데 세는 쪽만 행 수라, 사건 하나가 수십 행을 내는 만큼
+    #   카운터가 상한을 훌쩍 넘었다 — 실측 상한 12 에 **92**(이전 측정 303).
+    #   「막는다」고 적힌 예산이 자기 카운터로는 넘긴 셈이라, `budget_exhausted`
+    #   가 루프가 잘리지도 않았는데 켜졌다.
+    #
+    #   상한 12 의 근거부터 사건 수다 — `_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의
+    #   4배(`budget.py`). 즉 틀린 쪽은 상한이 아니라 **세는 단위**였다.
+    #
+    # ★출력에서 되짚지 않는 이유 — `len({p.event_id for p in propagation})` 는
+    #   「파급이 **나온**」 사건만 세어 파급 0행인 사건을 놓친다. 예산은 입력을
+    #   막는 장치이므로(`budget.py` 의 「호출할 때마다 누적치를 더하고, 넘으면
+    #   더 못 부른다」) 자른 값과 같은 값을 세는 것이 계약에 맞다.
     return {"propagation": propagation,
-            **budget.spend(state, propagations_used=len(propagation))}
+            **budget.spend(state, propagations_used=len(risky))}
 
 
 def fetch_relations(state: AskState) -> AskState:

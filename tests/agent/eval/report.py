@@ -164,6 +164,11 @@ def build(runs: dict[str, CaseRun]) -> str:
     add("★상한값 4개는 아직 **실측 근거가 없는 잠정치**입니다(현황서 §9). 이 표가 "
         "그 근거입니다 — 한 번도 안 무는 상한과, 늘 무는 상한을 갈라 봅니다.")
     add()
+    add("★**`propagations_used` 는 소진 판정 대상이 아닙니다**(2026-08-29 · `budget._CAPS`). "
+        "`fetch_propagation` 은 Agent 도구가 아니라 결정론 노드라 반복 호출로 우회할 수 "
+        "없고, 도구가 자기 상한 3 을 먼저 걸어 이 상한은 한 번도 문 적이 없습니다. "
+        "위 표의 「상한에 닿은 케이스」는 이 줄에 한해 **소진 신호가 아니라 관측치**입니다.")
+    add()
 
     # ★상한을 **넘긴** 카운터는 그 자체가 결함 신호다 — 「막는다」고 적혀 있는데
     #   넘었다면 자르는 단위와 세는 단위가 다르다는 뜻이다.
@@ -180,9 +185,11 @@ def build(runs: dict[str, CaseRun]) -> str:
             "잘라도 카운터는 상한을 훌쩍 넘습니다. 그래서 「막는다」고 적힌 예산이 "
             "실제로는 막지 못하고, 루프가 끝난 뒤 플래그만 켭니다.")
         add()
-        add("★**이번 단계에서 고치지 않았습니다.** Phase 8 은 현재 동작을 고정한 채 "
-            "재는 단계이고, 이 표가 그 측정 결과입니다. 고치면 무엇을 쟀는지가 "
-            "흐려집니다.")
+        add("★**알려진 사례 하나는 2026-08-29 에 고쳤습니다**(Phase 10) — "
+            "`propagations_used` 가 사건 수로 자르고 파급 행 수로 세던 것. "
+            "`tests/graph/test_propagation_budget.py` 가 그 계약을 묶고 있으므로, "
+            "이 표가 **다시 뜬다면 그건 새로운 단위 불일치**입니다. 어느 카운터가 "
+            "떴는지부터 보세요.")
         add()
     if embed_misses:
         add(f"★캐시가 **{embed_misses}건 빗나갔습니다** — 그만큼 이 실행에서 직접 "
@@ -235,6 +242,10 @@ def build(runs: dict[str, CaseRun]) -> str:
     kept_total = sum(run.observed.relations_kept for run in runs.values())
     cut_total = sum(run.observed.relations_cut for run in runs.values())
     without_ring = sum(run.observed.cited_without_ring for run in runs.values())
+    # ★**관계인데 링을 못 찾은 인용은 따로 센다.** 위와 섞으면 「인용이 전부
+    #   사건·뉴스 근거였다」(정상)와 「되짚기가 끊겼다」(결함)가 같은 값이 된다.
+    lost_ring = sum(run.observed.cited_relation_without_ring
+                    for run in runs.values())
 
     add("| 링 | 도구가 본 관계 | 상한에 남은 것 | **최종 인용** |")
     add("|---|---:|---:|---:|")
@@ -245,7 +256,9 @@ def build(runs: dict[str, CaseRun]) -> str:
         f"{sum(cited_all.values())} |")
     add()
     add(f"관계 kept **{kept_total}** · cut **{cut_total}** · "
-        f"링 없는 근거 인용 **{without_ring}**건(사건·뉴스 근거에는 링이 없습니다).")
+        f"링 없는 근거 인용 **{without_ring}**건(사건·검색히트·뉴스 근거에는 링이 "
+        f"없습니다 — **정상**) · 관계인데 링을 못 찾은 인용 **{lost_ring}**건"
+        f"(**0 이어야 정상**).")
     add()
 
     # ★읽는 사람이 표를 보고 스스로 물어야 할 것을 대신 짚어 준다. **판정이
@@ -266,6 +279,11 @@ def build(runs: dict[str, CaseRun]) -> str:
             f"**Ring {', '.join(f'R{r}' for r in uncited)} 는 재료로 남았지만 "
             f"한 번도 인용되지 않았습니다** — 링 순서가 프롬프트까지는 갔는데 "
             f"답변까지는 안 갔다는 뜻입니다.")
+    if lost_ring:
+        notes.append(
+            f"★**관계를 인용했는데 링을 못 찾은 것이 {lost_ring}건 있습니다.** "
+            f"`get_relations` 가 돌려준 관계는 전부 `ring_by_edge` 에 담기므로 "
+            f"여기 오면 위쪽 규칙이 바뀐 것입니다 — 0 이 아니면 결함 신호입니다.")
     if without_ring > sum(cited_all.values()):
         notes.append(
             f"**최종 인용 {sum(cited_all.values()) + without_ring}건 중 "

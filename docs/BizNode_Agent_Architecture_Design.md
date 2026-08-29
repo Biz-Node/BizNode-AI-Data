@@ -849,7 +849,7 @@ except ToolError as exc:
 |---|---:|---|---|
 | `tool_calls_used` | 12 | 도구 7종이라 한 바퀴 7번 → 「한 바퀴 돌고 한 번 더」 | `run_tools` — `len(calls)` |
 | `events_used` | 40 | `_MAX_EVENTS_PER_COMPANY`(10) × 4 (워크스페이스 4곳 관찰) | `run_tools` — `get_events` 결과 수 |
-| `propagations_used` | 12 | `_MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` |
+| `propagations_used` | 12 | `_MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` — `len(risky)`(**사건 수**, 2026-08-29 정정) |
 | `hops_used` | 6 | — | ★**아무도 안 가산** (`explore_impact` 미구현) |
 
 ★**값 4개는 원래 실측 근거가 없는 잠정치였습니다.** Phase 8 평가셋이 그 근거를 처음 만들었습니다(평가 문서 §8).
@@ -866,10 +866,12 @@ def should_continue(state) -> str:
 
 `recursion_limit` 에 기대면 **예외로 끝나 답변이 아예 안 나갑니다.** 도구를 덜 불렀어도 **있는 재료로 답하게** 하는 것이 옳습니다(계약 4). 소진 여부는 State 플래그와 로그에 남습니다 — 「왜 재료가 적나」를 나중에 되짚을 수 있어야 합니다.
 
-### 15-4. ★현재 결함 — `propagations_used` 단위 불일치 (미수정 · 알려진 문제)
+### 15-4. ★**해소됨** — `propagations_used` 단위 불일치 (2026-08-29 · Phase 10)
+
+**Phase 8 이 발견하고 Phase 10 이 고쳤습니다.** 자르는 단위와 세는 단위가 갈려 있었습니다.
 
 ```python
-# fetch_propagation
+# fetch_propagation — 고치기 전
 room = budget.remaining(state)["propagations_used"]
 risky = risky[:room]                                    # ← 입력(사건 수)을 자름
 propagation = graph_tools.get_propagation(risky)
@@ -877,19 +879,43 @@ return {..., **budget.spend(state, propagations_used=len(propagation))}
                                                         # ← 출력(파급 행 수)을 씀
 ```
 
-**자르는 단위는 「사건 수」이고 세는 단위는 「파급 행 수」입니다.** 사건 하나가 수십 행을 내므로 잘라도 카운터는 상한을 훌쩍 넘습니다.
+사건 하나가 수십 행을 내므로 잘라도 카운터는 상한을 훌쩍 넘었습니다.
 
-| | |
-|---|---|
-| 상한 | 12 |
-| 실측 최대 사용 | **303** (25배) |
-| 상한에 닿은 케이스 | 20 중 **9** |
-| 실제 피해 | ★현재는 **무해** — 플래그가 루프 **뒤에** 켜지고 그 뒤로 아무도 안 읽습니다 |
-| 진짜 문제 | 「막는다」고 적힌 예산이 **실제로는 못 막고 있습니다** |
+| | Phase 8 실측 | Phase 10 이후 |
+|---|---|---|
+| 상한 | 12 | 12 |
+| 최대 사용 | **303** (25배) · 이후 측정 **92** | ★**상한 이하가 보장됨** |
+| 상한에 닿은 케이스 | 20 중 **9** | 위험 사건 12건 이상일 때만 |
+| 「막는다」가 성립하나 | ✕ | ○ |
 
-★상한값 12 의 주석이 「`_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것을 보면 **세려던 단위는 사건 수**였습니다.
+**고친 방법 — `propagations_used=len(risky)`.** 상한값 12 의 주석이 「`_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것이 보여주듯 **세려던 단위는 처음부터 사건 수**였습니다. 즉 틀린 쪽은 상한이 아니라 세는 단위였습니다.
 
-★**Phase 8 에서 일부러 고치지 않았습니다** — 현재 동작을 고정한 채 재는 단계라, 고치면 무엇을 쟀는지가 흐려집니다.
+★**기존 관례와 같습니다** — `run_tools` 도 `tool_calls_used=len(calls)` 로 「요청한 것」을 셉니다(도구가 거부해도 셉니다). 예산은 **입력을 막는 장치**이므로 자른 값과 같은 값을 세는 것이 계약에 맞습니다.
+
+★**출력에서 되짚지 않은 이유** — `len({p.event_id for p in propagation})` 는 파급이 0행인 사건을 놓쳐 또 사후 값이 됩니다.
+
+★**회귀 방어** — `tests/graph/test_propagation_budget.py` 5건이 이 계약을 묶습니다(단위를 되돌리면 5건 전부 실패). 평가셋에도 `propagations_used <= MAX_PROPAGATIONS` 단언이 들어갔습니다.
+
+#### 15-4-1. ★부수 발견 — `MAX_PROPAGATIONS = 12` 는 **죽은 상한**입니다
+
+고치면서 드러난 별개 사실입니다.
+
+```python
+# graph_tools.get_propagation:379
+for event_id in list(event_ids)[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
+```
+
+도구가 **목록 전체**에 자기 상한 3 을 먼저 겁니다(원칙 ③ — 상한은 도구 안에 있다). 예산의 12 는 「기업 4곳 × 3」을 가정했는데 도구는 기업별이 아닙니다.
+
+→ **예산이 자른다고 적힌 `risky[:room]` 은 한 번도 자른 적이 없습니다.** 늘 도구의 3 이 먼저 뭅니다.
+
+★**값을 바꾸는 대신 판정에서 뺐습니다**(2026-08-29 · Phase 12). `budget._CAPS`(소진 판정) 와 `budget._FIELDS`(세는 것 전부)를 가릅니다.
+
+계약 4 의 근거는 「인자 리스트 길이만 제한하면 **반복 호출**로 우회된다」인데, `fetch_propagation` 은 Agent 도구가 아니라 결정론 노드이고 `_AFTER_LOOP` 에 **한 번만** 배선됩니다 — 우회할 반복이 없습니다. 남는 상한은 도구 안의 3 하나입니다(원칙 ③).
+
+★**`hops_used` 는 `_CAPS` 에 남겼습니다** — 지금은 아무도 안 늘려 무해하지만, 빼 두면 `explore_impact`(2-B)가 들어올 때 상한이 **조용히 죽습니다.**
+
+★**부수 효과** — `budget_exhausted` 가 켜지는 자리가 `run_tools`(루프 안)뿐이 되어 「루프가 잘렸다」와 뜻이 하나가 됐습니다. §19-3 의 2분법은 **관측 장치로 남기되**, 두 값이 갈리면 그때가 조사할 신호입니다.
 
 ### 15-5. 종료 조건 정리
 
@@ -1135,7 +1161,7 @@ if rows is None:
 | **임베딩** | `embed_calls` `embed_texts` `embed_cache_hits/misses` | ★빗나감 = 「실제로 계산했다」 → 그 실행은 값이 흔들림 |
 | **예산** | `agent_stopped_by_budget` | ★**루프가 잘린 것**과 「끝난 뒤 파급 예산이 찼다」 |
 | **링** | `ring_seen` `ring_kept` `relations_kept/cut` `ring_by_edge` | 자르기 전 분포와 남은 것. ★`edge_id` 로 **중복을 접습니다**(아래) |
-| **인용** | `cited_rings` `cited_without_ring` | ★**링 순서가 답변까지 살아갔나** |
+| **인용** | `cited_rings` `cited_without_ring` `cited_relation_without_ring` | ★**링 순서가 답변까지 살아갔나** · ★「링이 없다」를 **정상/결함으로 가릅니다**(2026-08-29) |
 
 ### 19-3. ★`agent_stopped_by_budget` 을 State 플래그와 가르는 이유
 
@@ -1254,7 +1280,7 @@ python -m batch.audit.ask_graph_parity --materials  # 재료 집합 대조
 | `ToolContext` 7필드 | **구현됨** |
 | 인용 규칙 (`search_news` 하나) | **구현됨** |
 | 화이트리스트 검증 | **구현됨** |
-| 누적 예산 4종 | **구현됨** — ★`propagations_used` 단위 불일치 |
+| 누적 예산 4종 | **구현됨** — ★`propagations_used` 는 단위 불일치 **해소** 후 **소진 판정에서도 제외**(2026-08-29 · §15-4). 실효 상한은 **3**(도구 안) |
 | Ring 분류 · 링 안 정렬 · 정렬 후 절단 | **구현됨** |
 | Observability 5축 | **구현됨** |
 | Agent 평가셋 20 케이스 | **구현됨** — 20/20 PASS |
