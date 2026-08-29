@@ -118,7 +118,11 @@ class CaseRun:
 
 def build_request(case: AgentEvalCase) -> AskRequest:
     return AskRequest(question=case.question,
-                      workspace_keys=list(case.workspace_keys))
+                      workspace_keys=list(case.workspace_keys),
+                      # ★「담은 것」과 **갈라서** 넘긴다. 한 필드로 합치면
+                      #   `anchor_source` 가 `context` 와 `workspace` 를 못 가르고,
+                      #   그러면 이 평가셋이 새 갈래를 덮지 못한다.
+                      context_keys=list(case.context_keys))
 
 
 def run_case(case: AgentEvalCase) -> CaseRun:

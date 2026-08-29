@@ -389,36 +389,51 @@ def build(runs: dict[str, CaseRun],
         f"(**0 이어야 정상**).")
     add()
 
-    # ── 3-1. ★앵커별로 갈라 본다 — 안 가르면 두 모집단이 섞인다 ──────────
+    # ── 3-1. ★워크스페이스 유무로 갈라 본다 — 안 가르면 두 모집단이 섞인다 ──
     #
     #   ★`workspace_keys` 가 비면 `_ring_of` 는 **전부 R3** 을 낸다(양끝이 둘 다
     #     밖이다). `context_keys` 가 생기며 그런 요청이 실제로 들어올 수 있게
     #     됐으므로(2026-08-29), 한 분포로 합치면 「R3 이 늘었다」가 **랭킹이
     #     바뀐 것인지 워크스페이스 없는 케이스가 섞인 것인지** 구별되지 않는다.
     #
+    #   ★**축이 `anchor_source` 가 아니라 `workspace_keys` 다**(2026-08-29 정정).
+    #     처음에는 앵커로 갈랐는데, 그건 **대리 지표**였다 — `ctx-beats-workspace`
+    #     케이스가 보여주듯 `anchor_source=context` 이면서 워크스페이스가 **있을**
+    #     수 있고, 그때 링은 R3 일색이 아니라 정상 분포다. R3 을 만드는 것은
+    #     앵커가 아니라 **워크스페이스가 비었다는 사실**이므로 그쪽으로 가른다.
+    #     앵커는 같은 줄에 함께 찍어 둔다 — 읽는 사람이 되짚을 값이다.
+    #
     #   ★평가 §10-3 에서 한 번 당한 것과 **같은 종류**다. 그때는 「호출 × 관계」로
     #     세어 수치가 도구 선택에 흔들렸고, 이번엔 두 모집단이 한 표에 들어온다 —
     #     둘 다 **수치 변화를 랭킹에 귀속시킬 수 없게** 만든다.
+    def _has_ws(run: CaseRun) -> str:
+        return "있음" if run.case.workspace_keys else "★없음"
+
     by_source: dict[str, Counter] = {}
+    anchors_of: dict[str, set[str]] = {}
+    cases_of: Counter = Counter()
     for run in runs.values():
         if not run.observed.ring_seen:
             continue
-        source = run.anchor_source.value if run.anchor_source else "—"
-        by_source.setdefault(source, Counter()).update(run.observed.ring_seen)
+        bucket = _has_ws(run)
+        by_source.setdefault(bucket, Counter()).update(run.observed.ring_seen)
+        anchors_of.setdefault(bucket, set()).add(
+            run.anchor_source.value if run.anchor_source else "—")
+        cases_of[bucket] += 1
     if len(by_source) > 1:
-        add("### 3-1. 앵커별 링 분포 — ★합치면 안 되는 이유")
+        add("### 3-1. 워크스페이스 유무별 링 분포 — ★합치면 안 되는 이유")
         add()
         add("워크스페이스가 비면 `_ring_of` 는 **전부 R3** 입니다(양끝이 둘 다 밖). "
-            "그런 케이스가 섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다.")
+            "그런 케이스가 섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다. "
+            "★가르는 축은 `anchor_source` 가 아니라 **`workspace_keys`** 입니다 — "
+            "`context` 앵커라도 워크스페이스가 있으면 링은 정상 분포입니다.")
         add()
-        add("| anchor_source | 케이스 | 도구가 본 관계의 링 분포 |")
-        add("|---|---:|---|")
-        for source in sorted(by_source):
-            cases = sum(1 for run in runs.values()
-                        if run.observed.ring_seen
-                        and (run.anchor_source.value if run.anchor_source
-                             else "—") == source)
-            add(f"| `{source}` | {cases} | {_rings(by_source[source])} |")
+        add("| workspace_keys | 케이스 | anchor_source | 도구가 본 관계의 링 분포 |")
+        add("|---|---:|---|---|")
+        for bucket in sorted(by_source):
+            anchors = " · ".join(f"`{a}`" for a in sorted(anchors_of[bucket]))
+            add(f"| {bucket} | {cases_of[bucket]} | {anchors} | "
+                f"{_rings(by_source[bucket])} |")
         add()
     else:
         # ★**조용히 빼지 않는다**(2026-08-29 실측에서 드러난 결함).
@@ -431,17 +446,19 @@ def build(runs: dict[str, CaseRun],
         #
         #   ★한 줄짜리 표를 그리지는 않는다. 갈라 보는 것이 목적인 절에서 한 줄은
         #     §3 의 합계와 같은 값이라 새 정보가 없다. **사실만 적는다.**
-        only = f"`{next(iter(by_source))}`" if by_source else "없음"
-        add("### 3-1. 앵커별 링 분포 — ★이번 실행에서는 갈라 볼 것이 없습니다")
+        only = (f"**워크스페이스 {next(iter(by_source))}**" if by_source
+                else "**없음**")
+        add("### 3-1. 워크스페이스 유무별 링 분포 — "
+            "★이번 실행에서는 갈라 볼 것이 없습니다")
         add()
-        add(f"링을 관측한 케이스의 `anchor_source` 가 {only} 하나뿐이라 위 표와 "
-            "같은 값이 됩니다. `get_relations` 는 **Agent 가 고르는 도구**라 모든 "
-            "케이스가 링을 남기지 않습니다 — 도구별 호출 빈도 표를 함께 보세요.")
+        add(f"링을 관측한 케이스가 {only} 한쪽뿐이라 위 표와 같은 값이 됩니다. "
+            "`get_relations` 는 **Agent 가 고르는 도구**라 모든 케이스가 링을 "
+            "남기지는 않습니다 — 도구별 호출 빈도 표를 함께 보세요.")
         add()
         add("★이 절이 필요한 이유는 그대로입니다. `workspace_keys` 가 비면 "
             "`_ring_of` 는 **전부 R3** 을 냅니다(양끝이 둘 다 밖). 그런 케이스가 "
-            "섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다 — 평가셋에 workspace-less "
-            "케이스가 들어오는 순간 이 표가 필요해집니다.")
+            "섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다 — `ctx-detail-page-"
+            "no-workspace` 가 링을 남기는 실행부터 이 표가 두 줄이 됩니다.")
         add()
 
     # ★읽는 사람이 표를 보고 스스로 물어야 할 것을 대신 짚어 준다. **판정이
@@ -558,7 +575,19 @@ def build(runs: dict[str, CaseRun],
         add("| | |")
         add("|---|---|")
         add(f"| 질문 | `{case.question}` |")
-        add(f"| 기대 anchor_source | {case.expected_anchor_source.value} |")
+        # ★`None` 은 **네 번째 앵커가 아니라 「판정 자체가 없었다」**이다. 출발점이
+        #   하나도 없으면 `guard_workspace` 가 검색 앞에서 끊어 `resolve_anchor` 를
+        #   지나지 않는다. `.value` 를 그냥 읽으면 보고서 생성이 통째로 죽는다.
+        expected = (case.expected_anchor_source.value
+                    if case.expected_anchor_source is not None
+                    else "**없음** (게이트에서 끝 — 앵커 판정 자체가 없다)")
+        add(f"| 기대 anchor_source | {expected} |")
+        # ★워크스페이스·화면 문맥을 **함께** 적는다. 두 케이스가 질문만 같고
+        #   `workspace_keys` 만 다른 대조군이라(`ctx-*`), 이 줄이 없으면 표에서
+        #   둘을 구별할 수가 없다.
+        add(f"| 워크스페이스 · 보고 있는 기업 | "
+            f"{list(case.workspace_keys) or '없음'} · "
+            f"{list(case.context_keys) or '없음'} |")
         add(f"| 기대 Agent 호출 | {'예' if case.expects_agent else '**아니오**'} |")
         add(f"| 끌어오려는 도구 | "
             f"{', '.join('`' + t + '`' for t in case.expects_tools) or '없음'} |")

@@ -22,11 +22,23 @@
 ★**anchor_source 세 갈래가 이 평가셋의 척추다.**
 
     QUERY       질문이 대상을 지정했고 해소됐다        → Agent 호출됨
-    WORKSPACE   질문이 대상을 **지정하지 않았다**       → Agent 호출됨 · 의미검색
     UNRESOLVED  지정했는데 못 찾았다                   → ★**Agent 미호출**
+    CONTEXT     **보고 있는 기업**이 있다              → Agent 호출됨 (워크스페이스보다 먼저)
+    WORKSPACE   질문이 대상을 **지정하지 않았다**       → Agent 호출됨 · 의미검색
+    (없음)      출발점이 하나도 없다                   → ★**검색조차 안 한다**
 
-  가운데가 「기업이 명시되지 않은 산업·주제·이벤트 탐색형」이다. 코드에
+  `WORKSPACE` 가 「기업이 명시되지 않은 산업·주제·이벤트 탐색형」이다. 코드에
   `NOT_SPECIFIED` 라는 이름은 없다 — `AnchorSource.WORKSPACE` 가 그 상태다.
+
+★**`CONTEXT` 는 2026-08-29 에 늘었다**(be2d985). 기업 상세 화면에서 「이 회사
+  노조 리스크 어때?」를 물으면 「이 회사」는 **화면이 알고 문장은 모른다.** 그전에는
+  워크스페이스가 있으면 담아 둔 기업으로 답하고 비면 검색조차 안 했다 — 둘 다
+  「물은 것과 다른 대상으로 답하기」의 같은 종류였다.
+
+★**`workspace_keys` 가 빈 케이스가 이 평가셋에 처음 들어온다.** 그러면
+  `_ring_of` 는 양끝이 둘 다 밖이라 **전부 R3** 을 낸다. 링 분포를 한 표로 합치면
+  R3 증가를 랭킹 변화로 잘못 읽으므로, 보고서가 `workspace_keys` 유무로 갈라
+  찍는다(`report.py` §3-1).
 
 ★**질문은 전부 실측으로 골랐다.** 후보를 `search`+`resolve_anchor` 에 실제로
   통과시켜 어느 갈래로 떨어지는지 보고 확정했다. 추측으로 적으면 케이스가
@@ -66,11 +78,18 @@ class AgentEvalCase:
     coverage: tuple[str, ...]            # 커버하는 분기
 
     # ── 서버가 결정론으로 정하는 값 — **여기만 못 박는다** ──────────
-    expected_anchor_source: AnchorSource
+    # ★`None` 은 **네 번째 앵커가 아니라 「판정 자체가 없었다」**이다. 출발점이
+    #   하나도 없으면 `guard_workspace` 가 검색 앞에서 끊으므로 `resolve_anchor`
+    #   를 지나지 않고, State 에 `decision` 이 안 생긴다.
+    expected_anchor_source: Optional[AnchorSource]
     # ★`UNRESOLVED` 면 `halt_no_material` 로 빠져 Agent 를 아예 안 부른다.
     expects_agent: bool
 
     workspace_keys: tuple[str, ...] = WORKSPACE
+    # ★**「담은 것」이 아니라 「보고 있는 것」**이다(2026-08-29). 기업 상세 화면이
+    #   넘기는 값이라, 워크스페이스가 비어도 대상이 있다. 기본이 빈 튜플인 이유는
+    #   기존 20 케이스가 전부 화면 문맥 없이 묻는 질문이기 때문이다.
+    context_keys: tuple[str, ...] = ()
 
     # ── 도구 — **기대일 뿐 강제가 아니다** ─────────────────────────
     # 이 질문이 끌어오도록 설계된 도구들. 판정은 「이 중 최소 하나」다.
@@ -96,7 +115,10 @@ class AgentEvalCase:
 # 평가셋이 반드시 덮어야 하는 분기. 케이스를 지우다 분기가 통째로 비면
 # `test_coverage_is_complete` 가 잡는다.
 REQUIRED_COVERAGE = frozenset({
-    "anchor:QUERY", "anchor:WORKSPACE", "anchor:UNRESOLVED",
+    "anchor:QUERY", "anchor:WORKSPACE", "anchor:UNRESOLVED", "anchor:CONTEXT",
+    # ★게이트의 세 갈래. 「담은 것만」·「보고 있는 것만」·「둘 다 없음」이
+    #   `_has_starting_point` 의 분기이고, 가운데가 2026-08-29 에 열렸다.
+    "gate:워크스페이스 없음", "gate:출발점 없음",
     "agent:호출됨", "agent:미호출",
     "tool:get_relations", "tool:get_events", "tool:search_news",
     "tool:search_dart", "tool:get_business_overview", "tool:get_market",
@@ -391,6 +413,75 @@ CASES: tuple[AgentEvalCase, ...] = (
         expects_agent=False,
         must_not_call=("get_relations", "get_events", "search_news", "search_dart",
                        "get_business_overview", "get_market", "get_filings"),
+        expects_answer=True,
+    ),
+
+    # ══════════════════════════════════════════════════════════════
+    #  D. anchor:CONTEXT — ★보고 있는 기업 (2026-08-29 신설)
+    # ══════════════════════════════════════════════════════════════
+    #
+    # ★기업은 **현대자동차(00164742)**다. 워크스페이스(삼성전자·SK하이닉스)
+    #   **밖**이라 「담지 않은 기업을 대상으로 답한다」가 실제로 성립하고,
+    #   재료도 있다(실측 2026-08-29: 관계 10 · 사건 8 · 뉴스 10 · 공시 5).
+    #
+    # ★질문에 기업명을 **안 쓴다.** 쓰면 `resolved_entities` 가 잡혀 `QUERY` 로
+    #   가버려 이 갈래를 못 덮는다 — 「이 회사」가 화면에서만 온다는 것이
+    #   이 분기의 전부다.
+
+    AgentEvalCase(
+        id="ctx-detail-page-no-workspace",
+        question="이 회사에 노무 관련 리스크가 있었나?",
+        verifies="★**워크스페이스가 비어도 답한다** — 이 평가셋에서 유일하다. "
+                 "그전에는 `guard_workspace` 가 검색 앞에서 끊어 「담아야만 물어볼 "
+                 "수 있다」였는데, 보통은 물어보고 나서 담는다. "
+                 "★`workspace_keys` 가 비어 `_ring_of` 가 **전부 R3** 을 내는 "
+                 "유일한 케이스이기도 하다(보고서 §3-1 이 갈라 찍는 이유). "
+                 "실측: anchor_source=context · SEMANTIC 10건",
+        coverage=("anchor:CONTEXT", "agent:호출됨", "gate:워크스페이스 없음",
+                  "company:단일", "event:노무"),
+        expected_anchor_source=AnchorSource.CONTEXT,
+        expects_agent=True,
+        workspace_keys=(),
+        context_keys=("00164742",),
+        expects_tools=("get_events", "search_news"),
+    ),
+
+    AgentEvalCase(
+        id="ctx-beats-workspace",
+        question="이 회사 최근에 무슨 일이 있었어?",
+        verifies="★**담아 둔 기업이 있어도 보고 있는 기업이 먼저다.** 워크스페이스로 "
+                 "가면 「현대자동차 페이지를 보며 물었는데 삼성전자로 답하는」 것이 "
+                 "되고, 그건 §14-3 이 막으려는 오답과 같은 종류다. "
+                 "★앞 케이스와 **워크스페이스만 다르다** — 링이 R3 일색이 아니라 "
+                 "정상 분포로 나와야 하므로, 두 케이스가 §3-1 의 두 줄이 된다",
+        coverage=("anchor:CONTEXT", "agent:호출됨", "topic:이벤트 탐색"),
+        expected_anchor_source=AnchorSource.CONTEXT,
+        expects_agent=True,
+        context_keys=("00164742",),          # workspace_keys 는 기본값 그대로
+        expects_tools=("get_events", "get_relations"),
+    ),
+
+    # ══════════════════════════════════════════════════════════════
+    #  E. 게이트 — ★출발점이 하나도 없다
+    # ══════════════════════════════════════════════════════════════
+
+    AgentEvalCase(
+        id="gate-no-starting-point",
+        question="무슨 일이 있었는지 알려줘",
+        verifies="★**검색조차 하지 않는다**(설계서 §16-2). 담은 것도 보고 있는 것도 "
+                 "없으면 「무엇에 대한 인사이트인가」가 정해지지 않는다. "
+                 "★`expected_anchor_source` 가 **`None`** 인 유일한 케이스다 — "
+                 "`guard_workspace` 가 `resolve_anchor` 앞에서 끊으므로 앵커 판정 "
+                 "자체가 없다. 응답에는 `unresolved` 가 실리는데, 그 비대칭을 "
+                 "`test_case` ⑦ 이 명시한다. ★LLM 을 안 부르므로 비용이 0 이다",
+        coverage=("gate:출발점 없음", "agent:미호출"),
+        expected_anchor_source=None,
+        expects_agent=False,
+        workspace_keys=(),
+        context_keys=(),
+        must_not_call=("get_relations", "get_events", "search_news", "search_dart",
+                       "get_business_overview", "get_market", "get_filings"),
+        # ★`failed=False` 다 — 재료가 없다고 알리는 것은 실패가 아니다.
         expects_answer=True,
     ),
 )
