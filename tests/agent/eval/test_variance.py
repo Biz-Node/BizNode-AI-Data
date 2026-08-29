@@ -18,7 +18,8 @@ from tests.agent.eval.runner import CaseRun
 
 
 def _run(tools: dict, *, tool_calls=None, claims=0, uncited=0,
-         input_tokens=0, output_tokens=0, embed_misses=0) -> CaseRun:
+         input_tokens=0, output_tokens=0, embed_misses=0,
+         seen_rings=None, kept_rings=None, cited_rings=None) -> CaseRun:
     """관측만 채운 `CaseRun`. 집계가 읽는 자리는 `observed` 와 `state` 뿐이다."""
     seen = observe.Observation()
     seen.tools_used = Counter(tools)
@@ -27,6 +28,9 @@ def _run(tools: dict, *, tool_calls=None, claims=0, uncited=0,
     seen.llm_input_tokens = Counter({"모델": input_tokens})
     seen.llm_output_tokens = Counter({"모델": output_tokens})
     seen.embed_cache_misses = embed_misses
+    seen.ring_seen = Counter(seen_rings or {})
+    seen.ring_kept = Counter(kept_rings or {})
+    seen.cited_rings = Counter(cited_rings or {})
     calls = sum(tools.values()) if tool_calls is None else tool_calls
     return CaseRun(case=None, state={"tool_calls_used": calls},
                    observed=seen, took_ms=0)
@@ -75,6 +79,43 @@ def test_embed_misses_are_summed_per_pass():
 def test_total_tokens_adds_input_and_output():
     passes = [{"a": _run({}, input_tokens=100, output_tokens=10)}]
     assert variance.total_tokens(passes).values == [110.0]
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ①-2 ★흔들리면 안 되는 값 vs 흔들리는 것이 정상인 값
+# ══════════════════════════════════════════════════════════════════
+
+
+def test_material_is_stable_when_seen_and_kept_do_not_move():
+    """★같은 재료를 같은 규칙으로 자르면 `ring_seen`·`ring_kept` 는 결정론이다."""
+    passes = [{"a": _run({}, seen_rings={0: 9, 1: 746}, kept_rings={0: 9, 1: 101},
+                         cited_rings={0: 1, 1: 5})},
+              {"a": _run({}, seen_rings={0: 9, 1: 746}, kept_rings={0: 9, 1: 101},
+                         cited_rings={0: 2, 1: 5})}]
+
+    assert variance.total_ring_seen(passes).span == 0
+    assert variance.total_ring_kept(passes).span == 0
+    assert variance.material_is_stable(passes) is True
+
+
+def test_citation_is_allowed_to_wobble_on_stable_material():
+    """★인용은 **LLM 이 무엇을 들었나**라 흔들리는 것이 정상이다. 실측에서 같은
+    재료(seen 1008 · kept 110)인데 인용이 R0 1 대 2 로 갈렸다 — 모수가 9뿐이라
+    그 1건이 11% 로 보인다. 재료 불변량과 같은 표에 두면 오독한다."""
+    passes = [{"a": _run({}, seen_rings={0: 9}, kept_rings={0: 9}, cited_rings={0: 1})},
+              {"a": _run({}, seen_rings={0: 9}, kept_rings={0: 9}, cited_rings={0: 2})}]
+
+    assert variance.material_is_stable(passes) is True, "재료는 안 움직였다"
+    assert variance.total_cited_relations(passes).span == 1
+
+
+def test_moving_material_means_the_comparison_does_not_hold():
+    """★재료가 움직였으면 **모델 비교가 성립하지 않는다** — 도구 선택이나 인용의
+    차이를 모델에 귀속시킬 수 없고, 랭킹이나 계측을 먼저 봐야 한다."""
+    passes = [{"a": _run({}, seen_rings={1: 746}, kept_rings={1: 101})},
+              {"a": _run({}, seen_rings={1: 700}, kept_rings={1: 101})}]
+
+    assert variance.material_is_stable(passes) is False
 
 
 # ══════════════════════════════════════════════════════════════════

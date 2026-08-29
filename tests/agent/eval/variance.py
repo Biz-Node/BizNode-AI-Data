@@ -18,6 +18,13 @@
 
 ★**「조합」은 다중집합이다** — 어떤 도구를 **몇 번** 불렀나까지 본다. 집합만
   보면 「같은 도구를 두 배로 불렀다」가 안정으로 세어진다.
+
+★**흔들려야 하는 값과 흔들리면 안 되는 값을 갈라 낸다**(2026-08-29 · 지적을
+  받아 고침). 같은 재료를 같은 규칙으로 자르면 `ring_seen`·`ring_kept` 는
+  결정론이고, `cited_rings`·도구 조합·토큰은 LLM 몫이라 흔들리는 것이 정상이다.
+  한 표에 섞어 두면 **「무엇이 흔들려야 정상인가」가 안 보인다** — 재료가
+  움직인 실행을 「모델이 불안정하다」로 읽게 된다. `material_is_stable()` 이
+  그 전제를 한 줄로 답한다.
 """
 
 from __future__ import annotations
@@ -113,6 +120,44 @@ def total_embed_misses(passes: Passes) -> Spread:
     """
     return _per_pass(passes, lambda runs: sum(
         r.observed.embed_cache_misses for r in runs.values()))
+
+
+# ── ①-2 ★**흔들리면 안 되는 값** — 재료 파이프라인의 불변량 ────────
+#
+#   같은 재료를 같은 규칙으로 자르면 `ring_seen`·`ring_kept` 는 **결정론**이다.
+#   도구를 몇 번 부르든 안 움직인다(`observe.record_rings` 가 `edge_id` 로 중복을
+#   접는다 — §4-9 가 그걸 고친 자리다). 그러니 여기가 흔들리면 그건 **모델 탓이
+#   아니라** 랭킹이 바뀌었거나 계측이 깨진 것이다.
+#
+#   ★반대로 `cited_rings` 는 **LLM 이 무엇을 인용했나**에 달려 있어 흔들리는 것이
+#     정상이다. 셋을 한 표에 섞어 두면 「무엇이 흔들려야 정상인가」가 안 보인다 —
+#     실제로 같은 재료(seen 1008 · kept 110)에서 인용만 R0 이 1 대 2 로 갈린
+#     실측이 있고, 모수가 9뿐이라 그 1건이 11% 로 보인다.
+
+
+def total_ring_seen(passes: Passes) -> Spread:
+    """도구가 본 관계 수. ★**span 0 이어야 정상**이다."""
+    return _per_pass(passes, lambda runs: sum(
+        sum(r.observed.ring_seen.values()) for r in runs.values()))
+
+
+def total_ring_kept(passes: Passes) -> Spread:
+    """상한에 남은 관계 수. ★**span 0 이어야 정상**이다."""
+    return _per_pass(passes, lambda runs: sum(
+        sum(r.observed.ring_kept.values()) for r in runs.values()))
+
+
+def total_cited_relations(passes: Passes) -> Spread:
+    """최종 인용된 **관계** 수. ★위 둘과 달리 **흔들리는 것이 정상**이다."""
+    return _per_pass(passes, lambda runs: sum(
+        sum(r.observed.cited_rings.values()) for r in runs.values()))
+
+
+def material_is_stable(passes: Passes) -> bool:
+    """재료 파이프라인이 불변이었나. ★거짓이면 **모델 비교가 성립하지 않는다** —
+    재료가 달랐다는 뜻이라, 인용이나 도구 선택의 차이를 모델에 귀속시킬 수 없다."""
+    return (total_ring_seen(passes).span == 0
+            and total_ring_kept(passes).span == 0)
 
 
 def total_uncited(passes: Passes) -> Spread:

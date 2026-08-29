@@ -137,9 +137,31 @@ def build(runs: dict[str, CaseRun],
         stability = variance.overall_stability(passes)
         add(f"패스 **{len(passes)}회** · 케이스 {len(CASES)}개")
         add()
+        stable = variance.material_is_stable(passes)
+        add("**흔들리면 안 되는 것** — 재료 파이프라인의 불변량입니다.")
+        add()
+        add("| 지표 | 값 |")
+        add("|---|---|")
+        add(f"| 도구가 본 관계 | {variance.total_ring_seen(passes).describe()} |")
+        add(f"| 상한에 남은 관계 | {variance.total_ring_kept(passes).describe()} |")
+        add()
+        if stable:
+            add("★재료가 **안 움직였습니다.** 아래 값들의 흔들림은 모델·LLM 몫으로 "
+                "읽어도 됩니다.")
+        else:
+            add("★⚠ **재료가 움직였습니다 — 아래 비교는 성립하지 않습니다.** 같은 "
+                "재료를 같은 규칙으로 자르면 이 둘은 결정론입니다"
+                "(`observe.record_rings` 가 `edge_id` 로 중복을 접습니다). "
+                "흔들렸다면 **모델이 아니라** 랭킹이 바뀌었거나 계측이 깨진 "
+                "것이므로, 그쪽을 먼저 보세요.")
+        add()
+        add("**흔들리는 것이 정상인 것** — LLM 이 정하는 값입니다.")
+        add()
         add("| 지표 | 값 |")
         add("|---|---|")
         add(f"| 도구 호출 총계 | {calls.describe()} |")
+        add(f"| 최종 인용된 관계 | "
+            f"{variance.total_cited_relations(passes).describe()} |")
         add(f"| 입력+출력 토큰 | {tokens.describe()} |")
         add(f"| uncited 비율 | {ratio.describe(percent=True)} |")
         add(f"| 임베딩 캐시 빗나감 | {variance.total_embed_misses(passes).describe()} |")
