@@ -89,6 +89,9 @@ def _model():
         _chat = ChatOpenAI(
             model=config.AGENT_MODEL, api_key=config.OPENAI_API_KEY,
             **config.temperature_kwargs(config.AGENT_TEMPERATURE),
+            # ★추론 세기와 전송 경로를 **함께** 받는다 — chat.completions 는
+            #   function tools 와 추론을 같이 못 쓴다(까닭은 `config` 에).
+            **config.reasoning_kwargs(config.AGENT_REASONING_EFFORT),
         ).bind_tools(agent_tools.agent_tools())
     return _chat
 

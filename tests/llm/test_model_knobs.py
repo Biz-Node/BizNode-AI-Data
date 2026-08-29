@@ -110,6 +110,62 @@ def test_blank_forms_all_mean_do_not_send(value):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  ②-2 추론 세기 — ★전송 경로와 함께 움직인다
+# ══════════════════════════════════════════════════════════════════
+
+
+def test_none_effort_stays_on_chat_completions():
+    """`none` 이면 추론을 끄고 **기본 경로 그대로** 간다."""
+    assert config.reasoning_kwargs("none") == {"reasoning_effort": "none"}
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+def test_real_effort_forces_the_responses_api(effort):
+    """★chat.completions 는 function tools 와 추론을 **같이 못 쓴다.** 노브를
+    둘로 두면 한쪽만 바꿔 400 을 맞는 조합이 생기므로 함께 낸다."""
+    assert config.reasoning_kwargs(effort) == {
+        "reasoning_effort": effort, "use_responses_api": True}
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_blank_effort_sends_nothing(value):
+    """★`gpt-4o-mini` 같은 비추론 모델은 `reasoning_effort` 자체를 거부한다 —
+    모델을 되돌릴 때 이 값도 비울 수 있어야 한다."""
+    assert config.reasoning_kwargs(value) == {}
+
+
+def test_the_agent_gets_the_effort_knob(monkeypatch, made):
+    monkeypatch.setattr(config, "AGENT_REASONING_EFFORT", "none")
+    agent_loop._model()
+    assert made[0]["reasoning_effort"] == "none"
+    assert "use_responses_api" not in made[0]
+
+
+def test_turning_reasoning_on_switches_transport_in_one_move(monkeypatch, made):
+    monkeypatch.setattr(config, "AGENT_REASONING_EFFORT", "low")
+    agent_loop._model()
+    assert made[0]["reasoning_effort"] == "low"
+    assert made[0]["use_responses_api"] is True,         "추론만 켜고 경로를 안 바꾸면 도구 호출이 400 으로 죽는다"
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ②-3 기본값 — ★모델과 temperature 는 **함께** 움직여야 한다
+# ══════════════════════════════════════════════════════════════════
+
+
+def test_defaults_are_a_consistent_combination():
+    """★기본 모델이 gpt-5.6 계열이면 temperature 는 **비어 있어야** 한다.
+    한쪽만 바꾸면 `/ask` 가 첫 호출에서 400 으로 죽는다 — 이 조합이 어긋난 채
+    커밋되는 것을 막는다."""
+    if config.AGENT_MODEL.startswith("gpt-5"):
+        assert config.temperature_kwargs(config.AGENT_TEMPERATURE) == {},             f"{config.AGENT_MODEL} 은 temperature 를 거부한다"
+    if config.ANSWER_MODEL.startswith("gpt-5"):
+        assert config.temperature_kwargs(config.ANSWER_TEMPERATURE) == {},             f"{config.ANSWER_MODEL} 은 temperature 를 거부한다"
+    if not config.AGENT_MODEL.startswith("gpt-5"):
+        assert config.reasoning_kwargs(config.AGENT_REASONING_EFFORT) == {},             f"{config.AGENT_MODEL} 은 reasoning_effort 를 거부한다"
+
+
+# ══════════════════════════════════════════════════════════════════
 #  ③ 명시 인자가 노브를 이긴다 — 테스트·배치가 고정할 수 있어야 한다
 # ══════════════════════════════════════════════════════════════════
 

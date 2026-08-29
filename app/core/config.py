@@ -33,8 +33,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # 불가능**했다 — 노브가 하나면 바꾸는 순간 답변 모델도 같이 움직이고, 평가셋
 # 점수 차이를 어느 쪽에 귀속시킬지 못 가른다. 이 저장소가 임베딩 드리프트와
 # 링 계측기에서 두 번 겪은 것과 **같은 종류의 귀속 문제**다.
+# ★**둘이 다른 값인 것이 실측 결과다**(2026-08-29 · Evaluation §10-9).
+#   `gpt-5.6-sol` 로 **둘 다** 바꿔 평가셋을 돌렸더니 Agent 쪽이 계약을 깼다 —
+#   한 케이스가 도구를 **14회**(상한 12) 불렀고, 총 호출이 36 → **96**(2.7배),
+#   소요가 134 → 310초였다. 답변 쪽은 반대로 `unlinked` 가 4 → 2 로 줄었다.
+#   그래서 **재료를 모으는 쪽은 싼 모델, 답변을 쓰는 쪽은 좋은 모델**로 둔다.
 AGENT_MODEL = os.getenv("AGENT_MODEL", "gpt-4o-mini")
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-5.6-sol")
 
 # ★**temperature 도 노브다 — 모델과 붙어 움직이기 때문이다.**
 #
@@ -52,8 +57,18 @@ ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 #   ★**자동으로 빼지 않는다.** 「왜 0 이 아닌가」가 코드에 숨지 않고 `.env` 에
 #     보여야 한다. 잘못 조합하면 API 가 400 으로 **크게** 실패하는데, 조용히
 #     다른 값으로 도는 것보다 그쪽이 낫다.
+#   ★**기본값이 둘 다 다르다** — 모델이 다르기 때문이다. Agent 는
+#     `gpt-4o-mini` 라 0 을 지킬 수 있고, 답변은 gpt-5.6 계열이라 **비워야**
+#     한다. 모델과 이 값은 **항상 함께** 움직인다
+#     (`tests/llm/test_model_knobs.py::test_defaults_are_a_consistent_combination`).
 AGENT_TEMPERATURE = os.getenv("AGENT_TEMPERATURE", "0.0")
-ANSWER_TEMPERATURE = os.getenv("ANSWER_TEMPERATURE", "0.0")
+ANSWER_TEMPERATURE = os.getenv("ANSWER_TEMPERATURE", "")
+
+# ★**추론 세기 — 전송 경로와 함께 움직인다.** 아래 `reasoning_kwargs` 참고.
+#   기본이 **빈 값**인 것은 기본 Agent 모델(`gpt-4o-mini`)이 이 인자 자체를
+#   거부하기 때문이다. Agent 를 gpt-5.6 계열로 바꾸면 **반드시 함께** 채워야
+#   한다 — `none` 이면 기존 경로, `low` 이상이면 Responses API 로 넘어간다.
+AGENT_REASONING_EFFORT = os.getenv("AGENT_REASONING_EFFORT", "")
 
 
 def temperature_kwargs(value) -> dict:
@@ -74,6 +89,31 @@ def temperature_kwargs(value) -> dict:
         if not value:
             return {}
     return {"temperature": float(value)}
+
+
+def reasoning_kwargs(effort: str) -> dict:
+    """`reasoning_effort` 와 **그것이 강제하는 전송 경로**를 함께 낸다.
+
+    ★**둘을 따로 못 고른다.** chat.completions 는 function tools 와 추론을 함께
+      못 쓴다(실측 2026-08-29):
+
+          Function tools with reasoning_effort are not supported for
+          gpt-5.6-luna in /v1/chat/completions. To use function tools,
+          use /v1/responses or set reasoning_effort to 'none'.
+
+      그래서 `none` 이 아닌 값을 고르면 **Responses API 로 가야 한다.** 노브를
+      둘로 두면 한쪽만 바꿔 놓고 400 을 맞는 조합이 생긴다 — 그 조합을 만들 수
+      없게 여기서 한 번에 낸다.
+
+    ★빈 값이면 아무것도 안 보낸다. `gpt-4o-mini` 같은 비추론 모델은
+      `reasoning_effort` 자체를 거부하므로, 모델을 되돌릴 때 이 값도 비워야 한다.
+    """
+    effort = (effort or "").strip()
+    if not effort:
+        return {}
+    if effort == "none":
+        return {"reasoning_effort": "none"}
+    return {"reasoning_effort": effort, "use_responses_api": True}
 
 # ── 뉴스 수집 (P2) ─────────────────────────────────────────────
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
