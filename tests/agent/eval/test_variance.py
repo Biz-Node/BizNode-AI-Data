@@ -18,7 +18,7 @@ from tests.agent.eval.runner import CaseRun
 
 
 def _run(tools: dict, *, tool_calls=None, claims=0, uncited=0,
-         input_tokens=0, output_tokens=0) -> CaseRun:
+         input_tokens=0, output_tokens=0, embed_misses=0) -> CaseRun:
     """관측만 채운 `CaseRun`. 집계가 읽는 자리는 `observed` 와 `state` 뿐이다."""
     seen = observe.Observation()
     seen.tools_used = Counter(tools)
@@ -26,6 +26,7 @@ def _run(tools: dict, *, tool_calls=None, claims=0, uncited=0,
     seen.claims_uncited = uncited
     seen.llm_input_tokens = Counter({"모델": input_tokens})
     seen.llm_output_tokens = Counter({"모델": output_tokens})
+    seen.embed_cache_misses = embed_misses
     calls = sum(tools.values()) if tool_calls is None else tool_calls
     return CaseRun(case=None, state={"tool_calls_used": calls},
                    observed=seen, took_ms=0)
@@ -57,6 +58,18 @@ def test_total_tool_calls_sums_each_pass():
     ]
     got = variance.total_tool_calls(passes)
     assert got.values == [3.0, 4.0]
+
+
+def test_embed_misses_are_summed_per_pass():
+    """★변동폭과 **나란히** 읽는 값이다. 빗나간 만큼 그 패스는 직접 계산했고,
+    그만큼 위의 변동폭을 Agent 에 귀속시킬 수 없다."""
+    passes = [
+        {"a": _run({}, embed_misses=3), "b": _run({}, embed_misses=8)},
+        {"a": _run({}, embed_misses=0), "b": _run({}, embed_misses=0)},
+    ]
+    got = variance.total_embed_misses(passes)
+    assert got.values == [11.0, 0.0]
+    assert got.span == 11.0
 
 
 def test_total_tokens_adds_input_and_output():

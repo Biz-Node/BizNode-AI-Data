@@ -99,6 +99,22 @@ def total_tokens(passes: Passes) -> Spread:
         for r in runs.values()))
 
 
+def total_embed_misses(passes: Passes) -> Spread:
+    """패스마다 임베딩 캐시가 몇 건 빗나갔나 — **남은 노이즈원의 크기**다.
+
+    ★변동폭과 **나란히 읽어야** 하는 값이다. 빗나간 만큼 그 패스는 임베딩을
+      직접 계산했고, 그 값은 실행마다 흔들린다(현황서 §8-13). 즉 여기 수가
+      크면 위의 변동폭 중 **얼마가 Agent 때문인지 가를 수 없다.**
+
+    ★`EMBED_CACHE_STRICT=1` 은 이걸 0 으로 만드는 장치가 **아니다.**
+      `_default_embed` 를 타는 경로만 걸리고, `search_news`·`search_dart` 의
+      질의는 `ChromaStore.query()` 로 캐시를 우회한다 — 그 질의문은 LLM 이
+      매번 새로 쓴다(`docs/BizNode_Agent_Evaluation.md` §10-7).
+    """
+    return _per_pass(passes, lambda runs: sum(
+        r.observed.embed_cache_misses for r in runs.values()))
+
+
 def total_uncited(passes: Passes) -> Spread:
     return _per_pass(passes, lambda runs: sum(
         r.observed.claims_uncited for r in runs.values()))

@@ -142,8 +142,14 @@ def build(runs: dict[str, CaseRun],
         add(f"| 도구 호출 총계 | {calls.describe()} |")
         add(f"| 입력+출력 토큰 | {tokens.describe()} |")
         add(f"| uncited 비율 | {ratio.describe(percent=True)} |")
+        add(f"| 임베딩 캐시 빗나감 | {variance.total_embed_misses(passes).describe()} |")
         add(f"| ★**도구 조합 안정성** | {stability:.2f} "
             f"(1.00 = 매번 같은 조합) |")
+        add()
+        add("★**빗나감을 나란히 보세요.** 0 이 아니면 그 패스는 임베딩을 직접 "
+            "계산했고 그 값은 실행마다 흔들립니다(현황서 §8-13) — 위 변동폭 중 "
+            "얼마가 Agent 때문인지 그만큼 못 가릅니다. `EMBED_CACHE_STRICT=1` 은 "
+            "이걸 0 으로 만드는 장치가 **아닙니다**(Evaluation §10-7).")
         add()
         add("★**두 줄을 갈라 읽으세요.** 총계의 폭만 보면 안 됩니다 — 도구 "
             "**조합**이 통째로 바뀌었는데 합계는 같을 수 있습니다"
