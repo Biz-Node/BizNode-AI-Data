@@ -17,6 +17,19 @@
 
 ★워크스페이스가 없으면 `/ask` 는 검색조차 하지 않는다(설계서 §16-2). 기본값을
   삼성전자·SK하이닉스로 둔다 — `--workspace` 로 바꾼다.
+
+★**옵션은 모드 뒤에 쓴다** — 앞에 쓰면 모드 이름까지 옵션 값으로 먹힌다.
+
+    # 보고 있는 기업이 있다 (워크스페이스는 기본값 그대로)
+    python run_test.py ask "이 회사 최근 리스크 어때?" --context 00126380
+
+    # 워크스페이스 없이 — 빈 `--workspace` 가 먼저, `--context` 가 맨 끝
+    python run_test.py ask "이 회사 최근 리스크 어때?" --workspace --context 00126380
+
+  ★위 두 줄은 **그대로 복사해 붙이면 된다.** 설명을 명령 뒤에 `#` 없이 달지
+    않는다 — 맨 끝 옵션이 `nargs="*"` 라 그 설명까지 기업 키로 먹는다. 실제로
+    「워크스페이스 없이」가 앵커로 들어가 도구 4종이 범위 밖으로 거부됐다
+    (2026-08-29). 명령과 설명은 **줄을 갈라 둔다.**
 """
 
 from __future__ import annotations
@@ -232,8 +245,12 @@ def cmd_ask(args) -> None:
     new_trace_id()
     with observe.observing() as seen:
         state = ask_graph().invoke(
+            # ★`context_keys` 를 **빠뜨리면 안 된다.** 전에 여기만 빠져 있어
+            #   `--context` 가 조용히 버려졌다 — `anchor` 는 CONTEXT 로 가는데
+            #   `ask` 는 같은 입력에서 재료 없이 멈췄다(2026-08-29).
             initial_state(AskRequest(question=args.question,
-                                     workspace_keys=args.workspace)))
+                                     workspace_keys=args.workspace,
+                                     context_keys=args.context)))
 
     decision = state.get("decision")
     source = decision.source.value if decision else "—"
@@ -308,29 +325,42 @@ def cmd_ask(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="BizNode 수동 시험 — ★`ask` 만 LLM 을 부른다(비용).")
-    parser.add_argument("--workspace", nargs="*", default=_WORKSPACE,
-                        help=f"워크스페이스 corp_code (기본 {_WORKSPACE})")
-    # ★「담은 것」이 아니라 「보고 있는 것」이다. `--workspace ` (빈 목록)과 함께
-    #   주면 **워크스페이스 없이** 답하는 경로를 손으로 확인할 수 있다.
-    parser.add_argument("--context", nargs="*", default=[],
-                        help="지금 보고 있는 기업 corp_code (기업 상세 화면이 넘기는 값)")
     sub = parser.add_subparsers(dest="mode")
 
-    p = sub.add_parser("anchor", help="앵커가 어느 갈래로 가나 (무료)")
+    # ★두 옵션은 **모드 뒤에** 온다 — 앞에 두면 `nargs="*"` 가 모드 이름과
+    #   질문까지 삼킨다. `--workspace 00126380 ask "질문"` 은 워크스페이스를
+    #   `['00126380', 'ask', '질문']` 으로 읽고 모드를 `None` 으로 만들어,
+    #   **도움말만 찍고 조용히 끝났다** — 「답변이 안 나온다」의 정체였다.
+    #   부모 파서로 내리면 옵션이 명령줄 끝에 서므로 삼킬 것이 없고, 옛 순서는
+    #   invalid choice 로 **소리 내며** 실패한다(2026-08-29).
+    workspace_opt = argparse.ArgumentParser(add_help=False)
+    workspace_opt.add_argument("--workspace", nargs="*", default=_WORKSPACE,
+                               help=f"워크스페이스 corp_code (기본 {_WORKSPACE})")
+    # ★「담은 것」이 아니라 「보고 있는 것」이다. `--workspace ` (빈 목록)과 함께
+    #   주면 **워크스페이스 없이** 답하는 경로를 손으로 확인할 수 있다.
+    context_opt = argparse.ArgumentParser(add_help=False)
+    context_opt.add_argument("--context", nargs="*", default=[],
+                             help="지금 보고 있는 기업 corp_code (기업 상세 화면이 넘기는 값)")
+
+    p = sub.add_parser("anchor", parents=[workspace_opt, context_opt],
+                       help="앵커가 어느 갈래로 가나 (무료)")
     p.add_argument("question")
     p.set_defaults(func=cmd_anchor)
 
-    p = sub.add_parser("search", help="검색 계층만 (무료)")
+    p = sub.add_parser("search", parents=[workspace_opt],
+                       help="검색 계층만 (무료)")
     p.add_argument("question")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("tools", help="도구 7종을 직접 부른다 (무료)")
+    p = sub.add_parser("tools", parents=[workspace_opt],
+                       help="도구 7종을 직접 부른다 (무료)")
     p.add_argument("key", help="corp_code 또는 norm_name (예: 00126380 · 삼성전자)")
     p.add_argument("--query", default="최근 리스크", help="의미검색 도구에 넘길 질의")
     p.add_argument("--limit", type=int, default=3, help="도구마다 몇 건까지 찍나")
     p.set_defaults(func=cmd_tools)
 
-    p = sub.add_parser("ask", help="★Agent 루프 끝까지 (LLM 호출 · 비용)")
+    p = sub.add_parser("ask", parents=[workspace_opt, context_opt],
+                       help="★Agent 루프 끝까지 (LLM 호출 · 비용)")
     p.add_argument("question")
     p.set_defaults(func=cmd_ask)
 

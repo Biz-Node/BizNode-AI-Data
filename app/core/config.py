@@ -39,7 +39,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 #   소요가 134 → 310초였다. 답변 쪽은 반대로 `unlinked` 가 4 → 2 로 줄었다.
 #   그래서 **재료를 모으는 쪽은 싼 모델, 답변을 쓰는 쪽은 좋은 모델**로 둔다.
 AGENT_MODEL = os.getenv("AGENT_MODEL", "gpt-4o-mini")
-ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-5.6-sol")
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
 
 # ★**temperature 도 노브다 — 모델과 붙어 움직이기 때문이다.**
 #
