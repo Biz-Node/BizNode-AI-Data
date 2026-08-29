@@ -21,6 +21,7 @@ from app.services.retrieve_service import _MAX_LOGGED_EVIDENCE
 from app.tools import graph_tools
 from app.graph import budget
 from app.tools.scope import anchor_scope
+from app.services.retrieve_service import has_starting_point
 from app.services.retrieve_service import (RetrieveService, _anchor_companies,
                                            _companies_from,
                                            _hits_reflect_the_anchor,
@@ -49,8 +50,22 @@ def _svc() -> RetrieveService:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ① guard_workspace — 워크스페이스가 비었나 (설계서 §16-2)
+#  ① guard_workspace — 출발점이 하나라도 있나 (설계서 §16-2)
 # ══════════════════════════════════════════════════════════════════
+
+
+def _has_starting_point(state: AskState) -> bool:
+    """재료를 모을 **출발점**이 있나 — 담은 것이든 보고 있는 것이든.
+
+    ★게이트가 보는 것은 「워크스페이스가 비었나」가 **아니라** 「출발점이
+      없나」다. 둘은 `context_keys` 가 생기기 전까지만 같은 말이었다 —
+      기업 상세 페이지에서 묻는 질문은 담아 둔 것이 없어도 대상이 있다.
+
+    ★판정 자체는 **`retrieve_service` 에 한 벌만** 있다. 대조 기준선
+      (`AnswerService.ask`)이 같은 판정을 해야 하는데, 두 곳에 적으면
+      갈린다 — 여기는 State 모양으로 받아 넘기는 껍데기다.
+    """
+    return has_starting_point(state["request"])
 
 
 def guard_workspace(state: AskState) -> AskState:
@@ -58,15 +73,19 @@ def guard_workspace(state: AskState) -> AskState:
 
     「무엇에 대한 인사이트인가」가 정해지지 않으면 답하지 않는 것이 맞다.
     실제 분기는 조건부 엣지가 하고, 이 노드는 **그 사실을 로그에 남긴다.**
+
+    ★노드 이름을 안 바꿨다 — `ask_graph.py` 가 문자열로 붙이고 로그·테스트가
+      전부 이 이름을 쓴다. 「이름이 갈리면 어느 노드 얘기인지 대조해야 한다」
+      (같은 파일의 노드 이름 주석). 판정의 뜻은 `_has_starting_point` 에 있다.
     """
-    if not state["request"].workspace_keys:
-        log.info("ask.rejected reason=empty_workspace")
+    if not _has_starting_point(state):
+        log.info("ask.rejected reason=no_starting_point")
     return {}
 
 
 def has_workspace(state: AskState) -> str:
-    """조건부 엣지 — 워크스페이스가 비었으면 재료 없이 끝낸다."""
-    return "search" if state["request"].workspace_keys else "halt_no_material"
+    """조건부 엣지 — 출발점이 하나도 없으면 재료 없이 끝낸다."""
+    return "search" if _has_starting_point(state) else "halt_no_material"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -116,11 +135,19 @@ def resolve_anchor(state: AskState) -> AskState:
 
     ★이름 조회는 **경계에서 한 번**이다(설계서 §16-3). 여기서는 그 결과를
       메모리에서 대조만 한다 — 「새 검색을 하지 않는다」(§10 ①b).
+
+    ★`context_keys` 도 **같은 함수로** 이름을 붙인다. `names_of()` 가 하는
+      일은 「key 목록 → 표시용 이름, 못 찾은 key 는 그대로 둔다」뿐이라
+      목록의 출처를 안 따진다. 두 벌을 두면 못 찾은 key 의 처리가 갈린다.
+      ★비면 조회하지 않는다 — `names_of([])` 는 Neo4j 왕복이라 공짜가 아니다.
     """
     request = state["request"]
     workspace_names = workspace_service.names_of(request.workspace_keys)
+    context_names = (workspace_service.names_of(request.context_keys)
+                     if request.context_keys else {})
     decision = query_understanding.decide_anchor(
-        request.question, state["query"].resolved_entities, workspace_names)
+        request.question, state["query"].resolved_entities, workspace_names,
+        context_names)
     if decision.source is AnchorSource.UNRESOLVED:
         log.info("ask.unresolved named=%r — 재료를 만들지 않는다", decision.named)
     return {"decision": decision}

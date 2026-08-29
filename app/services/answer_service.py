@@ -19,7 +19,8 @@ from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, Ma
 from app.core.trace import trace_logger
 from app.services import claim_check, evidence_selector, material_consistency
 from app.services.query_understanding import AnchorDecision
-from app.services.retrieve_service import RetrieveService, _default_embed
+from app.services.retrieve_service import (RetrieveService, _default_embed,
+                                           has_starting_point)
 from app.llm import prompt as shared
 from app.llm.prompt import EventRef, RelationRef
 from pipeline.llm import ask_json
@@ -158,6 +159,32 @@ C: 관련 근거 없음
 단, evidence의 about이 해당 워크스페이스 기업과 연결되지 않았다면
 워크스페이스 기업이라는 이유만으로 그 evidence를 사용하지 않습니다.
 
+이 [워크스페이스] 절의 규칙은
+"답변 대상: 워크스페이스"일 때만 적용합니다.
+
+
+[보고 있는 기업]
+
+[사실]의 "답변 대상: 보고 있는 기업"은
+질문이 특정 기업을 지정하지 않았지만
+사용자가 지금 그 기업의 화면을 보고 있다는 뜻입니다.
+
+이때 답변의 주체는 그 기업입니다.
+워크스페이스에 담겨 있지 않아도 주체로 씁니다.
+
+워크스페이스 기업이 함께 있으면
+그 기업들과 어떻게 닿는지를 함께 밝힙니다.
+
+닿지 않으면 닿지 않는다고 말합니다.
+
+예:
+"두산로보틱스에 노조 설립이 있었습니다.
+ 담아두신 기업과는 직접 연결이 확인되지 않습니다."
+
+연결이 확인되지 않았다는 사실 자체가 정보입니다.
+"같은 업종이니 영향이 있을 수 있다"처럼
+근거 없는 연결을 만들지 않습니다.
+
 
 [검색 방식]
 
@@ -273,7 +300,9 @@ freshness="stale"인 정보는 현재 사실처럼 표현하지 않고
 9. symmetric=True 관계에 방향을 부여하지 않았는가?
 10. 보도일을 사건 발생일로 잘못 표현하지 않았는가?
 11. SEMANTIC 결과를 확정된 사실처럼 표현하지 않았는가?
-12. 워크스페이스 밖의 기업을 워크스페이스 인사이트의 주체로 사용하지 않았는가?
+12. ("답변 대상: 워크스페이스"일 때만)
+    워크스페이스 밖의 기업을 워크스페이스 인사이트의 주체로 사용하지 않았는가?
+    "답변 대상: 보고 있는 기업"이면 그 기업이 주체인 것이 정상입니다.
 13. 각 evidence_id가 실제 존재하는가?
 14. 각 claim의 evidence_ids가 해당 claim을 실제로 뒷받침하는가?
 
@@ -620,11 +649,14 @@ class AnswerService:
 
     def ask(self, request: AskRequest) -> AskResponse:
         """질문 하나 → 답변 문장 + 화이트리스트를 통과한 근거."""
-        # ── 워크스페이스가 비었나 (설계서 §16-2) ────────────────────────
+        # ── 출발점이 하나라도 있나 (설계서 §16-2) ───────────────────────
         # ★검색조차 하지 않는다 — 재료를 모을 출발점이 없다. 「무엇에 대한
         #   인사이트인가」가 정해지지 않으면 답하지 않는 것이 맞다.
-        if not request.workspace_keys:
-            log.info("ask.rejected reason=empty_workspace")
+        # ★`context_keys` 를 함께 본다 — **그래프 경로와 같은 함수**를 쓴다
+        #   (`retrieve_service.has_starting_point`). 이 메서드가 대조 기준선이라
+        #   판정이 갈리면 parity 가 「고친 쪽이 틀렸다」고 말하게 된다.
+        if not has_starting_point(request):
+            log.info("ask.rejected reason=no_starting_point")
             return _no_material(_NO_WORKSPACE_MESSAGE)
 
         decision, retrieved = self._retrieve_service.retrieve_for_ask(request)

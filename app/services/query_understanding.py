@@ -6,7 +6,12 @@
 
         O  ×  O   → query        그것을 대상으로 답한다
         O  ×  ✗   → unresolved   ★못 찾았다고 말하고 끝낸다. 워크스페이스로 안 갈아탄다
-        ✗  ×  —   → workspace    워크스페이스 기업을 대상 문맥으로 해석한다
+        ✗  ×  —   → context      **보고 있는 기업**이 있으면 그것 (★워크스페이스보다 먼저)
+        ✗  ×  —   → workspace    없으면 워크스페이스 기업을 대상 문맥으로 해석한다
+
+★**`context` 가 `workspace` 앞이다.** 상세 페이지에서 「이 회사 노조 리스크
+  어때?」를 물으면 답은 그 회사이지 담아 둔 기업이 아니다. 화면이 보여주는 것을
+  무시하고 담아 둔 것으로 답하면, 그것도 「물은 것과 다른 대상으로 답하기」다.
 
 ★**왜 이 모듈이 따로 있나** — 판정 조각이 세 곳에 흩어져 있었다
   (`AnchorExtractor`·`EntityResolver`·`GraphSearcher._primary_resolution`). 「하나의
@@ -53,7 +58,8 @@ class AnchorDecision:
     """「무엇을 대상으로 답하는가」 — 서버가 아는 **결정론적** 값이다."""
 
     source: AnchorSource
-    # `source=query` 면 질문이 지정한 기업, `workspace` 면 워크스페이스 기업.
+    # `source=query` 면 질문이 지정한 기업, `context` 면 보고 있는 기업,
+    # `workspace` 면 워크스페이스 기업.
     # `unresolved` 면 **비어 있다** — 재료를 만들지 않는다(설계서 §14-4).
     anchors: list[Anchor] = field(default_factory=list)
     # `unresolved` 일 때 사용자가 지목한 것으로 보이는 문자열. 「'TSMC' 에
@@ -64,6 +70,11 @@ class AnchorDecision:
     #   조립하는 쪽이 같은 조회를 또 한다. `unresolved` 의 대안 제안(§14-4)과
     #   워크스페이스 소속 표기(§12)가 이 값을 쓴다.
     workspace_names: dict[str, str] = field(default_factory=dict)
+    # ★보고 있는 기업 key → 이름. `workspace_names` 와 **같은 이유로** 항상
+    #   채운다 — 조회는 경계에서 끝났고, 문구를 조립하는 쪽이 같은 조회를
+    #   또 하지 않게 한다. `halt_no_material` 이 「담긴 기업도 보고 있는 기업도
+    #   없다」를 가를 때와 프롬프트 머리말이 이 값을 쓴다.
+    context_names: dict[str, str] = field(default_factory=dict)
 
 
 def _name_tokens(question: str) -> list[str]:
@@ -72,14 +83,18 @@ def _name_tokens(question: str) -> list[str]:
         t.form for t in kiwi().tokenize(question) if t.tag in _NAME_TAGS))
 
 
-def _workspace_hit(question: str, workspace_names: dict[str, str]) -> Optional[str]:
-    """①a 1차 — 질문에 워크스페이스 기업 이름이 있나.
+def _name_hit(question: str, names: dict[str, str]) -> Optional[str]:
+    """①a 1차 — 질문에 **이 목록의 기업 이름**이 있나.
 
     ★**새 조회가 아니다.** 최대 수십 개 문자열이 메모리에 있다(설계서 §14-7).
       표기가 달라도 걸리도록 정규화 형태로도 한 번 본다.
+
+    ★워크스페이스와 **보고 있는 기업 양쪽에** 쓴다. 하는 일이 「이 이름들 중
+      하나가 질문에 있나」뿐이라 목록의 출처를 따질 이유가 없다 — 그래서
+      이름이 `_workspace_hit` 이 아니다.
     """
     squashed = "".join(question.split()).lower()
-    for name in workspace_names.values():
+    for name in names.values():
         if not name:
             continue
         if name in question or normalize_company_name(name).lower() in squashed:
@@ -97,21 +112,36 @@ def decide_anchor(
     question: str,
     resolved_entities: list[Resolution],
     workspace_names: dict[str, str],
+    context_names: Optional[dict[str, str]] = None,
 ) -> AnchorDecision:
-    """`anchor_source` 와 재료 앵커를 정한다. **호출은 ② Search 뒤**다."""
+    """`anchor_source` 와 재료 앵커를 정한다. **호출은 ② Search 뒤**다.
+
+    ★`context_names` 는 **기본값이 있다.** 부르는 쪽 셋(`material.resolve_anchor`·
+      `retrieve_service._search`·테스트)이 전부 3인자로 부르고 있어서, 없으면
+      「보고 있는 기업이 없다」로 읽히는 것이 맞다 — 빠뜨린 호출부가 조용히
+      다르게 동작하지 않는다.
+    """
     tokens = _name_tokens(question)
-    ws_hit = _workspace_hit(question, workspace_names)
+    context_names = context_names or {}
+    ws_hit = _name_hit(question, workspace_names)
+    ctx_hit = _name_hit(question, context_names)
 
     # ── ①b 1단 — corp_code (② Search 가 이미 낸 결과를 읽기만 한다) ─────
     if resolved_entities:
         best = _primary(resolved_entities)
-        return _query(best.corp_code, best.corp_name, "corp_code", workspace_names)
+        return _query(best.corp_code, best.corp_name, "corp_code",
+                      workspace_names, context_names)
 
     # ── ①b 2단 — norm_name fallback (설계서 §16-1 의 식별 우선순위) ──────
-    candidates = ([ws_hit] if ws_hit else []) + tokens
+    # ★`ctx_hit` 을 `ws_hit` 과 **같은 자리에** 넣는다. 둘 다 「질문에 이름이
+    #   있는데 ② Search 가 못 해소했다」는 같은 상황이고, 여기서 갈라야 할
+    #   이유가 없다 — 찾으면 `query` 다. **질문이 지목한 것**이기 때문이다.
+    candidates = ([ws_hit] if ws_hit else []) + \
+                 ([ctx_hit] if ctx_hit else []) + tokens
     found = company_service.find_by_names(candidates)
     if found is not None:
-        return _query(found["key"], found["name"], "norm_name", workspace_names)
+        return _query(found["key"], found["name"], "norm_name",
+                      workspace_names, context_names)
 
     # ── ①a — 그래서, 대상을 명시하기는 했나 ─────────────────────────────
     named = tokens
@@ -122,23 +152,44 @@ def decide_anchor(
         if non_company:
             log.info("anchor.non_company_dropped %s", non_company)
 
-    if ws_hit or named:
-        target = ws_hit or named[0]
+    if ws_hit or ctx_hit or named:
+        target = ws_hit or ctx_hit or named[0]
         log.info("anchor.source=unresolved named=%r tokens=%s", target, tokens)
         return AnchorDecision(source=AnchorSource.UNRESOLVED, named=target,
-                              workspace_names=workspace_names)
+                              workspace_names=workspace_names,
+                              context_names=context_names)
+
+    # ── ③ 보고 있는 기업 — ★**워크스페이스보다 먼저** ───────────────────
+    #
+    #   ★순서가 이 분기의 전부다. 상세 페이지에서 「이 회사 노조 리스크 어때?」를
+    #     물으면 답은 **그 회사**이지 담아 둔 기업이 아니다. 워크스페이스를 먼저
+    #     보면 화면이 무엇을 보여주고 있든 담아 둔 기업으로 답하게 된다 —
+    #     §14-3 이 막으려는 「물은 것과 다른 대상으로 답하기」의 같은 종류다.
+    #
+    #   ★워크스페이스가 **비어 있어도** 여기가 성립한다. 그래서 `guard_workspace`
+    #     의 게이트가 `workspace_keys or context_keys` 로 넓어진다.
+    if context_names:
+        anchors = [Anchor(key=key, name=name, source=AnchorSource.CONTEXT)
+                   for key, name in context_names.items()]
+        log.info("anchor.source=context anchors=%d", len(anchors))
+        return AnchorDecision(source=AnchorSource.CONTEXT, anchors=anchors,
+                              workspace_names=workspace_names,
+                              context_names=context_names)
 
     anchors = [Anchor(key=key, name=name, source=AnchorSource.WORKSPACE)
                for key, name in workspace_names.items()]
     log.info("anchor.source=workspace anchors=%d", len(anchors))
     return AnchorDecision(source=AnchorSource.WORKSPACE, anchors=anchors,
-                          workspace_names=workspace_names)
+                          workspace_names=workspace_names,
+                          context_names=context_names)
 
 
 def _query(key: str, name: str, via: str,
-           workspace_names: dict[str, str]) -> AnchorDecision:
+           workspace_names: dict[str, str],
+           context_names: Optional[dict[str, str]] = None) -> AnchorDecision:
     log.info("anchor.source=query key=%s name=%r via=%s", key, name, via)
     return AnchorDecision(
         source=AnchorSource.QUERY,
         anchors=[Anchor(key=key, name=name, source=AnchorSource.QUERY)],
-        workspace_names=workspace_names)
+        workspace_names=workspace_names,
+        context_names=context_names or {})

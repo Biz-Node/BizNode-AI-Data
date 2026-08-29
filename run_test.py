@@ -50,6 +50,7 @@ def cmd_anchor(args) -> None:
     """★`/ask` 의 척추는 `anchor_source` 세 갈래다. 이 모드가 그것만 본다.
 
         QUERY       질문이 대상을 지정했고 해소됐다     → Agent 호출됨
+        CONTEXT     **보고 있는 기업**이 있다           → Agent 호출됨 (워크스페이스보다 먼저)
         WORKSPACE   질문이 대상을 **지정하지 않았다**    → Agent 호출됨 · 의미검색
         UNRESOLVED  지정했는데 못 찾았다                → ★Agent 를 아예 안 부른다
 
@@ -61,7 +62,15 @@ def cmd_anchor(args) -> None:
     from app.graph.state import initial_state
 
     state = initial_state(AskRequest(question=args.question,
-                                     workspace_keys=args.workspace))
+                                     workspace_keys=args.workspace,
+                                     context_keys=args.context))
+    # ★게이트를 **먼저** 보여 준다. `--workspace` 와 `--context` 가 둘 다 비면
+    #   실제 `/ask` 는 여기서 끝나므로, 그 아래 판정은 일어나지 않는 일이다.
+    if not material._has_starting_point(state):
+        _head(f"앵커 판정 — {args.question!r}")
+        print("  게이트        : halt_no_material — 담긴 기업도 보고 있는 기업도 없다")
+        print("  Agent 호출    : 안 함 (검색조차 하지 않는다)")
+        return
     state.update(material.search(state))
     state.update(material.resolve_anchor(state))
 
@@ -301,6 +310,10 @@ def main() -> None:
         description="BizNode 수동 시험 — ★`ask` 만 LLM 을 부른다(비용).")
     parser.add_argument("--workspace", nargs="*", default=_WORKSPACE,
                         help=f"워크스페이스 corp_code (기본 {_WORKSPACE})")
+    # ★「담은 것」이 아니라 「보고 있는 것」이다. `--workspace ` (빈 목록)과 함께
+    #   주면 **워크스페이스 없이** 답하는 경로를 손으로 확인할 수 있다.
+    parser.add_argument("--context", nargs="*", default=[],
+                        help="지금 보고 있는 기업 corp_code (기업 상세 화면이 넘기는 값)")
     sub = parser.add_subparsers(dest="mode")
 
     p = sub.add_parser("anchor", help="앵커가 어느 갈래로 가나 (무료)")

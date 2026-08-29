@@ -204,7 +204,7 @@ def test_unresolved_never_reaches_the_agent(wired, fake_llm, fake_chat, request_
 
     monkeypatch.setattr(
         material.query_understanding, "decide_anchor",
-        lambda question, resolved, names: AnchorDecision(
+        lambda question, resolved, names, context=None: AnchorDecision(
             source=AnchorSource.UNRESOLVED, anchors=[], named="TSMC",
             workspace_names=dict(decision.workspace_names)))
 

@@ -70,7 +70,7 @@ def test_unresolved_searches_but_builds_no_material(monkeypatch, wired, fake_llm
     graph, service = wired
     monkeypatch.setattr(
         material.query_understanding, "decide_anchor",
-        lambda q, r, n: AnchorDecision(source=AnchorSource.UNRESOLVED, named="TSMC",
+        lambda q, r, n, c=None: AnchorDecision(source=AnchorSource.UNRESOLVED, named="TSMC",
                                        workspace_names={"00126380": "삼성전자"}))
 
     state = graph.invoke({"request": request_})
