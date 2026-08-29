@@ -147,8 +147,11 @@ def check_claims(state: AskState) -> AskState:
     if not claims:
         # ★**빈 것도 기록한다.** 「주장이 0건이었다」와 「이 노드를 안 지났다」가
         #   같은 값으로 보이면 uncited **비율의 분모**를 만들 수 없다.
+        # ★키 다섯을 **다 적는다.** `record_claims` 가 읽는 키가 다섯인데 넷만
+        #   적으면 이 dict 가 「넷만 읽는다」로 읽힌다. 지금은 `.get(...) or 0`
+        #   라 무해하지만, 기본값을 `.get(key)` 로 바꾸는 날 조용히 어긋난다.
         observe.record_claims({"claims": 0, "uncited": 0, "no_text": 0,
-                               "unlinked": 0})
+                               "unlinked": 0, "link_unknown": 0})
         return {}
 
     decision, intent = state["decision"], state["intent"]
