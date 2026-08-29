@@ -190,11 +190,22 @@ def build(runs: dict[str, CaseRun],
         add(f"| 케이스당 도구 호출 | 최소 {min(per_case)} · "
             f"중앙 {sorted(per_case)[len(per_case) // 2]} · 최대 {max(per_case)} "
             f"(상한 {budget.MAX_TOOL_CALLS}) |")
+    denied = sum(run.observed.tool_calls_denied_by_budget for run in runs.values())
     add(f"| ★**Agent 루프가 예산으로 잘린** 케이스 | {len(stopped)} / {len(CASES)} |")
+    add(f"| ★**예산이 막아 실행 안 한** 호출 | {denied} |")
     add(f"| 최종 `budget_exhausted` 플래그 | {len(flagged)} / {len(CASES)} |")
     add(f"| 임베딩 호출 | {embed_calls}회 · 캐시 적중 {embed_hits} · "
         f"빗나감 {embed_misses} |")
     add()
+    if denied:
+        add(f"★**한 턴이 남은 자리보다 많이 요청해 {denied}건을 안 돌렸습니다.** "
+            "그 호출들에도 「상한에 닿았다」 응답을 채워 넣었으므로 대화는 "
+            "온전합니다. 이 수가 크면 **모델이 한 턴에 병렬로 많이 부른다**는 "
+            "뜻이고, 상한을 올릴지 모델을 바꿀지의 근거가 됩니다"
+            "(Evaluation §10-9-1). ★도구가 스스로 거부한 것(「도구별 호출 빈도」의 "
+            "**거부** 열)과는 **다른 사실**입니다 — 저건 프롬프트 문제, 이건 예산 "
+            "문제입니다.")
+        add()
     add("★**두 줄을 갈라 읽으세요.** 플래그는 `fetch_propagation` 이 Agent 루프 "
         "**뒤에** 파급 예산을 채워도 켜집니다. 「상한을 올려야 하나」의 답이 갈립니다 — "
         "루프가 잘렸으면 **도구** 예산 얘기고, 뒤에서 찬 것이면 **파급** 예산 얘기입니다.")

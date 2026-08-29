@@ -56,6 +56,11 @@ class Observation:
     tool_items: Counter = field(default_factory=Counter)
     # 범위 밖 key 등으로 **거부된** 호출. ★재료를 늘리지 않은 호출이다.
     tool_errors: Counter = field(default_factory=Counter)
+    # ★한 턴이 상한을 넘겨 **실행하지 않은** 호출. `tool_errors` 와 갈라 센다 —
+    #   저건 범위 밖 key 처럼 **도구가** 거부한 것이고, 이건 **예산이** 막은
+    #   것이다. 한 통에 담으면 「Agent 가 범위를 자꾸 벗어난다」와 「상한이
+    #   낮다」가 같은 숫자로 보인다. 답이 갈리는 두 사실이다.
+    tool_calls_denied_by_budget: int = 0
 
     # ── 임베딩 ────────────────────────────────────────────────
     # `embed_with_cache` 진입 횟수. 텍스트 수가 아니라 **호출 수**다.
@@ -147,6 +152,7 @@ class Observation:
             "tools_used": dict(sorted(self.tools_used.items())),
             "tool_items": dict(sorted(self.tool_items.items())),
             "tool_errors": dict(sorted(self.tool_errors.items())),
+            "tool_calls_denied_by_budget": self.tool_calls_denied_by_budget,
             "embed_calls": self.embed_calls,
             "embed_texts": self.embed_texts,
             "embed_cache_hits": self.embed_cache_hits,
@@ -216,6 +222,19 @@ def record_agent_stopped_by_budget() -> None:
     seen = _BUCKET.get()
     if seen is not None:
         seen.agent_stopped_by_budget = True
+
+
+def record_tool_calls_denied_by_budget(count: int) -> None:
+    """한 턴이 상한을 넘겨 **실행하지 않은** 호출 수.
+
+    ★`record_tool_error` 와 갈라 둔다. 저기 쌓이는 것은 도구가 스스로 거부한
+      것(범위 밖 key 등)이고, 여기 쌓이는 것은 **예산이 막은** 것이다. 섞으면
+      「Agent 가 범위를 벗어난다」(프롬프트 문제)와 「상한이 낮다」(예산 문제)가
+      같은 숫자가 되어, 어느 쪽을 고쳐야 하는지 알 수 없다.
+    """
+    seen = _BUCKET.get()
+    if seen is not None and count:
+        seen.tool_calls_denied_by_budget += int(count)
 
 
 def record_tool(tool: str, items: int) -> None:
