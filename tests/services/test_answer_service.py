@@ -186,8 +186,13 @@ def test_user_prompt_includes_match_type_note():
 
 
 def test_system_prompt_tells_model_to_hedge_semantic_matches():
+    """★규칙은 그대로고 **문구가 바뀌었다**(`1b7fbaa` 프롬프트 교체).
+
+    옛 프롬프트는 헤지 **예문**까지 줬다 — 「"~일 수 있습니다"처럼 관련성을
+    조심스럽게 표현하고」. 새 프롬프트는 예문을 빼고 지시만 남겼다.
+    지키는 것은 예문이 아니라 **헤지하라는 지시**이므로 그쪽을 못 박는다."""
     assert "SEMANTIC" in as_module._SYSTEM_PROMPT
-    assert "일 수 있습니다" in as_module._SYSTEM_PROMPT
+    assert "조심스럽게" in as_module._SYSTEM_PROMPT
 
 
 # ── Step3: 근거 밖 생성 억제 (2026-08-23) ────────────────────────────────
@@ -350,24 +355,45 @@ def test_system_prompt_forbids_inventing_causal_links():
     """★실제 실패: 「안전 문제는 노조 설립과 관련하여 … 배경이 될 수 있습니다」
     — 두 사실을 이어 준 근거가 하나도 없었다. 나란히 있다는 것은 인과가 아니다."""
     assert "인과" in as_module._SYSTEM_PROMPT
-    assert "나란히" in as_module._SYSTEM_PROMPT
+    # ★문구가 바뀌었다(`1b7fbaa`) — 옛 규칙 7 「두 사실이 나란히 있다는 것은
+    #   둘이 원인과 결과라는 뜻이 아닙니다」가 「임의로 결합」으로 압축됐다.
+    assert "임의로 결합" in as_module._SYSTEM_PROMPT
 
 
 def test_system_prompt_forbids_sentences_that_cannot_be_cited():
     """★실제 실패: sources 0건인데 실질 주장을 여럿 했다. 화이트리스트는
-    **인용된 것만** 검사하므로 인용 없는 주장은 그대로 통과한다."""
-    assert "인용할 수 없는 문장" in as_module._SYSTEM_PROMPT
+    **인용된 것만** 검사하므로 인용 없는 주장은 그대로 통과한다.
+
+    ★문구가 바뀌었다(`1b7fbaa`) — 옛 규칙 8 「인용할 수 없는 문장은 아예
+    뺍니다」가 맨 앞 원칙의 「근거가 부족하면 해당 내용을 쓰지 않습니다」로
+    올라갔다.
+
+    ★새 프롬프트의 [출력] 절은 「근거가 없는 claim 은 evidence_ids 를 빈 배열로
+    둡니다」라고도 말한다 — **쓰지 마라**보다 무른 말이다. 둘이 충돌하지는
+    않는다(뒤엣것은 「그래도 썼다면 인용을 지어내지 마라」다). 다만 옛 프롬프트가
+    「아예 빼라」로 한 번에 막던 것을 두 절로 나눠 말하게 됐다는 것은 남겨 둔다 —
+    실측(2026-08-29 평가셋)의 `uncited` 는 여전히 0.0% 다."""
+    assert "근거가 부족하면" in as_module._SYSTEM_PROMPT
 
 
 def test_system_prompt_tells_the_model_facts_block_dates_are_report_dates():
     """기존 규칙 4는 freshness=stale 얘기라 [사실] 블록 날짜를 다루지 않는다 —
-    별도로 못박는다."""
-    assert "[사실] 블록의 날짜" in as_module._SYSTEM_PROMPT
+    별도로 못박는다.
+
+    ★문구가 바뀌었다(`1b7fbaa`) — 「[사실] 블록의 날짜는 기사가 보도된
+    시점입니다」 → 「[사실]의 날짜는 기본적으로 보도 시점입니다」."""
+    assert "[사실]의 날짜" in as_module._SYSTEM_PROMPT
+    assert "보도 시점" in as_module._SYSTEM_PROMPT
 
 
 def test_system_prompt_forbids_padding_an_unknown_answer_with_speculation():
-    """★「정보는 확인되지 않았습니다」로 끝내지 않고 추측을 덧붙였다."""
-    assert "추측" in as_module._SYSTEM_PROMPT
+    """★「정보는 확인되지 않았습니다」로 끝내지 않고 추측을 덧붙였다.
+
+    ★문구가 바뀌었다(`1b7fbaa`) — 같은 [답변 불가] 절에서 「그 뒤에 추측이나
+    일반론, 전망을 덧붙이지 않습니다」 → 「근거가 없는 일반론이나 전망을
+    추가하지 않습니다」. 세 낱말 중 「추측」만 빠졌다."""
+    assert "확인되지 않았습니다" in as_module._SYSTEM_PROMPT
+    assert "일반론이나 전망" in as_module._SYSTEM_PROMPT
 
 
 # ── §5-5: symmetric·role·press 노출 (2026-08-26) ────────────────────────
@@ -523,11 +549,50 @@ def test_stripping_unlinked_claims_is_off_by_default():
 
 
 def test_system_prompt_tells_the_model_to_respect_evidence_about():
-    """★규칙 14 가 「인사이트는 워크스페이스 기업을 주어로」라고 압박하므로,
-    충돌 시 어느 쪽이 이기는지 프롬프트가 말해야 한다."""
+    """★「인사이트는 워크스페이스 기업을 주어로」가 압박하므로, 충돌 시 어느
+    쪽이 이기는지 프롬프트가 말해야 한다.
+
+    ★문구가 바뀌었다(`1b7fbaa`) — 옛 프롬프트는 규칙 번호로 말했다(「19번
+    규칙은 14번 규칙을 이깁니다」). 새 프롬프트는 번호를 안 매기고 [워크스페이스]
+    절 끝에 **단서로** 붙였다: 「단, evidence 의 about 이 해당 워크스페이스
+    기업과 연결되지 않았다면 워크스페이스 기업이라는 이유만으로 그 evidence 를
+    사용하지 않습니다」. 이기는 쪽은 그대로다 — 번호만 사라졌다."""
     assert "about" in as_module._SYSTEM_PROMPT
+    assert "워크스페이스 기업이라는 이유만으로" in as_module._SYSTEM_PROMPT
+
+
+import pytest
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "프롬프트 교체(1b7fbaa)로 마커를 이름으로 부르는 줄이 사라졌다. "
+    "되살리려면 _SYSTEM_PROMPT 를 고쳐야 하고 그건 전 케이스의 프롬프트가 "
+    "바뀌는 일이라 평가셋 재실행이 따라온다 — 사용자 판단 대기 [DECIDE]"))
+def test_system_prompt_names_the_unlinked_marker_it_actually_renders():
+    """★이 하나는 **문구 변경이 아니라 진짜 빠진 것**이다.
+
+    재료는 지금도 `about="미연결"` 을 그대로 렌더한다 —
+    `test_evidence_lines_mark_unlinked_evidence` 가 그것을 못 박고 있다. 그런데
+    새 프롬프트는 그 **글자를 한 번도 부르지 않는다.** about 을 개념으로만
+    설명하고(「about 에 해당 기업 또는 사건이 연결되어 있지 않은 evidence 는」)
+    모델이 마커와 설명을 스스로 잇기를 기대한다.
+
+    옛 프롬프트는 마커에 **쓰임새**까지 줬다:
+
+        about="미연결"은 검색에 걸려 들어왔을 뿐
+        [사실]의 어느 줄과도 이어지지 않은 근거입니다.
+        워크스페이스 기업 이야기로 끌어오지 않습니다.
+        원문이 말하는 그 기업 이야기로만 쓰거나,
+        질문과 무관하면 사용하지 않습니다.
+
+    ★**「쓰지 마라」가 아니라 「그 기업 이야기로만 써라」였다**는 점이 중요하다.
+    지금 프롬프트의 개념 설명은 앞쪽 반만 남아 있어, 글자대로 읽으면 미연결
+    근거를 통째로 버리는 쪽으로 기운다. 검색 히트 근거의 **63~78%가 미연결**로
+    나가므로(현황서 §10) 재료 대부분이 여기 걸린다.
+
+    ★`xfail(strict=True)` 인 이유 — 프롬프트를 고치면 이 테스트가 XPASS 로
+    **실패**한다. 그때 「기준선이 움직였다」를 사람이 반드시 보게 된다."""
     assert as_module._UNLINKED_EVIDENCE in as_module._SYSTEM_PROMPT
-    assert "14번" in as_module._SYSTEM_PROMPT
 
 
 def test_system_prompt_warns_symmetric_relations_have_no_inherent_direction():

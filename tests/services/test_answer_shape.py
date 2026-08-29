@@ -130,8 +130,12 @@ def test_prompt_survives_without_a_decision():
 
 
 def test_system_prompt_tells_the_model_how_to_shape_each_answer():
+    """★문구가 바뀌었다(`1b7fbaa`) — 「하나의 서사로 엮지 말고 기업별 목록으로
+    설명합니다」 → 「워크스페이스 기업마다 확인된 내용을 독립적으로 설명합니다」.
+    A/B/C 예시와 「하나의 이야기로 억지로 연결하지 않습니다」는 그대로 남았다."""
     assert "답변 대상" in as_module._SYSTEM_PROMPT
-    assert "목록" in as_module._SYSTEM_PROMPT
+    assert "독립적으로 설명" in as_module._SYSTEM_PROMPT
+    assert "하나의 이야기로" in as_module._SYSTEM_PROMPT
 
 
 def test_system_prompt_states_the_insight_rule():

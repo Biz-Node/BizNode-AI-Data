@@ -83,6 +83,15 @@ _EVENT_TYPE_KEYWORDS: dict[str, re.Pattern] = {
     "기타": re.compile(r"(?!)"),  # 규칙으로 지목하지 않는다 — 임베딩만 본다
 }
 
+# ★규칙 티어가 **구조적으로 지목할 수 없는** 종류. 「기타」의 패턴 `(?!)` 는
+#   아무것에도 안 걸리므로 `matched_event_types` 가 **영원히 안 담는다**.
+#
+#   「기타」는 「분류를 못 했다」는 뜻이지 「그 종류가 아니다」가 아니다. 읽는 쪽이
+#   이 둘을 섞으면 **판정 불가가 연결 없음으로 샌다** — `claim_check._intent_linked`
+#   의 docstring 이 하지 말라고 적어 둔 바로 그것이다. 문자열을 거기 또 적지
+#   않도록 **사실이 있는 자리인 여기서** 이름을 준다.
+UNCLASSIFIED_EVENT_TYPES: frozenset[str] = frozenset({"기타"})
+
 
 def intent_of(question: str, anchor_names: Iterable[str]) -> str:
     """질문에서 앵커 기업명을 지운 **의도 부분**.

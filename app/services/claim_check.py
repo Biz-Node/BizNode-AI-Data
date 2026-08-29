@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
+from app.services.evidence_selector import UNCLASSIFIED_EVENT_TYPES
 from pipeline.token_overlap import normalize_dates, overlap, sentence_tokens
 
 # ★`evidence_selector.Embed` 와 같은 모양이다 — 임베딩 구현에 묶이지 않는다.
@@ -280,6 +281,7 @@ def _intent_linked(evidence_ids: Sequence[str],
 
           matched 가 비었다        질문이 사건 종류를 안 지목했다 → 판정 불가
           출처를 모르는 근거뿐      관계·히트에서 온 근거다 → 판정 불가
+          분류 못 한 사건뿐         event_type 이 「기타」다 → 판정 불가
           출처 사건이 있다          그 종류가 matched 에 있나 → True / False
 
       「판정 불가」를 「연결 없음」으로 떨어뜨리면 **관계 질의가 통째로 차단된다**
@@ -290,6 +292,13 @@ def _intent_linked(evidence_ids: Sequence[str],
     types: set[str] = set()
     for evidence_id in evidence_ids:
         types |= event_types_by_evidence.get(evidence_id, frozenset())
+    # ★분류 못 한 사건은 **출처를 모르는 것과 같다.** 규칙 티어가 「기타」를
+    #   지목할 수 없으므로(`UNCLASSIFIED_EVENT_TYPES`) 그대로 두면 `matched` 와
+    #   절대 안 겹쳐 **구조적으로 늘 `False`** 다 — 근거가 질문과 무관해서가
+    #   아니라 종류를 몰라서 그렇다. 실측(2026-08-29 · 평가셋): 「연결 없음」
+    #   으로 떨어진 것 중 솔리다임 지분 조사 사건(`기타`)이 매 실행 들어 있었다
+    #   — `35ac6a5` 6건 중 2건 · `6d672d1` 5건 중 1건.
+    types -= UNCLASSIFIED_EVENT_TYPES
     if not types:
         return None
     return bool(types & matched)

@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from app.api.schemas import Evidence
-from app.services import claim_check
+from app.services import claim_check, evidence_selector
 
 
 def _evidence(eid, text):
@@ -450,6 +450,36 @@ def test_link_is_unknown_for_relation_sourced_evidence():
     불가다. 실측: 「삼성전자에 납품하는 기업」의 claim 5건이 전부 여기였다."""
     assert claim_check._intent_linked(
         ["ev_a"], {}, frozenset({"공급망"})) is None
+
+
+def test_the_unclassified_type_can_never_be_named_by_the_rule_tier():
+    """★아래 두 테스트가 딛고 선 **전제**다 — 「기타」의 패턴이 `(?!)` 라
+    `matched_event_types` 가 무엇을 받든 안 담는다. 누가 「기타」에 진짜 패턴을
+    주면 여기서 멈추고, 그때는 `_intent_linked` 의 예외도 다시 봐야 한다."""
+    intent = "기타 규제 조사 소송 품질 노조 유출 실적"
+
+    assert not (evidence_selector.UNCLASSIFIED_EVENT_TYPES
+                & evidence_selector.matched_event_types(intent))
+
+
+def test_evidence_from_an_unclassified_event_is_unknown_not_unlinked():
+    """★실측 결함(2026-08-29) — 「최근 규제당국 조사 동향」의 claim 이
+    `event_type="기타"`(솔리다임 지분 조사) 사건에서 왔다는 이유로 「연결 없음」
+    으로 떨어졌다. 평가셋 두 실행에 모두 있었다(`35ac6a5` 2건 · `6d672d1` 1건). 「기타」는 **분류를 못 했다**는 뜻이라 `matched` 와 겹칠 수가
+    없다 — 근거가 질문과 무관해서가 아니라 종류를 몰라서 안 겹친 것이다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"기타"})}, frozenset({"규제수사"})) is None
+
+
+def test_an_unclassified_type_does_not_hide_a_classified_one():
+    """★판정 불가로 **덮어 버리지는 않는다** — 분류된 종류가 하나라도 있으면
+    그것으로 판정한다. 「기타」는 뺄 뿐 다른 종류를 무르게 하지 않는다."""
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"기타", "규제수사"})},
+        frozenset({"규제수사"})) is True
+    assert claim_check._intent_linked(
+        ["ev_a"], {"ev_a": frozenset({"기타", "품질"})},
+        frozenset({"규제수사"})) is False
 
 
 def test_unlinked_returns_only_the_decided():
