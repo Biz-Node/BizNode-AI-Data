@@ -69,16 +69,27 @@ def bind_chat(chat: Any) -> None:
 
 
 def _model():
-    """도구를 물린 chat 모델. **지연 생성** — import 시점에 키가 없어도 뜬다."""
+    """도구를 물린 chat 모델. **지연 생성** — import 시점에 키가 없어도 뜬다.
+
+    ★**모델을 `config.AGENT_MODEL` 에서 읽는다**(2026-08-29). 전에는
+      `adapter.DEFAULT_MODEL` 을 집어 왔는데, 그건 답변 생성이 쓰는 것과 **같은
+      상수**였다 — 「Agent 만 바꿔서 도구 선택 분산을 본다」가 구조적으로 안
+      됐다는 뜻이다. 노브가 하나면 점수 차이를 Agent 에 귀속시킬지 답변에
+      귀속시킬지 가를 수가 없다.
+
+    ★`temperature` 도 config 가 정한다. 0 이 규약이지만 **0 을 거부하는 모델이
+      있어**(gpt-5.6 계열) 비울 수 있어야 한다 — 까닭은 `config` 에 적어 뒀다.
+    """
     global _chat
     if _chat is None:
         from langchain_openai import ChatOpenAI
 
-        from app.core.config import OPENAI_API_KEY
-        from app.llm.adapter import DEFAULT_MODEL
+        from app.core import config
 
-        _chat = ChatOpenAI(model=DEFAULT_MODEL, temperature=0.0,
-                           api_key=OPENAI_API_KEY).bind_tools(agent_tools.agent_tools())
+        _chat = ChatOpenAI(
+            model=config.AGENT_MODEL, api_key=config.OPENAI_API_KEY,
+            **config.temperature_kwargs(config.AGENT_TEMPERATURE),
+        ).bind_tools(agent_tools.agent_tools())
     return _chat
 
 
@@ -143,6 +154,10 @@ def agent(state: AskState) -> AskState:
         ]
 
     reply = _model().invoke(messages)
+    # ★**Agent 턴의 사용량을 여기서 센다.** 답변 생성과 갈라 담아야 「Agent 만
+    #   모델을 올렸을 때 얼마가 더 나가나」를 잴 수 있다(모델명은 응답이 말한
+    #   것을 쓰므로 두 노드가 다른 모델이면 키가 저절로 갈린다).
+    observe.record_llm_message(reply)
     calls = getattr(reply, "tool_calls", None) or []
     log.info("agent.turn messages=%d -> tool_calls=%d %s",
              len(messages), len(calls), [c.get("name") for c in calls])

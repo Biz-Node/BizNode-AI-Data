@@ -26,6 +26,55 @@ DATA_GO_KR_SERVICE_KEY = os.getenv("DATA_GO_KR_SERVICE_KEY")
 # LLM — 프로젝트 표준은 OpenAI (gpt-4o 추출 · gpt-4o-mini 검증·분류·임베딩).
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ── LLM 모델 — ★**Agent 와 답변을 가른다** (2026-08-29) ─────────
+#
+# 전에는 `app/llm/adapter.DEFAULT_MODEL` **하나**를 Agent 루프와 답변 생성이
+# 같이 썼다. 그래서 「Agent 만 바꿔 도구 선택 분산을 본다」가 **구조적으로
+# 불가능**했다 — 노브가 하나면 바꾸는 순간 답변 모델도 같이 움직이고, 평가셋
+# 점수 차이를 어느 쪽에 귀속시킬지 못 가른다. 이 저장소가 임베딩 드리프트와
+# 링 계측기에서 두 번 겪은 것과 **같은 종류의 귀속 문제**다.
+AGENT_MODEL = os.getenv("AGENT_MODEL", "gpt-4o-mini")
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4o-mini")
+
+# ★**temperature 도 노브다 — 모델과 붙어 움직이기 때문이다.**
+#
+#   판정은 재현 가능해야 하므로 0 이 규약이다(`pipeline.llm` 과 같은 말).
+#   그런데 **0 을 거부하는 모델이 있다**(실측 2026-08-29):
+#
+#       gpt-5.6-luna · gpt-5.6-terra · gpt-5.6-sol
+#       → Unsupported value: 'temperature' does not support 0.0 with this
+#         model. Only the default (1) value is supported.
+#
+#   즉 모델 이름만 갈아끼우면 400 이 난다. **빈 값이면 아예 안 보낸다** —
+#   모델 기본값(1)으로 돈다는 뜻이고, 그 실행은 0 때보다 더 흔들린다. 그래서
+#   「luna 로 바꿨더니 분산이 줄었다」를 모델의 효과로 읽으면 안 된다.
+#
+#   ★**자동으로 빼지 않는다.** 「왜 0 이 아닌가」가 코드에 숨지 않고 `.env` 에
+#     보여야 한다. 잘못 조합하면 API 가 400 으로 **크게** 실패하는데, 조용히
+#     다른 값으로 도는 것보다 그쪽이 낫다.
+AGENT_TEMPERATURE = os.getenv("AGENT_TEMPERATURE", "0.0")
+ANSWER_TEMPERATURE = os.getenv("ANSWER_TEMPERATURE", "0.0")
+
+
+def temperature_kwargs(value) -> dict:
+    """`ChatOpenAI` 에 넘길 temperature 인자. **빈 값이면 빈 dict** — 안 보낸다.
+
+    ★한 곳에 둔다. 부르는 자리가 둘(Agent·답변)이라 규칙이 갈리면 한쪽만 0 으로
+      도는 실행이 생기고, 그건 어디에도 안 남는다.
+
+    ★**`0.0` 을 「빈 값」으로 읽지 않는다.** 파이썬에서 `0.0` 은 거짓이라
+      `if not value` 로 쓰면 **0 을 지정한 실행이 조용히 모델 기본값(1)으로**
+      돈다 — 재현성을 지키려고 둔 값이 정확히 반대로 뒤집힌다. 그래서 비어
+      있는지는 **문자열일 때만** 본다.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+    return {"temperature": float(value)}
+
 # ── 뉴스 수집 (P2) ─────────────────────────────────────────────
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
