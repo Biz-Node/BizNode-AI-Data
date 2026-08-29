@@ -17,11 +17,12 @@ import sys
 from collections import Counter
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional, Sequence
 
 from app.graph import budget
 from app.tools import agent_tools, citation
 from tests.agent.eval.cases import CASES
+from tests.agent.eval import variance
 from tests.agent.eval.runner import CaseRun, run_all
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -61,7 +62,15 @@ def _tools(used: dict[str, int]) -> str:
     return " · ".join(f"`{k}`×{v}" for k, v in sorted(used.items()))
 
 
-def build(runs: dict[str, CaseRun]) -> str:
+def build(runs: dict[str, CaseRun],
+          passes: Optional[Sequence[Mapping[str, CaseRun]]] = None) -> str:
+    """`runs` 는 **판정이 본 1회차**다. `passes` 는 반복 실행 전체(1회차 포함).
+
+    ★둘을 갈라 받는다. 케이스별 표는 **판정과 같은 실행**을 보여야 하고
+      (안 그러면 「테스트는 통과인데 문서 수치는 다르다」가 되살아난다),
+      변동폭은 여러 패스가 있어야 나온다.
+    """
+    passes = list(passes) if passes else [runs]
     lines: list[str] = []
 
     def add(text: str = "") -> None:
@@ -113,6 +122,76 @@ def build(runs: dict[str, CaseRun]) -> str:
             f"{_verdict(run)} |")
     add()
 
+    # ── 반복 실행 — ★계획이 재려는 값이 여기 있다 ────────────
+    add("### 반복 실행 — 변동폭")
+    add()
+    if len(passes) < 2:
+        add(f"이 실행은 **1회**입니다. 변동폭은 잴 수 없습니다 — "
+            f"`--agent-eval-repeat=N` 으로 N 번 돌리세요 "
+            f"(**비용이 N 배**입니다).")
+        add()
+    else:
+        calls = variance.total_tool_calls(passes)
+        tokens = variance.total_tokens(passes)
+        ratio = variance.uncited_ratio(passes)
+        stability = variance.overall_stability(passes)
+        add(f"패스 **{len(passes)}회** · 케이스 {len(CASES)}개")
+        add()
+        stable = variance.material_is_stable(passes)
+        add("**흔들리면 안 되는 것** — 재료 파이프라인의 불변량입니다.")
+        add()
+        add("| 지표 | 값 |")
+        add("|---|---|")
+        add(f"| 도구가 본 관계 | {variance.total_ring_seen(passes).describe()} |")
+        add(f"| 상한에 남은 관계 | {variance.total_ring_kept(passes).describe()} |")
+        add()
+        if stable:
+            add("★재료가 **안 움직였습니다.** 아래 값들의 흔들림은 모델·LLM 몫으로 "
+                "읽어도 됩니다.")
+        else:
+            add("★⚠ **재료가 움직였습니다 — 아래 비교는 성립하지 않습니다.** 같은 "
+                "재료를 같은 규칙으로 자르면 이 둘은 결정론입니다"
+                "(`observe.record_rings` 가 `edge_id` 로 중복을 접습니다). "
+                "흔들렸다면 **모델이 아니라** 랭킹이 바뀌었거나 계측이 깨진 "
+                "것이므로, 그쪽을 먼저 보세요.")
+        add()
+        add("**흔들리는 것이 정상인 것** — LLM 이 정하는 값입니다.")
+        add()
+        add("| 지표 | 값 |")
+        add("|---|---|")
+        add(f"| 도구 호출 총계 | {calls.describe()} |")
+        add(f"| 최종 인용된 관계 | "
+            f"{variance.total_cited_relations(passes).describe()} |")
+        add(f"| 입력+출력 토큰 | {tokens.describe()} |")
+        add(f"| uncited 비율 | {ratio.describe(percent=True)} |")
+        add(f"| 임베딩 캐시 빗나감 | {variance.total_embed_misses(passes).describe()} |")
+        add(f"| ★**도구 조합 안정성** | {stability:.2f} "
+            f"(1.00 = 매번 같은 조합) |")
+        add()
+        add("★**빗나감을 나란히 보세요.** 0 이 아니면 그 패스는 임베딩을 직접 "
+            "계산했고 그 값은 실행마다 흔들립니다(현황서 §8-13) — 위 변동폭 중 "
+            "얼마가 Agent 때문인지 그만큼 못 가릅니다. `EMBED_CACHE_STRICT=1` 은 "
+            "이걸 0 으로 만드는 장치가 **아닙니다**(Evaluation §10-7).")
+        add()
+        add("★**두 줄을 갈라 읽으세요.** 총계의 폭만 보면 안 됩니다 — 도구 "
+            "**조합**이 통째로 바뀌었는데 합계는 같을 수 있습니다"
+            "(`get_relations×2 + get_events×1` 과 "
+            "`get_relations×1 + search_news×2` 는 둘 다 3입니다). "
+            "「모델을 바꿔 도구 선택이 안정됐나」에 답하는 것은 **안정성** 쪽입니다.")
+        add()
+
+        unstable = sorted((v, k) for k, v in variance.case_stability(passes).items())
+        counts = variance.case_choice_counts(passes)
+        add("| 케이스 | 조합 안정성 | 서로 다른 조합 |")
+        add("|---|---:|---:|")
+        for value, case_id in unstable:
+            add(f"| `{case_id}` | {value:.2f} | {counts.get(case_id, 0)} |")
+        add()
+        add("★**이 표는 판정이 아닙니다.** 낮은 안정성이 곧 결함이 아니라, "
+            "도구 선택이 LLM 몫이라 구조적으로 결정론이 아니라는 사실의 "
+            "크기입니다. 모델을 바꿀 때 **이 값과 비교**하라고 둡니다.")
+        add()
+
     # ── 2. 비용 — Phase 8 이 재려던 것 ────────────────────────
     add("## 2. 비용 — 도구·예산·임베딩")
     add()
@@ -133,15 +212,64 @@ def build(runs: dict[str, CaseRun]) -> str:
         add(f"| 케이스당 도구 호출 | 최소 {min(per_case)} · "
             f"중앙 {sorted(per_case)[len(per_case) // 2]} · 최대 {max(per_case)} "
             f"(상한 {budget.MAX_TOOL_CALLS}) |")
+    denied = sum(run.observed.tool_calls_denied_by_budget for run in runs.values())
     add(f"| ★**Agent 루프가 예산으로 잘린** 케이스 | {len(stopped)} / {len(CASES)} |")
+    add(f"| ★**예산이 막아 실행 안 한** 호출 | {denied} |")
     add(f"| 최종 `budget_exhausted` 플래그 | {len(flagged)} / {len(CASES)} |")
     add(f"| 임베딩 호출 | {embed_calls}회 · 캐시 적중 {embed_hits} · "
         f"빗나감 {embed_misses} |")
     add()
+    if denied:
+        add(f"★**한 턴이 남은 자리보다 많이 요청해 {denied}건을 안 돌렸습니다.** "
+            "그 호출들에도 「상한에 닿았다」 응답을 채워 넣었으므로 대화는 "
+            "온전합니다. 이 수가 크면 **모델이 한 턴에 병렬로 많이 부른다**는 "
+            "뜻이고, 상한을 올릴지 모델을 바꿀지의 근거가 됩니다"
+            "(Evaluation §10-9-1). ★도구가 스스로 거부한 것(「도구별 호출 빈도」의 "
+            "**거부** 열)과는 **다른 사실**입니다 — 저건 프롬프트 문제, 이건 예산 "
+            "문제입니다.")
+        add()
     add("★**두 줄을 갈라 읽으세요.** 플래그는 `fetch_propagation` 이 Agent 루프 "
         "**뒤에** 파급 예산을 채워도 켜집니다. 「상한을 올려야 하나」의 답이 갈립니다 — "
         "루프가 잘렸으면 **도구** 예산 얘기고, 뒤에서 찬 것이면 **파급** 예산 얘기입니다.")
     add()
+
+    # ── LLM 토큰 — ★모델별로 가른다 ──────────────────────────
+    add("### LLM 토큰 — 모델별")
+    add()
+    models = sorted({m for run in runs.values() for m in run.observed.llm_calls})
+    if not models:
+        add("이 실행에서 LLM 사용량이 잡히지 않았습니다.")
+        add()
+    else:
+        add("| 모델 | 호출 | 입력 | 출력 | (그중 추론) |")
+        add("|---|---:|---:|---:|---:|")
+        for model in models:
+            calls = sum(r.observed.llm_calls.get(model, 0) for r in runs.values())
+            got_in = sum(r.observed.llm_input_tokens.get(model, 0)
+                         for r in runs.values())
+            got_out = sum(r.observed.llm_output_tokens.get(model, 0)
+                          for r in runs.values())
+            reasoning = sum(r.observed.llm_reasoning_tokens.get(model, 0)
+                            for r in runs.values())
+            add(f"| `{model}` | {calls} | {got_in:,} | {got_out:,} | {reasoning:,} |")
+        add()
+        missing = sum(r.observed.llm_calls_without_usage for r in runs.values())
+        if missing:
+            add(f"★**사용량이 안 실려 온 호출이 {missing}건** 있습니다 — 위 "
+                f"토큰 수는 그만큼 **적게** 잡힌 값입니다. 0 토큰이 아닙니다.")
+            add()
+        add("★**모델명은 응답이 말한 것**입니다(`gpt-4o-mini-2024-07-18`). 설정에 "
+            "적은 별칭이 아니라 **실제로 답한 스냅샷**이라, 별칭이 다른 모델을 "
+            "가리키게 돼도 여기서 드러납니다.")
+        add()
+        add("★**추론 토큰은 출력 안에 이미 포함돼 있습니다** — 따로 더하지 "
+            "마세요. gpt-5 계열로 바꾸면 이 열이 커지고, 그게 비용 증가의 "
+            "출처입니다.")
+        add()
+        add("★**비용(달러)은 여기 적지 않습니다.** 단가는 코드 밖에서 바뀌므로 "
+            "박아 두면 조용히 틀린 값이 됩니다. `토큰 × 그날의 단가` 로 "
+            "계산하세요.")
+        add()
 
     # ── 카운터별 소진 — ★어느 상한이 실제로 무는가 ────────────
     caps = {"tool_calls_used": budget.MAX_TOOL_CALLS,
@@ -297,7 +425,33 @@ def build(runs: dict[str, CaseRun]) -> str:
         add()
 
     # ── 4. 케이스 ─────────────────────────────────────────────
-    add("## 4. 케이스")
+    # ── 4. 주장(claim) — ★관측만 한다 ────────────────────────
+    add("## 4. 주장(claim) — 관측만 합니다")
+    add()
+    checked = [run for run in runs.values() if run.observed.claims_checked]
+    claims_total = sum(run.observed.claims_total for run in runs.values())
+    uncited = sum(run.observed.claims_uncited for run in runs.values())
+    no_text = sum(run.observed.claims_no_text for run in runs.values())
+    unlinked = sum(run.observed.claims_unlinked for run in runs.values())
+
+    add("| 항목 | 값 |")
+    add("|---|---|")
+    add(f"| `check_claims` 를 지난 케이스 | {len(checked)} / {len(CASES)} |")
+    add(f"| 주장 총계 | {claims_total} |")
+    add(f"| ★**uncited**(근거를 안 단 주장) | {uncited}"
+        + (f" · **{uncited / claims_total:.1%}**" if claims_total else "") + " |")
+    add(f"| no_text(근거 원문을 못 찾음) | {no_text} |")
+    add(f"| unlinked(질문 의도와 연결 없음) | {unlinked} |")
+    add()
+    add("★**`check_claims` 를 지난 케이스 수를 먼저 보세요.** 주장 0건과 "
+        "「그 노드를 안 지났다」는 다른 사실인데, 총계만 보면 같은 0 입니다.")
+    add()
+    add("★**이 값으로 답변 품질을 판정하지 않습니다.** `claim_check` 는 검증기가 "
+        "아니라 **의심 탐지기**라 낮은 점수가 곧 거짓이 아닙니다. 답변 모델을 "
+        "바꿀 때 **바꾸기 전 값과 비교**하라고 둔 자리입니다.")
+    add()
+
+    add("## 5. 케이스")
     add()
     for index, case in enumerate(CASES, start=1):
         run = runs[case.id]

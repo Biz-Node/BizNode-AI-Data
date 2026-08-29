@@ -144,6 +144,10 @@ def check_claims(state: AskState) -> AskState:
     """
     claims = state["llm_result"].get("claims") or []
     if not claims:
+        # ★**빈 것도 기록한다.** 「주장이 0건이었다」와 「이 노드를 안 지났다」가
+        #   같은 값으로 보이면 uncited **비율의 분모**를 만들 수 없다.
+        observe.record_claims({"claims": 0, "uncited": 0, "no_text": 0,
+                               "unlinked": 0})
         return {}
 
     decision, intent = state["decision"], state["intent"]
@@ -159,6 +163,10 @@ def check_claims(state: AskState) -> AskState:
         event_types_by_evidence=prompt.event_types_by_evidence(state["events"]),
         matched_event_types=evidence_selector.matched_event_types(intent))
     summary = claim_check.summarize(checked)
+    # ★로그와 **함께** 담는다. 로그는 운영에서 한 건을 되짚는 통로이고, 버킷은
+    #   평가셋이 20 케이스를 모아 「uncited 비율」로 읽는 통로다 — 둘 중 하나만
+    #   두면 「평가에서는 보이는데 운영에서는 안 보이는」 값이 생긴다.
+    observe.record_claims(summary)
     log.info("claim.grounding claims=%d uncited=%d no_text=%d scored=%d "
              "min=%s mean=%s max=%s propagation=%d free_combination=%d "
              "misattributed=%d title_only=%d semantic=%s intent_link=%s "

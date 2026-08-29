@@ -29,6 +29,7 @@ Agent 가 못 고르는 것:
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional, Sequence
 
 from app.api.schemas import Evidence
@@ -43,6 +44,10 @@ from app.tools.dto import EventDTO, RelationDTO
 log = trace_logger(__name__)
 
 _MAX_LOGGED_EVIDENCE = 12
+
+# 예산이 막아 실행하지 않은 호출에 돌려주는 문구. ★도구가 거부할 때와 **같은
+# 모양**(`{"error": ...}`)이라, Agent 가 이미 아는 형식으로 읽는다.
+_BUDGET_DENIED = "탐색 총량 상한에 닿았다 — 이번 요청에서 도구를 더 부를 수 없다"
 
 _AGENT_SYSTEM = """
 당신은 기업 리스크 질문에 답할 **재료를 모으는** 단계입니다.
@@ -69,16 +74,30 @@ def bind_chat(chat: Any) -> None:
 
 
 def _model():
-    """도구를 물린 chat 모델. **지연 생성** — import 시점에 키가 없어도 뜬다."""
+    """도구를 물린 chat 모델. **지연 생성** — import 시점에 키가 없어도 뜬다.
+
+    ★**모델을 `config.AGENT_MODEL` 에서 읽는다**(2026-08-29). 전에는
+      `adapter.DEFAULT_MODEL` 을 집어 왔는데, 그건 답변 생성이 쓰는 것과 **같은
+      상수**였다 — 「Agent 만 바꿔서 도구 선택 분산을 본다」가 구조적으로 안
+      됐다는 뜻이다. 노브가 하나면 점수 차이를 Agent 에 귀속시킬지 답변에
+      귀속시킬지 가를 수가 없다.
+
+    ★`temperature` 도 config 가 정한다. 0 이 규약이지만 **0 을 거부하는 모델이
+      있어**(gpt-5.6 계열) 비울 수 있어야 한다 — 까닭은 `config` 에 적어 뒀다.
+    """
     global _chat
     if _chat is None:
         from langchain_openai import ChatOpenAI
 
-        from app.core.config import OPENAI_API_KEY
-        from app.llm.adapter import DEFAULT_MODEL
+        from app.core import config
 
-        _chat = ChatOpenAI(model=DEFAULT_MODEL, temperature=0.0,
-                           api_key=OPENAI_API_KEY).bind_tools(agent_tools.agent_tools())
+        _chat = ChatOpenAI(
+            model=config.AGENT_MODEL, api_key=config.OPENAI_API_KEY,
+            **config.temperature_kwargs(config.AGENT_TEMPERATURE),
+            # ★추론 세기와 전송 경로를 **함께** 받는다 — chat.completions 는
+            #   function tools 와 추론을 같이 못 쓴다(까닭은 `config` 에).
+            **config.reasoning_kwargs(config.AGENT_REASONING_EFFORT),
+        ).bind_tools(agent_tools.agent_tools())
     return _chat
 
 
@@ -143,6 +162,10 @@ def agent(state: AskState) -> AskState:
         ]
 
     reply = _model().invoke(messages)
+    # ★**Agent 턴의 사용량을 여기서 센다.** 답변 생성과 갈라 담아야 「Agent 만
+    #   모델을 올렸을 때 얼마가 더 나가나」를 잴 수 있다(모델명은 응답이 말한
+    #   것을 쓰므로 두 노드가 다른 모델이면 키가 저절로 갈린다).
+    observe.record_llm_message(reply)
     calls = getattr(reply, "tool_calls", None) or []
     log.info("agent.turn messages=%d -> tool_calls=%d %s",
              len(messages), len(calls), [c.get("name") for c in calls])
@@ -183,27 +206,71 @@ def run_tools(state: AskState) -> AskState:
 
     ★**호출 시점마다 누적치를 더한다**(계약 4). 인자 리스트 길이만 제한하면
       `get_events(keys=[A])` 를 열 번 불러 상한을 열 배로 만들 수 있다.
+
+    ★**한 턴 안에서도 상한을 지킨다**(2026-08-29 · Evaluation §10-9-1). 전에는
+      `should_continue` 가 턴과 턴 **사이**에서만 검사하는데 여기서 한 턴을
+      통째로 썼다. `gpt-4o-mini` 는 턴당 1~2개만 요청해 한 번도 안 걸렸지만,
+      **한 턴에 여러 개를 병렬로 요청하는 모델**(실측: `gpt-5.6-sol`)에서는
+      카운터가 11일 때 3개짜리 턴이 14가 됐다 — 「막는다」고 적힌 예산이 실제로는
+      막지 못했다. `propagations_used` 와 **같은 종류**의 「자르는 단위 ≠ 세는
+      단위」다(§4-4).
+
+    ★**거부한 호출에도 답을 채워 넣는다.** 남는 것을 그냥 버리면 AIMessage 에
+      있는 `tool_call_id` 중 짝 없는 것이 생기고, OpenAI 는 그 대화의 **다음
+      요청을 거부한다.** 상한은 지켰는데 대화가 깨지는 상태가 되므로, 자르는
+      것과 짝을 맞추는 것은 **함께** 해야 한다.
     """
     messages = list(state.get("messages") or [])
     last = messages[-1] if messages else None
     calls = getattr(last, "tool_calls", None) or []
 
-    with _scope_of(state), agent_tools.collecting() as bucket:
-        out = _tool_node().invoke({"messages": messages})
-        collected = {tool: list(items) for tool, items in bucket.items()}
+    room = budget.remaining(state)["tool_calls_used"]
+    allowed, denied = calls[:room], calls[room:]
+
+    collected: dict[str, list] = {}
+    out_messages: list = []
+    if allowed:
+        if denied:
+            # ★자른 목록만 실은 **새 AIMessage** 로 부른다. 원본을 고치지
+            #   않는다 — State 의 대화는 Agent 가 실제로 **요청한** 것 그대로
+            #   남아야 「무엇을 부르려 했는데 못 불렀나」를 되짚을 수 있다.
+            from langchain_core.messages import AIMessage
+
+            invoke_from = [AIMessage(content="", tool_calls=list(allowed))]
+        else:
+            invoke_from = messages
+        with _scope_of(state), agent_tools.collecting() as bucket:
+            out = _tool_node().invoke({"messages": invoke_from})
+            collected = {tool: list(items) for tool, items in bucket.items()}
+        out_messages = list(out.get("messages") or [])
+
+    if denied:
+        from langchain_core.messages import ToolMessage
+
+        out_messages += [
+            ToolMessage(content=json.dumps({"error": _BUDGET_DENIED},
+                                           ensure_ascii=False),
+                        tool_call_id=call.get("id") or "",
+                        name=call.get("name") or "")
+            for call in denied]
+        # ★`record_tool_error` 에 담지 않는다 — 저건 **도구가** 거부한 것이고
+        #   이건 **예산이** 막은 것이다. 섞으면 고칠 곳이 갈린다.
+        observe.record_tool_calls_denied_by_budget(len(denied))
 
     events = sum(len(v) for k, v in collected.items() if k == "get_events")
     merged = {tool: list(state.get("tool_results", {}).get(tool, [])) + items
               for tool, items in collected.items()}
     tool_results = {**(state.get("tool_results") or {}), **merged}
 
-    spent = budget.spend(state, tool_calls_used=len(calls), events_used=events)
+    # ★**실행한 것만** 센다. 거부한 것까지 더하면 카운터가 상한을 넘어, 「막는다」고
+    #   적힌 값이 다시 못 막는 값이 된다.
+    spent = budget.spend(state, tool_calls_used=len(allowed), events_used=events)
     # ★관측 — 예산이 세는 것과 **같은 값**을 센다. 따로 세면 두 벌이 갈린다.
-    observe.record_tool_calls(len(calls))
-    log.info("run_tools calls=%d collected=%s", len(calls),
+    observe.record_tool_calls(len(allowed))
+    log.info("run_tools calls=%d ran=%d denied=%d collected=%s",
+             len(calls), len(allowed), len(denied),
              {k: len(v) for k, v in collected.items()})
-    return {"messages": list(out.get("messages") or []),
-            "tool_results": tool_results, **spent}
+    return {"messages": out_messages, "tool_results": tool_results, **spent}
 
 
 # ══════════════════════════════════════════════════════════════════

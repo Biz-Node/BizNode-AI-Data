@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+
 import pytest
 
 from app.api.schemas import AnchorSource, Evidence
+from app.core import observe
 from app.graph import budget
 from app.graph.nodes import agent_loop
 from app.tools import agent_tools, citation
@@ -98,6 +102,122 @@ def test_no_pending_calls_finishes_the_loop():
 
     assert agent_loop.should_continue(
         {**budget.initial(), "messages": [_Msg()]}) == "evidence_validation"
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ★한 턴 **안에서도** 상한을 지키는가 (2026-08-29 · Evaluation §10-9-1)
+#
+#  전에는 `should_continue` 가 턴과 턴 **사이**에서만 검사하는데 `run_tools` 가
+#  한 턴을 통째로 썼다. `gpt-4o-mini` 는 턴당 1~2개만 요청해 한 번도 안 걸렸고,
+#  **한 턴에 병렬로 요청하는 모델**(실측 `gpt-5.6-sol`)에서 카운터가 11일 때
+#  3개짜리 턴이 14가 됐다. 「막는다」고 적힌 예산이 실제로는 못 막고 있었다.
+# ══════════════════════════════════════════════════════════════════
+
+class _FakeToolNode:
+    """부탁받은 호출마다 `ToolMessage` 하나 — 진짜 `ToolNode` 와 같은 규약이다."""
+
+    def __init__(self):
+        self.ran: list[str] = []
+
+    def invoke(self, payload):
+        from langchain_core.messages import ToolMessage
+
+        calls = payload["messages"][-1].tool_calls
+        self.ran += [c["id"] for c in calls]
+        return {"messages": [ToolMessage(content="[]", tool_call_id=c["id"],
+                                         name=c["name"]) for c in calls]}
+
+
+@pytest.fixture
+def tool_node(monkeypatch):
+    """도구도 범위도 진짜로 열지 않는다 — 여기서 재는 것은 **자르는 규칙**이다."""
+    node = _FakeToolNode()
+    monkeypatch.setattr(agent_loop, "_tool_node", lambda: node)
+    monkeypatch.setattr(agent_loop, "_scope_of",
+                        lambda state: contextlib.nullcontext())
+    return node
+
+
+_THREE = [_call("get_events", keys=[_SAMSUNG]),
+          _call("get_relations", keys=[_SAMSUNG]),
+          _call("search_news", query="파업", keys=[_SAMSUNG])]
+
+
+def _turn(used, calls):
+    class _Msg:
+        tool_calls = list(calls)
+
+    return {**budget.initial(), "tool_calls_used": used, "messages": [_Msg()]}
+
+
+def test_a_single_turn_cannot_exceed_the_cap(tool_node):
+    """★한 턴이 남은 자리보다 많이 요청해도 카운터는 상한에서 멈춘다."""
+    out = agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS - 1, _THREE))
+
+    assert out["tool_calls_used"] == budget.MAX_TOOL_CALLS
+    assert out["budget_exhausted"] is True
+
+
+def test_only_the_calls_that_fit_actually_run(tool_node):
+    agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS - 1, _THREE))
+    assert tool_node.ran == [_THREE[0]["id"]], "남은 자리는 1 인데 더 돌았다"
+
+
+def test_every_requested_call_still_gets_a_tool_message(tool_node):
+    """★**이 테스트가 1번 방식의 이유다.** 남는 호출을 그냥 버리면 AIMessage 의
+    `tool_call_id` 중 짝 없는 것이 생기고, OpenAI 는 그 대화의 **다음 요청을
+    거부한다** — 상한은 지켰는데 대화가 깨진다."""
+    out = agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS - 1, _THREE))
+
+    assert [m.tool_call_id for m in out["messages"]] == [c["id"] for c in _THREE]
+
+
+def test_a_denied_call_says_why_in_the_shape_tools_already_use(tool_node):
+    """거부 문구는 도구가 거부할 때와 **같은 모양**(`{"error": ...}`)이다."""
+    out = agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS - 1, _THREE))
+
+    for message in out["messages"][1:]:
+        assert json.loads(message.content)["error"] == agent_loop._BUDGET_DENIED
+
+
+def test_denied_calls_are_counted_apart_from_tool_errors(tool_node):
+    """★`tool_errors` 는 **도구가** 거부한 것(범위 밖 key 등)이고 이건 **예산이**
+    막은 것이다. 섞으면 「프롬프트를 고쳐야 하나」와 「상한을 올려야 하나」가
+    같은 숫자로 보인다."""
+    with observe.observing() as seen:
+        agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS - 1, _THREE))
+
+    assert seen.tool_calls_denied_by_budget == 2
+    assert seen.tool_calls == 1, "관측이 예산과 **같은 값**을 세야 한다"
+    assert not seen.tool_errors
+
+
+def test_the_loop_finishes_after_the_cap_is_reached(tool_node):
+    """소진되면 예외가 아니라 **마감으로 전이**한다(계약 4)."""
+    state = _turn(budget.MAX_TOOL_CALLS - 1, _THREE)
+    out = agent_loop.run_tools(state)
+
+    assert agent_loop.should_continue({**state, **out}) == "evidence_validation"
+
+
+def test_a_turn_that_fits_is_left_completely_alone(tool_node):
+    """★회귀 방어 — 상한에 여유가 있으면 예전과 **똑같이** 돌아야 한다."""
+    with observe.observing() as seen:
+        out = agent_loop.run_tools(_turn(0, _THREE))
+
+    assert tool_node.ran == [c["id"] for c in _THREE]
+    assert out["tool_calls_used"] == 3
+    assert out["budget_exhausted"] is False
+    assert seen.tool_calls_denied_by_budget == 0
+
+
+def test_no_room_at_all_denies_everything_without_calling_a_tool(tool_node):
+    """★남은 자리가 0 이면 도구를 **아예 안 부른다** — 그래도 짝은 다 맞춘다."""
+    out = agent_loop.run_tools(_turn(budget.MAX_TOOL_CALLS, _THREE))
+
+    assert tool_node.ran == []
+    assert out["tool_calls_used"] == budget.MAX_TOOL_CALLS
+    assert [m.tool_call_id for m in out["messages"]] == [c["id"] for c in _THREE]
 
 
 # ══════════════════════════════════════════════════════════════════

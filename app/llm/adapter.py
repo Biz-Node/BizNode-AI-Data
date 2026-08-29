@@ -24,11 +24,15 @@ from typing import Any, Optional, Protocol, Type
 
 from pydantic import BaseModel
 
-from app.core.config import OPENAI_API_KEY
+from app.core import observe
 
-# 판정·분류·요약의 기본 모델. `pipeline.llm.DEFAULT_MODEL` 과 **같은 값이어야
-# 한다** — `/ask` 가 쓰던 모델이 조용히 바뀌면 답변이 달라진다.
-DEFAULT_MODEL = "gpt-4o-mini"
+# ★**모델 상수를 여기 두지 않는다**(2026-08-29). 전에는 `DEFAULT_MODEL` 이
+#   여기 있었고 `agent_loop._model()` 이 그걸 집어 가, Agent 와 답변이 **한
+#   노브**였다 — 그게 「Agent 만 바꿔 도구 선택 분산을 본다」를 막고 있었다.
+#   이제 `app/core/config.py` 의 `ANSWER_MODEL` 을 **호출 시점에** 읽는다.
+#
+# ★`pipeline.llm.DEFAULT_MODEL` 과는 이제 **다른 노브**다. 저쪽은 배치의
+#   판정·분류용이고 여기는 `/ask` 의 답변용이라, 같이 움직일 이유가 없다.
 
 
 class LLMAdapter(Protocol):
@@ -58,9 +62,14 @@ class LangChainAdapter(LLMAdapter):
       시점에 키가 없어도 모듈이 떠야 한다(테스트·배치가 키 없이 import 한다).
     """
 
-    def __init__(self, *, model: str = DEFAULT_MODEL, temperature: float = 0.0) -> None:
+    def __init__(self, *, model: Optional[str] = None,
+                 temperature: Optional[Any] = None) -> None:
+        # ★`None` 은 **「config 를 따른다」**다. 값을 주면 그 값이 이긴다 —
+        #   테스트가 노브와 무관하게 한 모델을 고정할 수 있어야 한다.
         self._model = model
-        # ★0 을 유지한다. 판정은 재현 가능해야 한다(`pipeline.llm` 과 같은 규약).
+        # ★0 이 규약이다. 판정은 재현 가능해야 한다(`pipeline.llm` 과 같은 말).
+        #   기본값은 `config.ANSWER_TEMPERATURE` 이고 그 기본이 `"0.0"` 이다 —
+        #   0 을 거부하는 모델이 있어 **비울 수 있게** 열어 둔 것뿐이다.
         self._temperature = temperature
         self._client: Optional[Any] = None
 
@@ -68,10 +77,17 @@ class LangChainAdapter(LLMAdapter):
         if self._client is None:
             from langchain_openai import ChatOpenAI
 
+            # ★**호출 시점에** 읽는다. import 시점에 묶으면 테스트가 노브를
+            #   갈아끼울 수 없고, 「어느 모델로 돌았나」가 프로세스 시작
+            #   시각에 고정돼 버린다.
+            from app.core import config
+
+            temperature = (self._temperature if self._temperature is not None
+                           else config.ANSWER_TEMPERATURE)
             self._client = ChatOpenAI(
-                model=self._model,
-                temperature=self._temperature,
-                api_key=OPENAI_API_KEY,
+                model=self._model or config.ANSWER_MODEL,
+                api_key=config.OPENAI_API_KEY,
+                **config.temperature_kwargs(temperature),
             )
         return self._client
 
@@ -92,14 +108,28 @@ class LangChainAdapter(LLMAdapter):
             # ★스키마 이름은 pydantic 클래스 이름(`AskAnswer`)에서 나온다. 예전
             #   `name="ask_answer"` 와 문자열이 다르지만 **요청 메타데이터일 뿐**
             #   이라 응답에는 영향이 없다. `name` 은 실패 사유에만 남긴다.
+            # ★`include_raw=True` — **토큰 사용량을 꺼내려고** 켰다. 끄면
+            #   파싱된 객체만 와서 이 호출이 얼마를 썼는지 알 방법이 없다.
             runnable = self._chat().with_structured_output(
-                schema, method="json_schema", strict=True)
-            parsed = runnable.invoke([("system", system), ("user", user)])
+                schema, method="json_schema", strict=True, include_raw=True)
+            got = runnable.invoke([("system", system), ("user", user)])
         except Exception as exc:
             # ★여기가 이 어댑터의 존재 이유다. 실패는 **반드시** 표시가 붙는다.
             #   문구는 `pipeline.llm.ask_json()` 과 맞춰 둔다 — 로그를 같이 읽는다.
             return {**fallback, "failed": True,
                     "reason": f"LLM 호출 실패({name}) {exc!r}"}
+
+        observe.record_llm_message(got.get("raw"))
+
+        # ★**`include_raw=True` 는 파싱 실패를 예외가 아니라 값으로 돌려준다.**
+        #   여기서 접지 않으면 이 모듈의 존재 이유가 그대로 깨진다 — 형식이
+        #   깨진 응답이 「통과」로 보이고, 호출부는 `result.get("answer")` 로
+        #   빈 값을 받아 **실패를 성공과 구별하지 못한다.** 그게 정확히 이
+        #   파일이 막으려고 생긴 사고다.
+        parsing_error, parsed = got.get("parsing_error"), got.get("parsed")
+        if parsing_error is not None or parsed is None:
+            return {**fallback, "failed": True,
+                    "reason": f"LLM 응답 파싱 실패({name}) {parsing_error!r}"}
 
         # ★dict 로 되돌린다. 호출부는 `pipeline.llm.ask_json()` 시절 그대로
         #   `result.get("answer")` 를 쓴다 — 교체가 호출부에 보이지 않아야 한다.

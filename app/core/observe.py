@@ -35,7 +35,7 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Iterator, Mapping, Optional, Sequence
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 from app.core.trace import trace_logger
 
@@ -56,6 +56,11 @@ class Observation:
     tool_items: Counter = field(default_factory=Counter)
     # 범위 밖 key 등으로 **거부된** 호출. ★재료를 늘리지 않은 호출이다.
     tool_errors: Counter = field(default_factory=Counter)
+    # ★한 턴이 상한을 넘겨 **실행하지 않은** 호출. `tool_errors` 와 갈라 센다 —
+    #   저건 범위 밖 key 처럼 **도구가** 거부한 것이고, 이건 **예산이** 막은
+    #   것이다. 한 통에 담으면 「Agent 가 범위를 자꾸 벗어난다」와 「상한이
+    #   낮다」가 같은 숫자로 보인다. 답이 갈리는 두 사실이다.
+    tool_calls_denied_by_budget: int = 0
 
     # ── 임베딩 ────────────────────────────────────────────────
     # `embed_with_cache` 진입 횟수. 텍스트 수가 아니라 **호출 수**다.
@@ -103,6 +108,37 @@ class Observation:
     #   여기 올 수 없는 것이 오면, 조용히 넘기지 않고 세어서 남긴다.
     cited_relation_without_ring: int = 0
 
+    # ── LLM 비용 ──────────────────────────────────────────────
+    # ★**모델별로 가른다.** 단가가 모델마다 다르므로 합계 하나로는 비용을 못
+    #   낸다. 게다가 Agent 와 답변이 이제 **다른 모델을 쓸 수 있다**
+    #   (`config.AGENT_MODEL`·`ANSWER_MODEL`) — 갈라 두지 않으면 「Agent 만
+    #   올렸을 때 얼마가 더 나가나」를 잴 수가 없다.
+    #
+    # ★키는 **응답이 말한 모델명**이다(`gpt-4o-mini-2024-07-18`). 설정 상수를
+    #   쓰면 「무엇을 부르려 했나」가 남는데, 알아야 하는 것은 **무엇이 실제로
+    #   불렸나**다 — 별칭(`gpt-4o-mini`)은 언제든 다른 스냅샷을 가리킨다.
+    llm_calls: Counter = field(default_factory=Counter)
+    llm_input_tokens: Counter = field(default_factory=Counter)
+    llm_output_tokens: Counter = field(default_factory=Counter)
+    # ★추론 토큰은 **출력에 포함돼 청구된다.** 따로 세지 않으면 gpt-5 계열로
+    #   바꿨을 때 늘어난 비용이 어디서 왔는지 못 짚는다.
+    llm_reasoning_tokens: Counter = field(default_factory=Counter)
+    # ★사용량이 안 실려 온 호출. **0 토큰과 갈라 센다** — 섞으면 「공짜로
+    #   돌았다」로 읽힌다.
+    llm_calls_without_usage: int = 0
+
+    # ── 주장(claim) — ★관측만 한다 ────────────────────────────
+    # `check_claims` 가 이미 계산해 **로그로만** 남기던 값이다. 「uncited 비율」을
+    # 모델 교체 전후로 비교하려면 구조화된 값이 있어야 한다.
+    #
+    # ★`claims_checked` 를 따로 둔다 — 「주장이 0건」과 「그 노드를 안 지났다」가
+    #   같은 값으로 보이면 비율의 **분모를 만들 수 없다.**
+    claims_checked: bool = False
+    claims_total: int = 0
+    claims_uncited: int = 0
+    claims_no_text: int = 0
+    claims_unlinked: int = 0
+
     def summary(self) -> dict:
         """보고서·로그가 읽는 납작한 dict. **정렬을 여기서 못 박는다** —
         Counter 를 그대로 내보내면 순서가 실행마다 달라져 문서 diff 가 커진다."""
@@ -111,6 +147,7 @@ class Observation:
             "tools_used": dict(sorted(self.tools_used.items())),
             "tool_items": dict(sorted(self.tool_items.items())),
             "tool_errors": dict(sorted(self.tool_errors.items())),
+            "tool_calls_denied_by_budget": self.tool_calls_denied_by_budget,
             "embed_calls": self.embed_calls,
             "embed_texts": self.embed_texts,
             "embed_cache_hits": self.embed_cache_hits,
@@ -123,6 +160,16 @@ class Observation:
             "cited_rings": dict(sorted(self.cited_rings.items())),
             "cited_without_ring": self.cited_without_ring,
             "cited_relation_without_ring": self.cited_relation_without_ring,
+            "llm_calls": dict(sorted(self.llm_calls.items())),
+            "llm_input_tokens": dict(sorted(self.llm_input_tokens.items())),
+            "llm_output_tokens": dict(sorted(self.llm_output_tokens.items())),
+            "llm_reasoning_tokens": dict(sorted(self.llm_reasoning_tokens.items())),
+            "llm_calls_without_usage": self.llm_calls_without_usage,
+            "claims_checked": self.claims_checked,
+            "claims_total": self.claims_total,
+            "claims_uncited": self.claims_uncited,
+            "claims_no_text": self.claims_no_text,
+            "claims_unlinked": self.claims_unlinked,
         }
 
 
@@ -170,6 +217,19 @@ def record_agent_stopped_by_budget() -> None:
     seen = _BUCKET.get()
     if seen is not None:
         seen.agent_stopped_by_budget = True
+
+
+def record_tool_calls_denied_by_budget(count: int) -> None:
+    """한 턴이 상한을 넘겨 **실행하지 않은** 호출 수.
+
+    ★`record_tool_error` 와 갈라 둔다. 저기 쌓이는 것은 도구가 스스로 거부한
+      것(범위 밖 key 등)이고, 여기 쌓이는 것은 **예산이 막은** 것이다. 섞으면
+      「Agent 가 범위를 벗어난다」(프롬프트 문제)와 「상한이 낮다」(예산 문제)가
+      같은 숫자가 되어, 어느 쪽을 고쳐야 하는지 알 수 없다.
+    """
+    seen = _BUCKET.get()
+    if seen is not None and count:
+        seen.tool_calls_denied_by_budget += int(count)
 
 
 def record_tool(tool: str, items: int) -> None:
@@ -304,3 +364,58 @@ def record_cited_relations(edge_ids: Sequence[Optional[str]],
         else:
             seen.cited_rings[ring] += 1
     seen.cited_without_ring += without_ring
+
+
+def record_llm_message(message: Any) -> None:
+    """LLM 응답 하나의 **사용량**을 담는다. 호출부는 Agent 턴과 답변 생성 둘이다.
+
+    ★**모양을 아는 자리를 한 곳으로 둔다.** 부르는 자리가 둘이라 파싱을 각자
+      하면 한쪽만 0 으로 남고, 그 0 은 「안 썼다」와 구별되지 않는다 —
+      `pipeline/llm.py` 가 적어 둔 「같은 20줄이 복사되며 실패 표시가 빠졌다」와
+      같은 종류의 사고다.
+
+    ★**모델명은 응답에서 읽는다.** `config.AGENT_MODEL` 을 쓰면 「부르려 했던
+      것」이 남는데, 비용을 되짚으려면 **실제로 답한 스냅샷**이 있어야 한다.
+
+    ★`usage_metadata` 가 없으면 **호출만 세고 따로 표시한다.** 토큰 0 으로
+      더해 버리면 그 실행이 공짜로 돌았던 것처럼 보인다.
+    """
+    seen = _BUCKET.get()
+    if seen is None:
+        return
+    metadata = getattr(message, "response_metadata", None) or {}
+    model = metadata.get("model_name") or "알수없음"
+    seen.llm_calls[model] += 1
+
+    usage = getattr(message, "usage_metadata", None) or {}
+    if not usage:
+        seen.llm_calls_without_usage += 1
+        return
+    seen.llm_input_tokens[model] += int(usage.get("input_tokens") or 0)
+    seen.llm_output_tokens[model] += int(usage.get("output_tokens") or 0)
+    # ★추론 토큰은 **출력 토큰 안에 이미 포함돼** 있다. 따로 더하지 말고
+    #   「그중 얼마가 추론이었나」로만 읽는다 — 더하면 비용이 두 번 세어진다.
+    details = usage.get("output_token_details") or {}
+    seen.llm_reasoning_tokens[model] += int(details.get("reasoning") or 0)
+
+
+def record_claims(summary: Mapping) -> None:
+    """`claim_check.summarize()` 의 결과 중 **넷**을 담는다.
+
+    ★넷만 담는다 — `summarize()` 는 15개를 계산하지만, 여기 필요한 것은
+      「uncited 비율」을 모델 교체 전후로 비교하는 데 쓰는 값뿐이다. 나머지는
+      로그에 그대로 남아 있고, 관측 버킷이 판정에 안 쓰는 값까지 이고 다니면
+      보고서 표가 읽히지 않는다.
+
+    ★**빈 것도 기록한다.** 부르는 쪽이 「주장 0건」일 때도 이걸 부르므로
+      `claims_checked` 가 켜진다 — 그래야 「0건이었다」와 「그 노드를 안
+      지났다」가 갈린다.
+    """
+    seen = _BUCKET.get()
+    if seen is None:
+        return
+    seen.claims_checked = True
+    seen.claims_total += int(summary.get("claims") or 0)
+    seen.claims_uncited += int(summary.get("uncited") or 0)
+    seen.claims_no_text += int(summary.get("no_text") or 0)
+    seen.claims_unlinked += int(summary.get("unlinked") or 0)
