@@ -379,6 +379,13 @@ class RetrieveService:
             anchor_names = [a.name for a in decision.anchors if a.name]
         intent = evidence_selector.intent_of(question, anchor_names)
         matched = evidence_selector.matched_event_types(intent)
+        # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). 「리스크」에 걸리는
+        #   event_type 패턴이 하나도 없어 위험 질의가 규칙 티어를 통째로 못 받았다.
+        risk_wanted = evidence_selector.risk_intent(intent)
+        # ★세 번째 축 — 시간. 「최근」은 지금까지 아무도 해석하지 않고 임베딩에
+        #   잡음으로 들어가기만 했다. 물었을 때만 창을 연다(안 물으면 `None`).
+        recent_since = (evidence_selector.recent_window()
+                        if evidence_selector.recent_intent(intent) else None)
 
         by_company = [(c, [Event(**row) for row in company_service.events_of(c.key)])
                       for c in companies]
@@ -393,7 +400,8 @@ class RetrieveService:
         dropped = 0
         for _company, events in by_company:
             kept, cut = evidence_selector.select(
-                events, matched=matched, sims=sims, limit=_MAX_EVENTS_PER_COMPANY)
+                events, matched=matched, sims=sims, limit=_MAX_EVENTS_PER_COMPANY,
+                risk_wanted=risk_wanted, recent_since=recent_since)
             dropped += len(cut)
             for event in kept:
                 previous = seen.get(event.event_id)

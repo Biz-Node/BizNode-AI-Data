@@ -49,6 +49,12 @@ import math
 import re
 from typing import Callable, Iterable, Optional, Protocol, Sequence
 
+# ★오늘을 **직접 부르지 않는다** — 창을 자른 기준일과 프롬프트가 말하는 오늘이
+#   같아야 한다(`app/core/clock.py`). `select()` 자체는 여전히 순수하다:
+#   시각을 읽는 것은 `recent_window()` 하나뿐이고, `select()` 는 그 **결과 문자열**을
+#   인자로 받는다.
+from app.core import clock
+
 Embed = Callable[[list[str]], Sequence[Sequence[float]]]
 
 
@@ -92,6 +98,44 @@ _EVENT_TYPE_KEYWORDS: dict[str, re.Pattern] = {
 #   않도록 **사실이 있는 자리인 여기서** 이름을 준다.
 UNCLASSIFIED_EVENT_TYPES: frozenset[str] = frozenset({"기타"})
 
+# ★**`event_type` 과는 다른 축이다**(2026-08-30). ERD 가 「`event_type` 12종과
+#   `is_risk` 는 별개 축」이라고 못 박아 뒀는데, 질문에서 읽어내는 쪽에는
+#   `event_type` 축밖에 없었다 — 「리스크」라는 말에 걸리는 패턴이
+#   `_EVENT_TYPE_KEYWORDS` 11개 중 **하나도 없다.**
+#
+#   그래서 「이 회사 최근 리스크 어때?」가 `matched_event_types() == ∅` 이 되고,
+#   규칙 티어가 통째로 꺼져 **코사인 유사도가 단독 정렬 키**가 됐다. 실측
+#   (2026-08-30 · 삼성전자 후보 128건): 뽑힌 10건 중 위험사건 **3건**, 최근
+#   12개월 **4건**, 유사도 3위가 **2021년 「협력회사 온라인 채용박람회」**였다.
+#
+#   ★**`_EVENT_TYPE_KEYWORDS` 에 「리스크」를 넣지 않는다.** 그러면
+#     `matched_event_types()` 의 뜻이 「질문이 지목한 **사건 종류**」에서 벗어나고,
+#     그 값을 **같이 쓰는** `claim_check._intent_linked` 의 판정까지 조용히
+#     움직인다(`answer.py:168` · `answer_service.py:720`). 축이 둘이면 함수도
+#     둘이어야 한다.
+#
+#   ★「이슈」는 **일부러 뺐다.** 「최근 이슈 있어?」는 위험을 묻는 말이지만
+#     「HBM 이슈」는 그냥 주제다. 가르지 못하는 말은 `_EVENT_TYPE_KEYWORDS` 와
+#     같은 규약으로 **임베딩에 맡긴다** — 티어를 잘못 켜면 위험 아닌 사건이
+#     통째로 밀려난다.
+_RISK_INTENT = re.compile(r"리스크|위험|악재|우려|부정적|문제|논란")
+
+# ★**세 번째 축 — 시간**(2026-08-30). 「최근」은 `event_type` 도 `is_risk` 도
+#   아니다. 지금까지 이 말은 `intent_of()` 를 지나 임베딩에 들어갔을 뿐,
+#   **아무도 해석하지 않았다.**
+#
+#   ★「올해」·「이번」을 넣었지만 「작년」·「2024년」 같은 **과거 지목**은 안 넣는다.
+#     그건 「최근을 우선하라」가 아니라 「그 시점만 보라」는 뜻이라 티어가 아니라
+#     필터여야 하고, 필터는 이 모듈이 하지 않는다(scope 의 일이다).
+_RECENT_INTENT = re.compile(r"최근|요즘|요새|최신|근래|올해|이번")
+
+# 「최근」의 폭. ★**실측 근거 없는 잠정치다** — 사람이 「최근」을 몇 달로 읽는지
+#   재 본 적이 없다. 12개월로 두는 근거는 하나뿐이다: 실측(2026-08-30)에서
+#   삼성전자 위험사건 57건 중 **22건**이 이 안에 들어와, 상한 10건을 채우고도
+#   남으면서 전부를 삼키지는 않는다. 좁히면 재료가 마르고 넓히면 티어가 무의미해진다.
+#   `batch/audit/ranking_baseline.py` 가 바꿨을 때의 영향을 잰다.
+_RECENT_MONTHS = 12
+
 
 def intent_of(question: str, anchor_names: Iterable[str]) -> str:
     """질문에서 앵커 기업명을 지운 **의도 부분**.
@@ -116,6 +160,39 @@ def matched_event_types(intent: str) -> frozenset[str]:
     """의도 문자열이 지목하는 event_type 들. 못 잡으면 빈 집합(= 티어 없음)."""
     return frozenset(t for t, pattern in _EVENT_TYPE_KEYWORDS.items()
                      if pattern.search(intent))
+
+
+def recent_intent(intent: str) -> bool:
+    """질문이 **최근을 물었나.** 위험 축과도, `event_type` 축과도 별개다.
+
+    ★「최근」은 지금까지 **아무도 해석하지 않았다.** `intent_of()` 가 이 말을
+      지우지 않고 그대로 남기지만, 남은 뒤에 그것을 읽는 코드가 없었다 —
+      임베딩에 들어가 잡음이 될 뿐이었다.
+    """
+    return bool(_RECENT_INTENT.search(intent))
+
+
+def recent_window(months: int = _RECENT_MONTHS) -> str:
+    """「최근」의 시작 연월(`YYYY-MM`). `occurred_at` 과 **문자열로** 견준다.
+
+    ★`occurred_at` 은 Neo4j date 가 **아니라 문자열**이다(ERD §1-5 · 노드가
+      아니라 `HAS_EVENT` 엣지에 있다). `date()` 로 캐스팅해 비교하면 null 이
+      되어 **조용히 0건**이 된다 — 조사 중 실제로 밟은 함정이다(현황서 §8-20).
+      `'2026-07-28' >= '2025-08'` 은 사전순으로 옳게 참이다.
+    """
+    now = clock.today()
+    total = now.year * 12 + (now.month - 1) - months
+    return f"{total // 12:04d}-{total % 12 + 1:02d}"
+
+
+def risk_intent(intent: str) -> bool:
+    """질문이 **위험을 물었나.** `matched_event_types()` 와 **다른 축**이다.
+
+    ★둘은 겹칠 수 있고 겹쳐도 된다 — 「노조 관련 리스크」는 `{노무}` 이면서
+      동시에 위험 질의다. 그때 규칙 티어가 먼저 자르고 위험 티어가 그 **안에서**
+      줄을 세운다(`select` 의 정렬 순서).
+    """
+    return bool(_RISK_INTENT.search(intent))
 
 
 def event_label(event: _EventLike, anchor_names: Iterable[str]) -> str:
@@ -161,16 +238,95 @@ def similarities(
             for e, v in zip(events, vectors[1:])}
 
 
+# ★유사도를 **덩어리로 묶는 폭**(2026-08-30). 실측으로 정했다.
+#
+#   왜 필요한가 — `select()` 아래쪽의 `위험사건`·`최신순` 키는 유사도가 **동점일
+#   때만** 보이는데, float 코사인은 동점이 거의 안 난다. 그래서 두 키가 코드에만
+#   있고 **실행되지 않았다.**
+#
+#   실측(2026-08-30 · 워크스페이스 2곳 × 질의 6종 · 상위 20건의 인접 gap):
+#
+#       인접 gap 중앙값  0.0034      ← 이웃끼리는 사실상 붙어 있다
+#       인접 gap p90     0.0167
+#       상위 20건의 폭   0.072 ~ 0.267
+#
+#   ★**폭이 질의에 따라 갈린다** — 그리고 그 갈림이 곧 「유사도가 되는가」다.
+#
+#       규칙이 걸리는 질의   「노조 관련 리스크」 0.191 · 「안전사고」 0.189
+#                            「소송 상황」 0.150            → 유사도가 **가른다**
+#       규칙이 안 걸리는 질의 「최근 리스크」 0.072
+#                            「최근 위험한 일」 0.077        → 폭이 **잡음 수준**
+#
+#   0.05 는 그 사이다. 「최근 리스크」의 상위 20건은 **2덩어리**로 뭉개져 아래
+#   키(위험·최신순)가 깨어나고, 「노조 관련 리스크」는 4덩어리 넘게 남아 유사도가
+#   계속 줄을 세운다. 잡음(중앙 0.0034)의 15배이고 신호(0.19~0.27)보다는 작다.
+#
+#   ★**가중합으로 가지 않았다.** `a·sim + b·risk + c·recency` 는 계수 셋을 실측
+#     없이 정해야 하고, 「왜 이게 뽑혔나」가 로그에서 안 읽힌다. 이 모듈이
+#     사전식 티어인 것은 그 설명 가능성 때문이다(맨 위 독스트링).
+#
+#   ★**[미확정]** 워크스페이스 2곳 · 질의 6종에서 잰 값이다. 기업이 늘거나 질의
+#     성격이 달라지면 다시 재야 한다. `batch/audit/ranking_baseline.py` 가 그
+#     대조를 맡는다.
+_SIM_BUCKET = 0.05
+
+
+def _bucketed(sim: float) -> int:
+    """유사도를 덩어리 번호로. **가까운 것끼리 진짜 동점으로 만든다.**"""
+    return round(sim / _SIM_BUCKET)
+
+
 def select(
     events: Sequence[_EventLike], *, matched: frozenset[str],
-    sims: dict[str, float], limit: int,
+    sims: dict[str, float], limit: int, risk_wanted: bool = False,
+    recent_since: Optional[str] = None,
 ) -> tuple[list, list]:
     """(남길 것, 잘라낸 것). **잘라낸 것을 버리지 않고 돌려준다** — 호출자가
     「몇 건을 왜 잘랐는지」 로그에 남길 수 있어야 한다.
 
     약한 신호부터 차례로 정렬한다(파이썬 정렬은 안정적이라 뒤 정렬이 이긴다):
 
-        event_id → 최신순 → 위험사건 → 유사도 → 규칙 티어
+        event_id → 최신순 → 위험사건 → 유사도(덩어리) → 최근창 → 위험 티어 → 규칙 티어
+
+    ★**최근창은 위험 티어 **아래**다**(2026-08-30 · `recent_since`). 「최근
+      리스크」에서 물어야 할 것은 「최근인 것 중 위험한 것」이 아니라 **「위험한
+      것 중 최근인 것」**이다 — 위험사건이 없으면 최근 아닌 위험사건이라도
+      내놓아야지, 위험하지 않은 최근 사건을 내놓을 일이 아니다.
+
+    ★**아래 `최신순` 과 다르다.** 저것은 「하루라도 최신이면 앞」이라 옛 사건
+      사이에서도 계속 갈리고, 이것은 **창 안이냐 밖이냐** 두 덩어리로만 나눈다.
+      창 안에서의 줄 세우기는 그대로 `최신순` 이 맡는다.
+
+    ★**hard filter 가 아니다** — 창 밖 사건도 자리가 남으면 살아남는다. 창을
+      필터로 쓰면 사건이 뜸한 기업이 통째로 빈다(`matched` 와 같은 규약).
+
+    ★**유사도는 덩어리로 본다**(2026-08-30 · `_SIM_BUCKET`). 아래 두 키가
+      「동점일 때만」 보이는데 float 유사도는 동점이 안 나서 **닿지 않았다.**
+      까닭과 실측은 `_SIM_BUCKET` 주석에 있다.
+
+    ★**위험 티어를 유사도 위에 둔다**(2026-08-30 · `risk_wanted`).
+
+      아래에 이미 `위험사건`(`not e.is_risk`) 키가 있는데 왜 또 두나 — **닿는
+      자리가 다르다.** 아래 것은 「다른 신호가 **전부 같을 때** 위험을 앞에」라는
+      기본값이고, 유사도가 그 위에 있으므로 **동점일 때만** 보인다. 그런데 float
+      유사도는 동점이 거의 안 나므로 실제로는 **닿지 않는 죽은 키**였다.
+
+      실측(2026-08-30 · 삼성전자 후보 128건 · 「이 회사 최근 리스크 어때?」):
+      상위 15건의 유사도가 0.3680~0.3088 로 **폭이 0.06**(사실상 잡음)인데도
+      동점이 하나도 없어, 뽑힌 10건 중 위험사건이 **3건**뿐이고 3위가 2021년
+      「협력회사 온라인 채용박람회」였다. 같은 후보로 `sims` 만 비우면 최근
+      위험사건 10건이 정확히 나온다 — **폴백은 이미 답을 알고 있었고 유사도가
+      그것을 덮어쓰고 있었다.**
+
+      ★그래서 「질문이 위험을 물었을 때만」 유사도보다 먼저 보게 한다. 아래 키는
+        그대로 둔다 — 위험을 안 물은 질의에서의 기본값은 바뀌지 않아야 한다.
+
+      ★**규칙 티어보다는 아래다.** 「안전사고 리스크」에서 사고재해가 아닌
+        위험사건이 사고재해를 밀어내면 안 된다. 규칙은 「무엇을」이고 위험은
+        「어떤 성격을」이라, 좁은 쪽이 먼저다.
+
+      ★**hard filter 가 아니다** — 위험 아닌 사건도 자리가 남으면 살아남는다
+        (`matched` 와 같은 규약).
 
     ★**맨 아래가 `event_id` 다**(2026-08-28). 전에는 「동점이면 입력 순서가
       남는다」였는데, 입력 순서는 `company_service.events_of()` 가 준 Neo4j 행
@@ -190,6 +346,10 @@ def select(
     ordered.sort(key=lambda e: e.event_id)
     ordered.sort(key=lambda e: e.occurred_at or "", reverse=True)
     ordered.sort(key=lambda e: not e.is_risk)
-    ordered.sort(key=lambda e: -sims.get(e.event_id, 0.0))
+    ordered.sort(key=lambda e: -_bucketed(sims.get(e.event_id, 0.0)))
+    if recent_since:
+        ordered.sort(key=lambda e: (e.occurred_at or "") < recent_since)
+    if risk_wanted:
+        ordered.sort(key=lambda e: not e.is_risk)
     ordered.sort(key=lambda e: 0 if e.event_type in matched else 1)
     return ordered[:limit], ordered[limit:]

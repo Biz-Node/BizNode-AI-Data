@@ -275,6 +275,12 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     #   떼는데, 안 넘기면 「기업명이 든 라벨이 상위를 먹는」 실험 ② 로 되돌아간다
     #   (현황서 §5-23). 넘길 이름은 **서버가 정한 앵커**에서만 온다.
     matched = evidence_selector.matched_event_types(intent)
+    # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). `retrieve_service` 와 **같은
+    #   자리에서 같은 함수**로 정한다 — 갈리면 `/retrieve` 와 `/ask` 가 같은 질문에
+    #   다른 재료를 낸다(`ask_graph_parity.py --materials`).
+    risk_wanted = evidence_selector.risk_intent(intent)
+    recent_since = (evidence_selector.recent_window()
+                    if evidence_selector.recent_intent(intent) else None)
     flat = [_Row(r) for _, rows in by_company for r in rows]
     sims = evidence_selector.similarities(
         flat, intent=intent, embed=_embed(), anchor_names=list(ctx.anchor_names))
@@ -284,7 +290,8 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     for _norm, rows in by_company:
         kept, _cut = evidence_selector.select(
             [_Row(r) for r in rows], matched=matched, sims=sims,
-            limit=_MAX_EVENTS_PER_COMPANY)             # ③ 인자가 아니다
+            limit=_MAX_EVENTS_PER_COMPANY,             # ③ 인자가 아니다
+            risk_wanted=risk_wanted, recent_since=recent_since)
         for wrapped in kept:
             row = wrapped.raw
             previous = seen.get(row["event_id"])

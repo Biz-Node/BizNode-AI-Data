@@ -24,7 +24,10 @@ SK하이닉스의 담합 소송」은 205건(34,430자)까지 갔다. 사건 수
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.api.schemas import Event
+from app.core import clock
 from app.services import evidence_selector as sel
 
 
@@ -102,6 +105,78 @@ def test_unmatched_wording_yields_no_rule_signal():
     assert sel.matched_event_types("요즘 어때?") == frozenset()
 
 
+# ── 위험 축 (event_type 과 별개) ─────────────────────────────────────────
+
+def test_risk_wording_is_detected():
+    for intent in ("최근 리스크 어때?", "위험한 일 있었어?", "악재 있나",
+                   "우려되는 점", "부정적인 이슈", "무슨 문제 있어?", "논란"):
+        assert sel.risk_intent(intent), intent
+
+
+def test_non_risk_wording_is_not_detected():
+    for intent in ("최근 실적 어때?", "안전사고", "요즘 어때?", "신제품 개발"):
+        assert not sel.risk_intent(intent), intent
+
+
+def test_risk_is_a_separate_axis_from_event_type():
+    """★「리스크」는 `_EVENT_TYPE_KEYWORDS` 를 **건드리지 않는다.**
+
+    거기에 넣으면 `matched_event_types()` 의 뜻이 「질문이 지목한 사건 종류」에서
+    벗어나고, 같은 값을 읽는 `claim_check._intent_linked` 의 판정까지 조용히
+    움직인다(`answer.py:168` · `answer_service.py:720`).
+    """
+    assert sel.matched_event_types("최근 리스크 어때?") == frozenset()
+    assert sel.risk_intent("최근 리스크 어때?")
+
+
+def test_the_two_axes_can_overlap():
+    """「노조 관련 리스크」는 종류(`노무`)이면서 동시에 위험 질의다."""
+    assert "노무" in sel.matched_event_types("노조 관련 리스크 알려줘")
+    assert sel.risk_intent("노조 관련 리스크 알려줘")
+
+
+def test_ambiguous_wording_is_left_to_the_embedding():
+    """★「이슈」는 일부러 뺐다 — 「HBM 이슈」는 위험이 아니라 주제다.
+    가르지 못하는 말에 티어를 켜면 위험 아닌 사건이 통째로 밀려난다."""
+    assert not sel.risk_intent("HBM 이슈")
+
+
+# ── 시간 축 (event_type·is_risk 와 또 별개) ──────────────────────────────
+
+def test_recent_wording_is_detected():
+    for intent in ("최근 리스크 어때?", "요즘 어때?", "요새 뭐 있나", "최신 동향",
+                   "근래 소식", "올해 실적", "이번 분기"):
+        assert sel.recent_intent(intent), intent
+
+
+def test_non_recent_wording_is_not_detected():
+    for intent in ("안전사고", "소송 상황", "노조 관련 리스크"):
+        assert not sel.recent_intent(intent), intent
+
+
+def test_past_pointing_wording_is_not_a_recency_signal():
+    """★「작년」·「2024년」은 **필터**지 티어가 아니다 — 「최근을 우선하라」가
+    아니라 「그 시점만 보라」는 뜻이고, 필터는 이 모듈의 일이 아니다."""
+    assert not sel.recent_intent("작년 실적")
+    assert not sel.recent_intent("2024년 사고")
+
+
+def test_recent_window_is_a_year_back_and_string_comparable(monkeypatch):
+    """★`occurred_at` 은 Neo4j date 가 **아니라 문자열**이다. `date()` 로 캐스팅해
+    비교하면 null 이 되어 조용히 0건이 된다(현황서 §8-20 에서 실제로 밟았다)."""
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
+    assert sel.recent_window() == "2025-08"
+    assert "2026-07-28" >= sel.recent_window()
+    assert not ("2025-07-31" >= sel.recent_window())
+
+
+def test_recent_window_crosses_the_year_boundary(monkeypatch):
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 1, 15))
+    assert sel.recent_window() == "2025-01"
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 12, 31))
+    assert sel.recent_window() == "2025-12"
+
+
 # ── 선택 ────────────────────────────────────────────────────────────────
 
 def test_rule_matched_types_come_first():
@@ -117,6 +192,137 @@ def test_rule_is_a_boost_not_a_hard_filter():
               _event("e2", "노조 설립", "노무")]
     kept, dropped = sel.select(events, matched=frozenset({"노무"}), sims={}, limit=2)
     assert len(kept) == 2 and dropped == []
+
+
+def test_a_risk_question_lifts_risk_events_above_similarity():
+    """★**이 테스트는 `risk_wanted` 가 없던 동안 빨간불이었다**(2026-08-30).
+
+    아래 `test_risk_events_win_ties_when_no_similarity_is_available` 이 같은
+    의도를 적어 두고도 못 잡았다 — 거기는 `sims={}` 라 **진짜 동점**을 만들지만,
+    실제 질의에서는 유사도가 늘 채워져 위험 정렬이 **닿지 않는 죽은 키**였다.
+
+    실측(2026-08-30 · 삼성전자 128건 · 「이 회사 최근 리스크 어때?」)에서 상위
+    15건의 유사도 폭이 **0.06**(0.3680~0.3088)인데도 동점이 하나도 없어, 뽑힌
+    10건 중 위험사건이 3건뿐이었다. 아래 값은 그 분포에서 가져왔다.
+    """
+    events = [_event("e1", "채용박람회", "기타", is_risk=False),
+              _event("e2", "본사 압수수색", "규제수사", is_risk=True)]
+    sims = {"e1": 0.3593, "e2": 0.2384}      # 실측 분포 — 동점이 아니다
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2,
+                         risk_wanted=True)
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_without_a_risk_question_nothing_changes():
+    """★위험을 안 물었으면 **기본값이 그대로여야 한다** — 유사도가 이긴다."""
+    events = [_event("e1", "채용박람회", "기타", is_risk=False),
+              _event("e2", "본사 압수수색", "규제수사", is_risk=True)]
+    sims = {"e1": 0.3593, "e2": 0.2384}
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2)
+    assert [e.event_id for e in kept] == ["e1", "e2"]
+
+
+def test_the_rule_tier_still_outranks_the_risk_tier():
+    """★「안전사고 리스크」에서 사고재해가 아닌 위험사건이 사고재해를 밀어내면
+    안 된다. 규칙은 「무엇을」이고 위험은 「어떤 성격을」이라 좁은 쪽이 먼저다."""
+    events = [_event("e1", "인산 누출", "사고재해", is_risk=False),
+              _event("e2", "본사 압수수색", "규제수사", is_risk=True)]
+    kept, _ = sel.select(events, matched=frozenset({"사고재해"}), sims={}, limit=2,
+                         risk_wanted=True)
+    assert [e.event_id for e in kept] == ["e1", "e2"]
+
+
+def test_the_risk_tier_is_a_boost_not_a_hard_filter():
+    """★위험 아닌 사건도 자리가 남으면 살아남는다(`matched` 와 같은 규약)."""
+    events = [_event("e1", "HBM 증산", "사업확장", is_risk=False),
+              _event("e2", "본사 압수수색", "규제수사", is_risk=True)]
+    kept, dropped = sel.select(events, matched=frozenset(), sims={}, limit=2,
+                               risk_wanted=True)
+    assert len(kept) == 2 and dropped == []
+
+
+def test_near_identical_similarity_wakes_the_recency_key():
+    """★**이 테스트도 `_SIM_BUCKET` 이전에는 빨간불이었다**(2026-08-30).
+
+    유사도가 0.003 차이인데 옛 코드는 그걸 「순위가 다르다」로 읽어 최신순을
+    영원히 못 보게 했다. 실측에서 인접 gap 중앙값이 **0.0034** 다 — 이웃끼리는
+    사실상 붙어 있고, 그 붙은 것들 사이에서 무엇을 앞에 둘지가 진짜 질문이다.
+    """
+    events = [_event("e1", "옛 사건", "사업확장", occurred_at="2021-10-12"),
+              _event("e2", "최근 사건", "사업확장", occurred_at="2026-07-28")]
+    sims = {"e1": 0.3593, "e2": 0.3560}      # 실측 분포 — 같은 덩어리다
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2)
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_near_identical_similarity_wakes_the_risk_key():
+    """★같은 이유로 `위험사건` 기본값도 깨어난다 — 질문이 위험을 안 물었어도
+    다른 신호가 같으면 위험을 앞에 두는 것이 원래 의도였다."""
+    events = [_event("e1", "일반", "사업확장", is_risk=False),
+              _event("e2", "위험", "사업확장", is_risk=True)]
+    sims = {"e1": 0.3593, "e2": 0.3560}
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2)
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_a_real_similarity_gap_still_wins():
+    """★**뭉개기만 하면 안 된다** — 유사도가 진짜로 갈리는 질의에서는 계속
+    줄을 세워야 한다. 실측: 「노조 관련 리스크」의 상위 20건 폭이 0.191 로
+    「최근 리스크」(0.072)의 2.7배다."""
+    events = [_event("e1", "무관", "사업확장", occurred_at="2026-07-28"),
+              _event("e2", "질문과 가까움", "사업확장", occurred_at="2021-10-12")]
+    sims = {"e1": 0.20, "e2": 0.38}          # 덩어리가 다르다
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2)
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_the_recency_window_lifts_events_inside_it():
+    """★유사도가 **다른 덩어리**여도 창이 이긴다 — 창은 유사도 위에 있다."""
+    events = [_event("e1", "옛 사건", "사업확장", occurred_at="2021-10-12"),
+              _event("e2", "최근 사건", "사업확장", occurred_at="2026-07-28")]
+    sims = {"e1": 0.38, "e2": 0.20}
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2,
+                         recent_since="2025-08")
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_the_risk_tier_outranks_the_recency_window():
+    """★「최근 리스크」가 묻는 것은 **「위험한 것 중 최근인 것」**이지 그 반대가
+    아니다. 위험사건이 없으면 옛 위험사건이라도 내놓아야지, 위험하지 않은
+    최근 사건을 내놓을 일이 아니다."""
+    events = [_event("e1", "최근이지만 안전", "사업확장",
+                     is_risk=False, occurred_at="2026-07-28"),
+              _event("e2", "옛 위험사건", "규제수사",
+                     is_risk=True, occurred_at="2022-01-05")]
+    kept, _ = sel.select(events, matched=frozenset(), sims={}, limit=2,
+                         risk_wanted=True, recent_since="2025-08")
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_the_recency_window_is_a_boost_not_a_hard_filter():
+    """★창을 필터로 쓰면 사건이 뜸한 기업이 통째로 빈다."""
+    events = [_event("e1", "옛 사건 하나", "사업확장", occurred_at="2021-10-12"),
+              _event("e2", "옛 사건 둘", "사업확장", occurred_at="2022-03-01")]
+    kept, dropped = sel.select(events, matched=frozenset(), sims={}, limit=2,
+                               recent_since="2025-08")
+    assert len(kept) == 2 and dropped == []
+
+
+def test_an_event_without_a_date_is_treated_as_outside_the_window():
+    """★날짜를 모르는 사건을 창 안으로 넣으면 **모르는 것을 아는 척**하는 것이다."""
+    events = [_event("e1", "날짜 없음", "사업확장", occurred_at=None),
+              _event("e2", "창 안", "사업확장", occurred_at="2026-07-28")]
+    kept, _ = sel.select(events, matched=frozenset(), sims={}, limit=2,
+                         recent_since="2025-08")
+    assert [e.event_id for e in kept] == ["e2", "e1"]
+
+
+def test_without_a_recency_question_the_window_is_not_applied():
+    events = [_event("e1", "옛 사건", "사업확장", occurred_at="2021-10-12"),
+              _event("e2", "최근 사건", "사업확장", occurred_at="2026-07-28")]
+    sims = {"e1": 0.38, "e2": 0.20}
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=2)
+    assert [e.event_id for e in kept] == ["e1", "e2"]
 
 
 def test_similarity_orders_within_a_tier():
