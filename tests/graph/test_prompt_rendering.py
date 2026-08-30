@@ -18,7 +18,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.api.schemas import AnchorSource, Evidence, MatchType, RelationEndpoint
+from app.core import clock
 from app.graph import prompt as sut
 from app.tools.dto import (CAUTION_NEWS_DEVELOPS, DIRECTION_NOTE, ROLE_NOTE,
                            SOURCE_NOTE, STATED_NOTE, EventDTO, EventPhaseDTO,
@@ -252,11 +255,15 @@ def test_build_user_prompt_puts_the_target_note_after_the_search_method():
     assert facts.split("\n")[1].startswith("답변 대상: 질문")
 
 
-def test_build_user_prompt_has_the_three_sections():
+def test_build_user_prompt_has_the_three_sections(monkeypatch):
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
     got = sut.build_user_prompt(
         "질문내용", match_type=MatchType.EXACT, companies=[], events=[],
         relations=[_rel()], propagation=[], evidence=[_ev()],
         anchor_source=AnchorSource.QUERY, workspace_names=_WS)
 
-    assert got.startswith("질문: 질문내용\n\n[사실]\n")
+    # ★`오늘:` 이 `질문:` 과 `[사실]` 사이에 있다(2026-08-30). 재료의 날짜를
+    #   무엇과 견줄지 모델에 주는 유일한 자리다 — 이 경로도 같은 `assemble()` 을
+    #   쓰므로 `answer_service` 쪽과 **바이트까지 같다**(`ask_graph_parity`).
+    assert got.startswith("질문: 질문내용\n오늘: 2026-08-30\n\n[사실]\n")
     assert "\n\n[근거]\n<evidence id=\"ev_rel\"" in got

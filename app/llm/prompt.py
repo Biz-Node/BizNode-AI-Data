@@ -38,6 +38,9 @@ from __future__ import annotations
 from typing import NamedTuple, Optional, Sequence
 
 from app.api.schemas import AnchorSource, Evidence, MatchType, Source
+# ★오늘을 **직접 부르지 않는다** — 재료를 자른 기준일(`evidence_selector.
+#   recent_window()`)과 프롬프트가 말하는 오늘이 같아야 한다(`app/core/clock.py`).
+from app.core import clock
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -334,7 +337,27 @@ def with_target_note(facts: str, anchor_source: Optional[AnchorSource]) -> str:
 
 def assemble(question: str, facts: str, evidence: Sequence[Evidence],
              about: dict[str, str]) -> str:
-    """`질문:` / `[사실]` / `[근거]` — **바깥 모양은 두 경로가 같다.**"""
-    return (f"질문: {question}\n\n"
+    """`질문:` / `오늘:` / `[사실]` / `[근거]` — **바깥 모양은 두 경로가 같다.**
+
+    ★**오늘을 싣는다**(2026-08-30). 그전에는 프롬프트 어디에도 날짜 기준이
+      없었다 — `_SYSTEM_PROMPT`·`_AGENT_SYSTEM`·여기 전부에 「오늘」·「기준일」이
+      한 글자도 없었다. 그러면 재료에 2026년 사건이 실려 있어도 모델이 「최근」을
+      **무엇과 견줄지 모른다.** 「최근 리스크」 질의가 옛 사건을 최근인 것처럼
+      말한 원인의 절반이 이것이다(나머지 절반은 랭킹 — `evidence_selector`).
+
+    ★**`질문:` 바로 뒤에 둔다.** `[사실]` 앞머리는 `with_target_note()` 가 쓰는
+      자리이고 규칙 7·13 이 그 **위치를 참조**한다 — 거기에 줄을 끼우면 두
+      규칙이 가리키는 곳이 어긋난다.
+
+    ★**두 경로가 여기를 공유하므로** 한쪽만 날짜를 갖는 일이 생기지 않는다
+      (`app/graph/prompt.py` · `answer_service` · `ask_graph_parity` 가 바이트로 대조).
+
+    ★**적용한 시간 창은 아직 안 적는다** `[DECIDE]` — `evidence_selector` 가 연
+      창(`recent_since`)을 여기까지 들고 오려면 State 를 관통해야 한다. 오늘만
+      있어도 모델은 날짜를 견줄 수 있고, 「왜 옛 사건이 빠졌나」를 설명하는 것은
+      별개 문제다.
+    """
+    return (f"질문: {question}\n"
+            f"오늘: {clock.today().isoformat()}\n\n"
             f"[사실]\n{facts}\n\n"
             f"[근거]\n{evidence_block(evidence, about)}")

@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.api.schemas import AnchorSource, Evidence, MatchType, Source
+from app.core import clock
 from app.llm import prompt as sut
 from app.llm.prompt import EventRef, RelationRef
 
@@ -267,10 +270,29 @@ def test_unresolved_carries_no_target_note():
                                 AnchorSource.UNRESOLVED) == "검색 방식: EXACT"
 
 
-def test_assemble_lays_out_question_facts_evidence():
+def test_assemble_lays_out_question_facts_evidence(monkeypatch):
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
     got = sut.assemble("질문내용", "사실줄", [_ev("ev_1")], {"ev_1": "삼성전자"})
 
-    assert got.startswith("질문: 질문내용\n\n[사실]\n사실줄\n\n[근거]\n")
+    assert got.startswith(
+        "질문: 질문내용\n오늘: 2026-08-30\n\n[사실]\n사실줄\n\n[근거]\n")
+
+
+def test_assemble_carries_today_so_the_model_can_judge_recency(monkeypatch):
+    """★그전에는 프롬프트 어디에도 날짜 기준이 없었다 — 재료에 2026년 사건이
+    실려 있어도 모델이 「최근」을 **무엇과 견줄지** 몰랐다."""
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 1, 2))
+    got = sut.assemble("질문", "사실", [], {})
+    assert "오늘: 2026-01-02" in got
+
+
+def test_today_sits_before_the_facts_header(monkeypatch):
+    """★`[사실]` 앞머리는 `with_target_note()` 의 자리이고 규칙 7·13 이 그
+    **위치를 참조**한다 — 거기에 줄을 끼우면 두 규칙이 어긋난다."""
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
+    got = sut.assemble("질문", "검색 방식: EXACT\n사실줄", [], {})
+    assert got.index("오늘:") < got.index("[사실]")
+    assert "[사실]\n검색 방식: EXACT\n" in got
 
 
 def test_match_type_note_is_exhaustive():
