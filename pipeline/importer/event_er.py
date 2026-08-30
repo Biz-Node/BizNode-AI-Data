@@ -14,6 +14,24 @@ LLM은 기사마다 다르게 이름 붙인다 — 같은 청주 화재를 두�
 
 R3에서 **첫 유형어**만 본다. 「화재·화학물질 누출」처럼 복합어가 다리를 놓아
 화재 그룹과 누출 그룹이 통째로 붙는 것(연쇄 병합)을 막기 위함이다.
+
+★2026-08-29 — R1의 「연결된 기업이 겹친다」가 **너무 넓었다.**
+
+  `companies`에는 사건이 일어난 기업(HAS_EVENT·subject)과 **영향받은** 기업
+  (IMPACTS)이 섞여 있다. 영향 기업만 겹쳐도 같은 기업으로 봤다. 더 나쁜 것은
+  R0(이름+연월이 같으면 무조건 병합)에 **기업 조건이 아예 없었다**는 점이다.
+
+      「자사주 소각」 2026-02  한미반도체 · NAVER · 삼성전자  → 한 노드
+      (실측 2026-08-29: 주체가 둘 이상인 Event 66건)
+
+  그래서 `subjects`를 따로 받아 `_subject_conflict()`로 **거부만 한다.** 후보를
+  묶는 열쇠는 여전히 `companies`다 — 같은 화재를 두고 기사마다 주체를 달리
+  적는 일이 있어 주체로 묶으면 합쳐야 할 것을 놓친다. 넓게 묶고 어긋날 때만
+  뺀다.
+
+  ※시점은 여기서 이미 좁다(고유형 ±2개월·반복형 같은 달). 해를 넘겨 되풀이되는
+    사건이 붙는 문제는 이 파일이 아니라 시간 제한이 없는
+    `batch/repair/event_merge.py` 쪽이라 거기서 막는다.
 """
 
 from __future__ import annotations
@@ -88,11 +106,15 @@ _NAME_OVERLAP = 0.6
 #   여기서 완화하지 않는다.
 _UNIQUE_MONTH_SPAN = 2
 
+# ★`subjects`(사건이 **일어난** 기업)를 따로 받는다(2026-08-29). `companies`는
+#   영향받은 기업(IMPACTS)까지 섞여 있어 「같은 기업」의 근거로는 너무 넓다.
 _FIND = """
 MATCH (e:Event)
 OPTIONAL MATCH (e)-[r]-(c:Company)
 RETURN e.event_id AS id, e.name AS name,
        collect(DISTINCT c.corp_code) + collect(DISTINCT c.norm_name) AS companies,
+       [x IN collect(DISTINCT CASE WHEN r.role = 'subject' THEN c.norm_name END)
+          WHERE x IS NOT NULL] AS subjects,
        collect(DISTINCT r.occurred_at) + collect(DISTINCT r.valid_from) AS dates,
        count(r) AS links
 """
@@ -176,6 +198,22 @@ def _translit(token: str) -> str:
     return _TRANSLIT.get(token.lower(), token)
 
 
+def _subject_conflict(a: dict, b: dict) -> bool:
+    """사건이 **일어난 기업**이 서로 겹치지 않으면 다른 사건이다.
+
+    ★2026-08-29에 넣었다. R0(이름+연월이 같으면 무조건 병합)에는 기업 조건이
+      **아예 없었다.** 그래서 같은 달의 「자사주 소각」이 한미반도체·NAVER·
+      삼성전자를 한 노드로 끌어모았다(실측: 주체가 둘 이상인 Event 66건).
+
+    ★막는 데만 쓴다. 후보를 묶는 열쇠로는 여전히 `companies`를 쓴다 —
+      같은 화재를 두고 기사마다 주체를 달리 적는 일이 있어, 주체로 묶으면
+      합쳐야 할 것을 놓친다. 넓게 묶고 **주체가 어긋날 때만 거부**한다.
+    """
+    sa = {s for s in (a.get("subjects") or []) if s}
+    sb = {s for s in (b.get("subjects") or []) if s}
+    return bool(sa and sb and not (sa & sb))
+
+
 def _similar(a: Optional[str], b: Optional[str]) -> bool:
     """반복형 사건이 **같은 건**인지 — 이름 토큰이 충분히 겹치는가.
 
@@ -210,7 +248,12 @@ def resolve_events(dry_run: bool = False) -> dict[str, int]:
             if len(members) < 2:
                 continue
             ordered = sorted(members, key=lambda m: -m["links"])
-            keep, drops = ordered[0], ordered[1:]
+            keep = ordered[0]
+            # ★이름과 달이 같아도 **주체 기업이 다르면** 다른 사건이다.
+            drops = [m for m in ordered[1:] if not _subject_conflict(keep, m)]
+            stats["kept_apart"] += len(ordered) - 1 - len(drops)
+            if not drops:
+                continue
             stats["groups"] += 1
             print(f"  ✓ [동명·동월] 「{name}」 {period}: {len(drops)}건 병합")
             for drop in drops:
@@ -260,6 +303,9 @@ def resolve_events(dry_run: bool = False) -> dict[str, int]:
                 ratio = max(len(kt), len(mt)) / max(min(len(kt), len(mt)), 1)
                 if ov < NO_TYPE_OVERLAP or ratio > 2:
                     continue
+                if _subject_conflict(keep, m):
+                    stats["kept_apart"] += 1
+                    continue
                 stats["groups"] += 1
                 stats["merged"] += 1
                 print(f"  ✓ [유형어없음 {corp} {period}] '{keep['name']}' ← "
@@ -300,7 +346,10 @@ def resolve_events(dry_run: bool = False) -> dict[str, int]:
             # 대표 = 링크 많은 것 → 이름 긴 것(더 구체적)
             ordered = sorted(uniq.values(),
                              key=lambda m: (-m["links"], -len(m["name"] or "")))
-            keep, rest = ordered[0], ordered[1:]
+            keep = ordered[0]
+            # ★주체 기업이 어긋나는 것은 유형·기간을 보기 전에 뺀다.
+            rest = [m for m in ordered[1:] if not _subject_conflict(keep, m)]
+            stats["kept_apart"] += len(ordered) - 1 - len(rest)
 
             if etype in recurring:
                 # 반복형 — 같은 달에 여러 건이 실제로 있을 수 있다.
