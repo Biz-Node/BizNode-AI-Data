@@ -92,10 +92,10 @@ def _request():
     return AskRequest(question="q", workspace_keys=[_SAMSUNG, _HYNIX])
 
 
-def _workspace_decision():
+def _context_decision():
     return AnchorDecision(
-        source=AnchorSource.WORKSPACE, workspace_names=_WS,
-        anchors=[Anchor(key=k, name=n, source=AnchorSource.WORKSPACE)
+        source=AnchorSource.CONTEXT, workspace_names=_WS,
+        anchors=[Anchor(key=k, name=n, source=AnchorSource.CONTEXT)
                  for k, n in _WS.items()])
 
 
@@ -131,15 +131,15 @@ def test_anchored_graph_hits_are_kept_as_material(wired):
     assert [c.name for c in retrieved.companies] == ["SFA반도체", "심텍"]
 
 
-def test_workspace_anchor_collects_from_the_workspace(wired):
+def test_context_anchor_collects_from_the_anchor(wired):
     """★설계서 §14-7 ⓑ — 「점수순으로 아무거나」가 아니라 워크스페이스 기업이 앵커다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     orchestrator = _orchestrator([_hit("01234567", "무관한기업")])
     _, retrieved = RetrieveService(orchestrator).retrieve_for_ask(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG, _HYNIX]
 
 
-def test_workspace_anchor_supplies_names_for_similarity_stripping(wired, monkeypatch):
+def test_context_anchor_supplies_names_for_similarity_stripping(wired, monkeypatch):
     """★**workspace 앵커 경로에서 `anchor_names` 가 비어 순위가 퇴행했다**
     (2026-08-26 실측).
 
@@ -159,7 +159,7 @@ def test_workspace_anchor_supplies_names_for_similarity_stripping(wired, monkeyp
 
     monkeypatch.setattr(
         "app.services.retrieve_service.evidence_selector.similarities", _spy)
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     orchestrator = _orchestrator([_hit("01234567", "무관한기업")])   # resolved 없음
 
     RetrieveService(orchestrator).retrieve_for_ask(_request())
@@ -180,8 +180,8 @@ def test_anchor_companies_are_capped_and_the_cut_is_logged(wired, caplog):
     만들지 않는다. **조용히 자르지 않는다**([규칙 2])."""
     many = {f"0000000{i}": f"기업{i}" for i in range(8)}
     wired["decision"] = AnchorDecision(
-        source=AnchorSource.WORKSPACE, workspace_names=many,
-        anchors=[Anchor(key=k, name=n, source=AnchorSource.WORKSPACE)
+        source=AnchorSource.CONTEXT, workspace_names=many,
+        anchors=[Anchor(key=k, name=n, source=AnchorSource.CONTEXT)
                  for k, n in many.items()])
     with caplog.at_level("INFO"):
         _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
@@ -220,7 +220,7 @@ def test_search_hit_evidence_is_kept_even_when_hits_are_not_the_material(wired, 
 
 def test_relations_come_out_in_ring_order(wired):
     """Ring 0 → 1 → 2 → 3. 점수가 낮아도 안쪽 링이 먼저다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         _row("e_ring3", "09999999", "남", "08888888", "남2", score=0.99),
         _row("e_ring2", _SAMSUNG, "삼성전자", "evt_1", "어떤 사건",
@@ -236,7 +236,7 @@ def test_relations_come_out_in_ring_order(wired):
 def test_ring_does_not_drop_unrelated_relations(wired):
     """★**hard filter 가 아니다**(설계서 §3) — 워크스페이스와 안 닿는 관계도 남는다.
     순서만 뒤로 간다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [_row("e_far", "09999999", "남", "08888888", "남2")]}
     _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
     assert [r.edge_id for r in retrieved.relations] == ["e_far"]
@@ -245,7 +245,7 @@ def test_ring_does_not_drop_unrelated_relations(wired):
 def test_same_ring_keeps_the_incoming_order(wired):
     """★같은 링 안에서는 입력 순서(=점수순)가 남는다 — 같은 질문에 매번 다른
     순서가 나오면 안 된다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         _row("e_a", _SAMSUNG, "삼성전자", "00301246", "SFA반도체", score=0.9),
         _row("e_b", _SAMSUNG, "삼성전자", "01095722", "심텍", score=0.8),
@@ -256,7 +256,7 @@ def test_same_ring_keeps_the_incoming_order(wired):
 
 def test_ring_distribution_is_logged(wired, caplog):
     """★어느 링까지 갔는지·링마다 몇 건인지 남긴다(설계서 §3 · [규칙 2])."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         _row("e0", _SAMSUNG, "삼성전자", _HYNIX, "SK하이닉스"),
         _row("e1", _SAMSUNG, "삼성전자", "00301246", "SFA반도체"),
@@ -281,7 +281,7 @@ def test_ring_zero_survives_the_score_cap(wired):
     """★실측(2026-08-25) — 삼성전자 관계 526건에서 Ring 0 은 **137·225·414번째**다.
     점수순 상위 10건만 받아 오면 Ring 0 이 통째로 사라진다. 그래서 자르기 **전에**
     링으로 줄을 세운다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     filler = [_row(f"e_{i}", _SAMSUNG, "삼성전자", f"0777777{i}", f"밖{i}", score=0.99)
               for i in range(30)]
     wired["relations"] = {_SAMSUNG: filler + [
@@ -301,7 +301,7 @@ def test_the_asked_edge_type_comes_first_within_a_ring(wired):
     지금까지 `edge_types` 는 `SearchQuery` 에 와 있는데도 **한 번도 참조되지
     않았다**(grep 0회). 질문이 물은 엣지가 점수순 상위에 못 들면 빠지고, 그러면
     LLM 이 관계를 근거 원문에서 읽어내야 한다(설계서 §10 규칙 위반)."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         _row("e_partner", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
              score=0.99, rel_type="PARTNERS_WITH"),
@@ -319,7 +319,7 @@ def test_intent_does_not_beat_the_ring_order(wired):
     """★링을 **가로질러** 의도를 우선할지는 아직 `[DECIDE]` 다(현황서 §5-17·§7-3) —
     링별 quota 냐 의도별 우선순위냐를 **둘 다 재 본 적이 없다.** 실측 없이
     그 결정을 코드로 못 박지 않는다. 의도는 링 **안에서만** 줄을 세운다."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         # Ring 1 인데 질문이 물은 타입
         _row("e_ring1_match", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
@@ -338,7 +338,7 @@ def test_intent_does_not_beat_the_ring_order(wired):
 
 def test_relation_intent_is_a_no_op_when_the_query_asked_for_no_relation(wired):
     """관계 키워드가 없는 질의 — 순서를 건드리지 않는다(hard filter 가 아니다)."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [
         _row("e_a", _SAMSUNG, "삼성전자", "00301246", "SFA반도체",
              rel_type="PARTNERS_WITH"),
@@ -354,7 +354,7 @@ def test_relation_intent_is_a_no_op_when_the_query_asked_for_no_relation(wired):
 def test_the_relation_cut_count_is_logged(wired, caplog):
     """★완료조건 ⓓ — 잘라낸 관계 개수가 로그에 남는다. 조용히 자르면
     「그게 전부」로 읽힌다([규칙 2])."""
-    wired["decision"] = _workspace_decision()
+    wired["decision"] = _context_decision()
     # 상한(_MAX_RELATIONS_PER_COMPANY × 기업 수)을 확실히 넘긴다.
     wired["relations"] = {_SAMSUNG: [
         _row(f"e_{i}", _SAMSUNG, "삼성전자", f"0777777{i}", f"밖{i}")

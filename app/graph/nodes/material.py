@@ -1,29 +1,33 @@
-"""재료를 모으는 노드 여덟 — `RetrieveService` 에 위임한다.
+"""재료를 모으는 노드 넷 — `RetrieveService` 에 위임한다.
+
+    search ─▶ resolve_anchor ─▶ plan_material ─(Agent 루프)─▶ fetch_propagation
 
 ★**로직을 옮기지 않았다.** `RetrieveService._search()`·`_assemble()` 이 한
   덩어리로 하던 일을 노드 경계로 갈랐을 뿐이고, 각 단계가 부르는 함수는
-  그 전과 같은 것이다. 로그도 같은 순서·같은 문구로 나온다.
+  그 전과 같은 것이다.
 
 ★`_search()` 만은 **둘로 갈라 다시 썼다.** 노드 목록이 `search` 와
   `resolve_anchor` 를 나눠 놓았는데 저 메서드는 검색과 앵커 판정을 한 몸으로
   하고 있어서다. 가르면서 부르는 함수(`orchestrator.search`·
   `workspace_service.names_of`·`decide_anchor`)와 순서는 그대로 뒀다.
+
+★**`guard_workspace` 가 사라졌다**(이번 개정 · 최종 설계 §17-1). 「담아 둔
+  기업도 보고 있는 기업도 없으면 검색조차 하지 않는다」는 게이트였는데,
+  워크스페이스를 검색 경계로 보는 정책이 폐기되면서 함께 나갔다. 이 파일의
+  첫 노드는 이제 **검색**이다.
 """
 
 from __future__ import annotations
 
-from app.api.schemas import AnchorSource, Evidence
+from app.api.schemas import AnchorSource
 from app.core.trace import trace_logger
 from app.graph.state import AskState
-from app.services import (evidence_selector, query_understanding, relation_service,
+from app.services import (evidence_selector, query_understanding,
                           workspace_service)
-from app.services.retrieve_service import _MAX_LOGGED_EVIDENCE
 from app.tools import graph_tools
 from app.graph import budget
-from app.tools.scope import anchor_scope
-from app.services.retrieve_service import has_starting_point
 from app.services.retrieve_service import (RetrieveService, _anchor_companies,
-                                           _companies_from,
+                                           _anchor_names_for, _companies_from,
                                            _hits_reflect_the_anchor,
                                            _match_type_of, _with_anchor_backstop)
 from search.dto.search_request import SearchRequest
@@ -50,46 +54,7 @@ def _svc() -> RetrieveService:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ① guard_workspace — 출발점이 하나라도 있나 (설계서 §16-2)
-# ══════════════════════════════════════════════════════════════════
-
-
-def _has_starting_point(state: AskState) -> bool:
-    """재료를 모을 **출발점**이 있나 — 담은 것이든 보고 있는 것이든.
-
-    ★게이트가 보는 것은 「워크스페이스가 비었나」가 **아니라** 「출발점이
-      없나」다. 둘은 `context_keys` 가 생기기 전까지만 같은 말이었다 —
-      기업 상세 페이지에서 묻는 질문은 담아 둔 것이 없어도 대상이 있다.
-
-    ★판정 자체는 **`retrieve_service` 에 한 벌만** 있다. 대조 기준선
-      (`AnswerService.ask`)이 같은 판정을 해야 하는데, 두 곳에 적으면
-      갈린다 — 여기는 State 모양으로 받아 넘기는 껍데기다.
-    """
-    return has_starting_point(state["request"])
-
-
-def guard_workspace(state: AskState) -> AskState:
-    """★**검색조차 하지 않는다** — 재료를 모을 출발점이 없다.
-
-    「무엇에 대한 인사이트인가」가 정해지지 않으면 답하지 않는 것이 맞다.
-    실제 분기는 조건부 엣지가 하고, 이 노드는 **그 사실을 로그에 남긴다.**
-
-    ★노드 이름을 안 바꿨다 — `ask_graph.py` 가 문자열로 붙이고 로그·테스트가
-      전부 이 이름을 쓴다. 「이름이 갈리면 어느 노드 얘기인지 대조해야 한다」
-      (같은 파일의 노드 이름 주석). 판정의 뜻은 `_has_starting_point` 에 있다.
-    """
-    if not _has_starting_point(state):
-        log.info("ask.rejected reason=no_starting_point")
-    return {}
-
-
-def has_workspace(state: AskState) -> str:
-    """조건부 엣지 — 출발점이 하나도 없으면 재료 없이 끝낸다."""
-    return "search" if _has_starting_point(state) else "halt_no_material"
-
-
-# ══════════════════════════════════════════════════════════════════
-#  ② search — flow ② (설계서 §10)
+#  ① search — flow ② (설계서 §10)
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -125,7 +90,7 @@ def search(state: AskState) -> AskState:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ③ resolve_anchor — flow ①b (설계서 §10)
+#  ② resolve_anchor — flow ①b (설계서 §10)
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -170,7 +135,7 @@ def is_resolved(state: AskState) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ④ plan_material — 무엇을 재료로 삼을지 확정한다
+#  ③ plan_material — 무엇을 재료로 삼을지 확정한다
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -190,10 +155,9 @@ def plan_material(state: AskState) -> AskState:
       아니라 조용히 0건**이라, 정규화하거나 변환하면 「사건이 없다」로 잘못
       읽힌다. 넘어온 형태 그대로 State 에 싣는다.
 
-    ★`anchor_names`·`intent` 는 **retrieve 쪽 계산식**이다(`_events_of`).
-      `resolved_entities` 를 우선하고 비면 `decision.anchors` 로 내려간다 —
-      `answer_service` 가 쓰던 「`decision.anchors` 만」과 다르다. 재료를 실제로
-      고른 것이 이쪽이라 이쪽을 채택했다(`state.py` 의 `anchor_names` 주석).
+    ★`anchor_names`·`intent` 는 **retrieve 쪽 계산식**이다(`_anchor_names_for`).
+      두 경로가 같은 함수를 부른다 — 사본을 두면 「무엇으로 골랐나」와 「무엇으로
+      검사하나」가 갈린다(`state.py` 의 `anchor_names` 주석).
     """
     request, query, result = state["request"], state["query"], state["result"]
     decision = state["decision"]
@@ -208,15 +172,11 @@ def plan_material(state: AskState) -> AskState:
                  [c.key for c in companies], len(result.hits))
 
     # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
-    #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이다.
-    #   ★**로직은 그대로다** — 뺀 것은 「끼어들었나」를 State 에 남기던 값뿐이고,
-    #     끼어드는 조건도 결과도 안 바뀐다. 로그는 `_with_anchor_backstop` 안에
-    #     이미 있다(`anchor.backstop`).
+    #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이고, `anchorless` 는
+    #   앵커가 없어 역시 무동작이다 — 그쪽은 히트가 유일한 재료다.
     companies = _with_anchor_backstop(companies, decision)
 
-    anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
-    if not anchor_names:
-        anchor_names = [a.name for a in decision.anchors if a.name]
+    anchor_names = _anchor_names_for(query, decision, companies)
     intent = evidence_selector.intent_of(request.question, anchor_names)
 
     # ★탐색 예산을 **여기서 연다.** Agent 가 도구를 부르기 전 마지막 결정론
@@ -227,50 +187,14 @@ def plan_material(state: AskState) -> AskState:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ⑤~⑧ fetch_* — 조회 넷. 전부 RetrieveService 에 위임한다
+#  ④ fetch_propagation — Agent 뒤에 남은 결정론 조회 하나
 # ══════════════════════════════════════════════════════════════════
-
-
-def _scope_keys(state: AskState) -> list[str]:
-    """도구가 만질 수 있는 key — **서버가 정한 재료 범위**다.
-
-    ★`companies` 와 앵커를 **합친다.** 앵커만 두면 `use_hits=True` 경로가
-      막힌다 — 그때 `companies` 는 검색 히트의 관계 상대이지 앵커가 아니다
-      (「삼성전자에 납품하는 기업」의 재료는 공급사들이다). 반대로 `companies`
-      만 두면 백스톱 이전 상태의 앵커를 못 쓴다.
-
-    ★**요청이 준 값이 아니다.** `workspace_keys` 를 그대로 넣지 않는다 —
-      범위는 「서버가 이 질문의 재료로 고른 것」이지 「사용자가 담아 둔 것」이
-      아니다. 넓히면 도구가 재료 밖 기업을 조회할 수 있게 된다.
-    """
-    keys = [c.key for c in state["companies"]]
-    keys += [a.key for a in state["decision"].anchors]
-    return list(dict.fromkeys(k for k in keys if k))
-
-
-def _scope(state: AskState):
-    """도구가 읽을 **서버 쪽 문맥**을 세운다 — 범위 + 랭킹 문맥.
-
-    ★`workspace_keys`·`anchor_keys` 를 도구 인자로 넘기지 않는다. 링(ring)
-      순서와 방향 판정이 그 값을 쓰는데, 인자면 2차의 Agent 가 「워크스페이스는
-      필터가 아니라 랭킹 문맥」(설계서 §3)이라는 정책을 스스로 바꿀 수 있다.
-    """
-    return anchor_scope(
-        _scope_keys(state),
-        workspace_keys=state["request"].workspace_keys,
-        anchor_keys=[a.key for a in state["decision"].anchors],
-        anchor_names=state["anchor_names"])
-
-
-def fetch_events(state: AskState) -> AskState:
-    """사건. **도구가 만든다**(Phase 1.5).
-
-    ★role 을 넘기지 않는다 — 도구가 아예 **검색 필터로서의 role 을 받지
-      않는다**(`graph_tools.get_events`). 역할은 결과의 표기로만 남는다.
-    """
-    with _scope(state):
-        return {"events": graph_tools.get_events(
-            [c.key for c in state["companies"]], state["intent"])}
+#
+# ★`fetch_events`·`fetch_relations`·`fetch_evidence` 는 **지웠다**(이번 개정).
+#   배선이 끊긴 지 오래고(`agent ⇄ run_tools` 와 `evidence_validation` 이 대신),
+#   그 셋만 쓰던 `_scope`·`_scope_keys` 도 함께 나갔다 — 살아 있는 범위 설정은
+#   `agent_loop._scope_of` 다. 죽은 경로를 남겨 두면 「어느 쪽이 진짜인가」를
+#   매번 되짚어야 한다.
 
 
 def fetch_propagation(state: AskState) -> AskState:
@@ -308,51 +232,3 @@ def fetch_propagation(state: AskState) -> AskState:
     #   더 못 부른다」) 자른 값과 같은 값을 세는 것이 계약에 맞다.
     return {"propagation": propagation,
             **budget.spend(state, propagations_used=len(risky))}
-
-
-def fetch_relations(state: AskState) -> AskState:
-    """관계. **도구가 만든다**(Phase 1.5).
-
-    ★`edge_types` 는 **거르지 않고 순서만** 정한다 — 워크스페이스가 hard filter
-      가 아닌 것과 같은 이유다(설계서 §3).
-    """
-    query = state["query"]
-    with _scope(state):
-        return {"relations": graph_tools.get_relations(
-            [c.key for c in state["companies"]],
-            edge_types=query.edge_types,
-            direction=getattr(query.direction, "value", None))}
-
-
-def fetch_evidence(state: AskState) -> AskState:
-    """관계·사건·검색히트의 근거 id 를 **합집합으로 모아 한 번에** 조회한다.
-
-    셋을 다 모으는 이유는 출처가 셋이기 때문이다 — 관계에 달린 근거, 사건에
-    달린 근거, 검색이 짚어 준 근거. 어느 하나만 보면 답변이 인용할 수 있는
-    문장이 줄어든다.
-
-    ★히트를 재료로 **안 써도 그 근거는 그대로 모은다.** 한 번 걸러 봤다가
-      실측으로 되돌렸다(현황서 §8-6) — 여기 든 근거의 절반가량이 워크스페이스에
-      닿아, 거르면 질문이 물은 사례를 버린다.
-
-    ★못 꺼낸 근거를 **조용히 빼지 않는다.** `missing=True` 로 남긴다 —
-      빼면 「근거가 없는 관계」로 읽힌다.
-
-    ★`match_type` 은 **여기서 만들지 않는다.** 검색 경로 이름이라 `search` 가
-      정한다 — 이 노드는 근거 조회·조립만 한다.
-    """
-    from_relations = [r.evidence_id for r in state["relations"] if r.evidence_id]
-    from_events = [eid for event in state["events"] for eid in event.evidence_ids]
-    from_hits = [ref["evidence_id"] for hit in state["result"].hits
-                 for ref in hit.evidence if ref.get("evidence_id")]
-    ids = from_relations + from_events + from_hits
-
-    evidence = [Evidence(**row) for row in relation_service.evidence_for_ids(ids)]
-
-    # 출처별로 갈라 남긴다 — 합계만 있으면 「근거가 왜 이것뿐인가」를 못 따진다.
-    log.info("evidence.collect from_relations=%d from_events=%d from_hits=%d "
-             "unique=%d -> fetched=%d missing=%d ids=%s",
-             len(from_relations), len(from_events), len(from_hits), len(set(ids)),
-             len(evidence), sum(1 for e in evidence if e.missing),
-             [e.evidence_id for e in evidence[:_MAX_LOGGED_EVIDENCE]])
-    return {"evidence": evidence}

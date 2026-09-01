@@ -99,23 +99,16 @@ def test_case(case: AgentEvalCase, runs: dict[str, CaseRun]):
         assert not run.failed, f"답변이 실패로 끝났다{ctx}"
 
     # ── ⑦ 응답의 `anchor_source` 는 서버 값 그대로다 ──────────
-    if case.expected_anchor_source is None:
-        # ★**두 값이 갈리는 유일한 자리다.** 출발점이 하나도 없으면
-        #   `guard_workspace` 가 `resolve_anchor` **앞에서** 끊으므로 State 에
-        #   `decision` 이 안 생긴다(`run.anchor_source is None`). 그런데 응답은
-        #   `_no_material()` 이 만들어 `unresolved` 를 싣는다.
-        #
-        #   ★비대칭을 **덮지 않고 적어 둔다.** 「질문이 대상을 지정했는데 못
-        #     찾았다」와 「지정할 것도 없었다」는 다른 사실인데 응답이 한 값으로
-        #     말한다. 프론트가 두 경우에 다른 안내를 하려면 이 자리가 갈려야
-        #     하고, 그건 응답 계약 변경이라 따로 정할 일이다.
-        assert run.anchor_source is None, \
-            f"게이트에서 끝났는데 앵커 판정이 있다{ctx}"
-        assert run.response.anchor_source is AnchorSource.UNRESOLVED, \
-            f"게이트 응답의 anchor_source 가 unresolved 가 아니다{ctx}"
-    else:
-        assert run.response.anchor_source is case.expected_anchor_source, \
-            f"응답에 실린 anchor_source 가 서버 판정과 다르다{ctx}"
+    #
+    # ★**옛 비대칭이 사라졌다**(최종 설계 §17-1). 전에는 출발점이 하나도 없으면
+    #   게이트가 `resolve_anchor` 앞에서 끊어 State 에 `decision` 이 안 생기는데
+    #   (`run.anchor_source is None`) 응답에는 `unresolved` 가 실렸다 — 「지정했는데
+    #   못 찾았다」와 「지정할 것도 없었다」를 한 값으로 말하는 자리였다.
+    #   게이트가 없어져 모든 요청이 앵커 판정을 지나므로, 지금은 둘이 늘 같다.
+    assert run.response.anchor_source is case.expected_anchor_source, \
+        f"응답에 실린 anchor_source 가 서버 판정과 다르다{ctx}"
+    assert run.anchor_source is case.expected_anchor_source, \
+        f"State 의 앵커 판정이 응답과 갈렸다{ctx}"
 
     # ── ⑧ 인용 — 화이트리스트 밖 근거가 나가지 않는다 ─────────
     allowed = {e.evidence_id for e in run.evidence}

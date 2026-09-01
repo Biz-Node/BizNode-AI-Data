@@ -201,40 +201,65 @@ def _with_anchor_backstop(companies: list[RelationEndpoint],
     return kept
 
 
-def has_starting_point(request: AskRequest) -> bool:
-    """재료를 모을 **출발점**이 있나 — 담은 것이든 보고 있는 것이든 (설계서 §16-2).
-
-    ★**한 벌만 둔다.** 그래프(`material.has_workspace`)와 대조 기준선
-      (`AnswerService.ask`)이 같은 판정을 해야 하는데, 두 곳에 적으면 반드시
-      갈린다 — 갈리면 `/ask` 두 입구가 같은 요청을 다르게 거절한다.
-
-    ★**빈 key 는 안 센다.** `scope.anchor_scope()` 가 `frozenset(k for k in keys
-      if k)` 로 거르는 것과 같은 규약이다. `[""]` 는 길이가 1 이라 그냥 `bool()`
-      로 보면 게이트가 열리는데, 그 뒤 `names_of([""])` 는 아무것도 못 찾아
-      **출발점이 없는 채로 검색까지 간다** — 거절이 아니라 빈 답이 나가는 길이다.
-
-    ★**`question` 은 출발점이 아니다.** 「근거 검색으로 관련 기업을 찾는」
-      discovered 경로가 붙으면 그때 이 판정이 검색 **뒤로** 옮겨져야 한다 —
-      찾았는지는 검색을 해 봐야 알기 때문이다. 지금은 요청에 실려 오는 값만
-      보므로 검색 앞에 있어도 순환이 없다.
-    """
-    return any(k for k in (*request.workspace_keys, *request.context_keys))
-
-
 def _hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
-    """검색 히트를 재료로 믿어도 되나.
+    """검색 히트를 재료로 써도 되나.
 
-    ★믿어도 되는 경우는 하나다 — ② Search 가 **실제로 앵커를 잡고** 그래프를 돈
-      경우다(`resolved_entities` 가 있음). 그때 히트는 「그 기업의 관계 상대」이고
-      그게 곧 답이다(「삼성전자에 납품하는 기업」).
+    ★**두 경우다.**
 
-    ★믿으면 안 되는 경우 셋 — 전부 히트가 앵커와 무관하다.
+        ① `source=query` 이고 ② Search 가 **실제로 앵커를 잡았다**
+           (`resolved_entities` 가 있음). 그때 히트는 「그 기업의 관계 상대」이고
+           그게 곧 답이다(「삼성전자에 납품하는 기업」).
 
-        SEMANTIC 폴백        의미가 비슷한 아무 기업 (설계서 §14-5)
-        anchorless 슬롯      source 5 + target 5 를 점수순으로 아무거나 (§14-7 ⓑ)
-        norm_name fallback   ② 는 못 찾았고 우리가 뒤늦게 찾은 앵커 (§16-1)
+        ② `source=anchorless` — **앵커가 아예 없다.** 그러면 히트 말고 재료가
+           없다. 전에는 이 자리가 `workspace` 였고 워크스페이스 기업을 앵커로
+           승격시켜 재료를 만들었는데, 그것이 §17-3 이 폐기한 구조다. 앵커를
+           지어내지 않으므로 **Global Search 가 찾아 준 것이 재료**다
+           (최종 설계 §8: Global Search → Candidate → Contextual Ranking).
+
+    ★쓰면 안 되는 경우 둘 — 히트가 **정해진 앵커와 어긋난다.**
+
+        `source=context`       화면이 대상을 알고 있다 — 그 기업이 재료다
+        `source=query` + norm_name fallback
+                               ② 는 못 찾았고 우리가 뒤늦게 찾은 앵커라
+                               히트는 그 앵커를 반영하지 않는다 (§16-1)
+
+    ★★`anchorless` 히트의 **질은 보장되지 않는다.** SEMANTIC 폴백은 의미가
+      비슷한 아무 기업이고, anchorless 관계 조회는 source 5 + target 5 를
+      점수순으로 채운다(§14-7 ⓑ). 그래서 답변에 「대상 지정 없음」 표기가
+      함께 나간다(`llm/prompt.TARGET_NOTE_BY_SOURCE`) — 재료가 약하다는 사실이
+      사용자에게 가는 것이 조용히 서술하는 것보다 낫다(설계서 §14-6).
     """
+    if decision.source is AnchorSource.ANCHORLESS:
+        return True
     return decision.source is AnchorSource.QUERY and bool(query.resolved_entities)
+
+
+def _anchor_names_for(query: SearchQuery, decision: AnchorDecision,
+                      companies: list[RelationEndpoint]) -> list[str]:
+    """사건 랭킹에서 **라벨과 질문 양쪽에서 떼어낼 기업명**(`evidence_selector`).
+
+    ★**한 벌만 둔다.** `/ask` 그래프(`plan_material`)와 `/retrieve`(`_events_of`)가
+      같은 값을 써야 한다 — 갈리면 두 입구가 같은 질문에 다른 순위를 낸다.
+
+    ★셋째 갈래가 `anchorless` 때문에 필요해졌다(이번 개정). 전에는
+
+          resolved_entities  →  없으면 decision.anchors
+
+      뿐이었는데, `anchorless` 는 **둘 다 비어 있다.** 그대로 두면 목록이 `[]` 가
+      되어 `evidence_selector` 가 실험 3회로 정한 규칙 —「질문과 라벨 **양쪽에서**
+      앵커 기업명 제거」— 가 라벨 쪽에서 안 걸리고, 모듈이 **실패로 기록한 실험
+      ②**(「기업명이 든 라벨이 상위를 먹는다」)로 되돌아간다(현황서 §5-23 이
+      워크스페이스 경로에서 이미 한 번 고친 퇴행이다).
+
+      `workspace` 경로에서 그 목록은 「재료가 된 기업들의 이름」이었다.
+      `anchorless` 에서 같은 것은 **히트가 준 재료 기업들의 이름**이다.
+    """
+    names = [r.corp_name for r in query.resolved_entities if r.corp_name]
+    if not names:
+        names = [a.name for a in decision.anchors if a.name]
+    if not names:
+        names = [c.name for c in companies if c.name]
+    return names
 
 
 class RetrieveService:
@@ -360,23 +385,11 @@ class RetrieveService:
           질문이 부른 기업이 둘이면 둘 다 근거다. scope 밖 기업은 애초에
           `companies` 에 없으므로 섞이지 않는다.
         """
-        # ★**workspace 앵커 경로에서 이 목록이 비어 순위가 퇴행했다** (2026-08-26).
-        #
-        #   `decide_anchor()` 는 `resolved_entities` 가 **있으면** `query` 로 가므로,
-        #   `source=workspace` 는 **정의상 `resolved_entities` 가 0** 이다. 그런데
-        #   `anchor_names` 를 거기서만 읽어서 workspace 질의는 늘 `[]` 였다
-        #   (실측: 「납품 단가 압박」·「최근 인수 사례」·「생산 차질 위험」 셋 다).
-        #
-        #   그러면 `evidence_selector` 가 실험 3회로 정한 규칙 —「질문과 라벨
-        #   **양쪽에서** 앵커 기업명 제거」— 가 라벨 쪽에서 안 걸린다. 질문에는
-        #   기업명이 없고(그래서 workspace 로 떨어졌다) 라벨에는 있으니, 모듈이
-        #   **실패로 기록한 실험 ②**(「기업명이 든 라벨이 상위를 먹는다」)로
-        #   그대로 되돌아간다.
-        #
-        #   ★이름은 이미 손에 있다 — `decision.anchors` 가 그 워크스페이스 기업들이다.
-        anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
-        if not anchor_names:
-            anchor_names = [a.name for a in decision.anchors if a.name]
+        # ★**앵커 없는 경로에서 이 목록이 비면 순위가 퇴행한다** (현황서 §5-23).
+        #   왜 셋째 갈래(재료 기업 이름)가 필요한지는 `_anchor_names_for` 에 적었다.
+        #   ★계산식은 **그 함수 한 곳**에만 둔다 — `/ask` 그래프의 `plan_material`
+        #     이 같은 함수를 부른다.
+        anchor_names = _anchor_names_for(query, decision, companies)
         intent = evidence_selector.intent_of(question, anchor_names)
         matched = evidence_selector.matched_event_types(intent)
         # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). 「리스크」에 걸리는

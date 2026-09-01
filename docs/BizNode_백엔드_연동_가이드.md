@@ -448,19 +448,48 @@ PostgreSQL 을 읽으므로(실측 12,250건) **이 헤더를 실물 여부 판�
             요청 바디는 /retrieve 와 같습니다(AskRequest). 새 이름을 만들지 않았습니다.
 ```
 
-★`/ask` 에서 `workspace_keys` 는 **필수**입니다 — 그래프 안에서 인사이트를
-만드는 챗봇이라 워크스페이스 없이 부를 수 없습니다. 스키마 기본값이
-`default_factory=list` 라 **422 는 아니지만**, 2026-08-26 부터 **서버가 검색 전에
-거부**하고 `anchor_source="unresolved"` 로 고정 문구를 돌려줍니다.
+### ★계약 변경 2건 (2026-09-01) — Workspace & Contextual Agent 최종 설계
 
-★**요청 계약은 바뀌지 않습니다** (2026-08-25 확인). `/ask` 는 계속
-`{ question, workspace_keys }` 를 받고, `workspace_keys` 는 **현재 워크스페이스 기업의
-`corp_code` 배열**입니다 — 요청마다 실어 보내 주세요. 워크스페이스 동기화 API 는
-**만들지 않습니다.**
+근거: [최종 설계 §6-1·§17-1·§17-3](BizNode_Workspace_Contextual_Agent_Final_Design.md).
+**워크스페이스는 검색 경계가 아니라 랭킹 문맥**이라는 정의가 확정되면서 둘이 바뀝니다.
+
+**① `/ask` 의 `workspace_keys` 가 필수 → 선택입니다.**
+
+```text
+전   workspace_keys: []  →  검색조차 하지 않고 거부
+                            「이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다」
+후   workspace_keys: []  →  Global Search + Global Ranking 으로 **정상 답변**
+```
+
+Home 화면처럼 아무것도 담지 않은 상태에서 던지는 질문이 이제 답을 받습니다.
+`workspace_keys` 를 주면 검색 결과의 **순서**에 반영될 뿐, 워크스페이스 밖 기업이
+결과에서 사라지지 않습니다. **보내던 대로 계속 보내 주시면 됩니다** — 값이 있을 때의
+동작은 그대로이고, 빈 배열이 더 이상 거부되지 않는 것이 달라진 전부입니다.
+
+**② `AskResponse.anchor_source` 의 `workspace` 값이 `anchorless` 로 바뀝니다.**
+
+```text
+query        질문이 지정한 대상에 대해 답했다
+context      사용자가 지금 보고 있는 기업을 대상으로 삼았다
+anchorless   ★질문이 대상을 지정하지 않았다 — **정상**. 옛 `workspace` 자리
+unresolved   지정했는데 못 찾았다
+```
+
+옛 `workspace` 는 「담아 둔 기업을 답변 대상으로 삼았다」는 뜻이었습니다. 그것이
+질문이 묻지 않은 대상으로 답하는 구조라 폐기했습니다 — 이제 앵커가 없으면 없다고
+말하고, 재료는 Global Search 가 찾은 것을 씁니다. `RetrieveResponse.anchors[]` 도
+이때 **빈 배열**입니다(전에는 워크스페이스 기업이 실렸습니다).
+
+> ⚠ **화면에서 `"workspace"` 를 분기 조건으로 쓰고 있다면 `"anchorless"` 로 바꿔
+> 주세요.** 값이 사라지므로 그대로 두면 그 분기가 죽습니다.
+
+★**그 밖의 요청 계약은 바뀌지 않습니다.** `/ask` 는 계속
+`{ question, workspace_keys, context_keys }` 를 받고, `workspace_keys` 는 **현재
+워크스페이스 기업의 `corp_code` 배열**입니다 — 요청마다 실어 보내 주세요.
+워크스페이스 동기화 API 는 **만들지 않습니다.**
 
 ★**응답 필드 둘이 2026-08-26 에 추가됐습니다** —
-`AskResponse.anchor_source`(`query`/`workspace`/`unresolved`)와
-`RetrieveResponse.anchors[]`. 뜻은
+`AskResponse.anchor_source` 와 `RetrieveResponse.anchors[]`. 뜻은
 [설계서 §14](BizNode_Search_Layer_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
 [현황서 §3-2](BizNode_Search_Layer_현황서.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
 

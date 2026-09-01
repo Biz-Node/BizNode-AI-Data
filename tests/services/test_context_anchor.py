@@ -8,17 +8,17 @@
       워크스페이스가 비면     검색조차 안 하고 거절     ← 답이 있는데 안 준다
 
   둘 다 §14-3 이 막으려는 「물은 것과 다른 대상으로 답하기」의 같은 종류다.
+  ★**둘 다 없어졌다**(최종 설계 §17-1·§17-3) — 앞의 것은 `anchorless` 가,
+    뒤의 것은 게이트 제거가 대신한다. 이 파일의 절반이 그 개정을 지킨다.
 
 ★**판정 순서가 이 기능의 전부다.**
 
       query        질문이 이름을 지목했고 해소됐다
       unresolved   지목했는데 못 찾았다            ← 여전히 여기서 끝낸다
-      context      **보고 있는 기업**              ← 신설 · 워크스페이스보다 먼저
-      workspace    담아 둔 기업
-      halt         셋 다 없다
+      context      **보고 있는 기업**
+      anchorless   셋 다 없다                      ← ★워크스페이스로 갈아타지 않는다
 
-★이 파일이 보는 것은 **판정과 게이트**다. 재료를 어떻게 모으는지는 안 본다 —
-  `_scope_keys()` 가 `companies + decision.anchors` 라 새 앵커가 자동으로 들어가고,
+★이 파일이 보는 것은 **판정**이다. 재료를 어떻게 모으는지는 안 본다 —
   그건 `test_material_anchor.py` 가 이미 지키는 계약이다.
 """
 
@@ -28,7 +28,6 @@ import pytest
 
 from app.api.schemas import AnchorSource, AskRequest, MatchType
 from app.graph.nodes import answer as answer_nodes
-from app.graph.nodes.material import _has_starting_point, has_workspace
 from app.llm.prompt import TARGET_NOTE_BY_SOURCE
 from app.services import query_understanding as qu
 from app.services.query_understanding import AnchorDecision
@@ -82,22 +81,30 @@ def test_context_beats_workspace(graph):
         (_HYUNDAI, "현대자동차", AnchorSource.CONTEXT)]
 
 
-def test_workspace_still_wins_when_there_is_no_context(graph):
-    """★기존 동작을 안 바꾼다 — `context_names` 가 비면 예전 그대로다."""
+def test_no_context_means_anchorless_not_workspace(graph):
+    """★**이번 개정의 핵심**(최종 설계 §17-3).
+
+    보고 있는 기업이 없으면 전에는 담아 둔 기업이 대상으로 **승격**됐다
+    (`source=workspace`). 그러면 「이 회사 노조 리스크 어때?」가 「삼성전자·
+    SK하이닉스의 노조 리스크」로 조용히 바뀐다 — 질문이 묻지 않은 대상이다.
+
+    지금은 `anchorless` 로 남고 **앵커가 비어 있다.** 워크스페이스는 대상이
+    아니라 랭킹 문맥이므로 `workspace_names` 로만 따라간다.
+    """
     decision = qu.decide_anchor("이 회사 노조 리스크 어때?", [], _WS, {})
 
-    assert decision.source is AnchorSource.WORKSPACE
-    assert {a.key for a in decision.anchors} == set(_WS)
+    assert decision.source is AnchorSource.ANCHORLESS
+    assert decision.anchors == [], "워크스페이스 기업이 앵커로 승격되면 안 된다"
+    assert decision.workspace_names == _WS, "랭킹·표기용으로는 그대로 들고 간다"
 
 
 def test_context_names_default_to_empty(graph):
-    """★4번째 인자를 **안 주면** 예전과 똑같아야 한다.
+    """★4번째 인자를 **안 주면** 「보고 있는 기업 없음」이어야 한다.
 
     부르는 쪽이 셋인데(`material.resolve_anchor`·`retrieve_service._search`·
-    테스트) 하나라도 빠뜨리면 그 경로만 조용히 다르게 동작한다. 기본값이
-    「보고 있는 기업 없음」인 것이 그 방어다.
+    테스트) 하나라도 빠뜨리면 그 경로만 조용히 다르게 동작한다.
     """
-    assert qu.decide_anchor("이 회사 어때?", [], _WS).source is AnchorSource.WORKSPACE
+    assert qu.decide_anchor("이 회사 어때?", [], _WS).source is AnchorSource.ANCHORLESS
 
 
 def test_query_still_beats_context(graph):
@@ -149,64 +156,39 @@ def test_decision_always_carries_context_names(graph):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  게이트 — 「워크스페이스가 비었나」가 아니라 「출발점이 없나」
+#  게이트 — ★**없어졌다** (최종 설계 §17-1)
 # ══════════════════════════════════════════════════════════════════════
 
 def _state(**kwargs) -> dict:
     return {"request": AskRequest(question="이 회사 어때?", **kwargs)}
 
 
-def test_context_only_passes_the_gate():
-    """★①번 문제(빈 워크스페이스에서 답 못 함)가 여기서 풀린다.
+def test_there_is_no_starting_point_gate_any_more():
+    """★출발점 게이트가 되살아나면 여기서 걸린다.
 
-    기업 상세 페이지에서 묻는 질문은 담아 둔 것이 없어도 대상이 있다.
+    「담아 둔 기업도 보고 있는 기업도 없으면 검색조차 하지 않는다」는 판정이
+    세 곳(`retrieve_service.has_starting_point`·`material.has_workspace`·
+    `AnswerService.ask`)에 걸쳐 있었다. 셋 다 없어야 한다 — 하나라도 남으면
+    그 입구만 조용히 거절한다.
     """
-    state = _state(context_keys=[_HYUNDAI])
+    from app.graph.nodes import material
+    from app.services import answer_service, retrieve_service
 
-    assert _has_starting_point(state) is True
-    assert has_workspace(state) == "search"
-
-
-def test_workspace_only_still_passes():
-    assert has_workspace(_state(workspace_keys=[_SAMSUNG])) == "search"
-
-
-def test_neither_halts():
-    """★둘 다 없으면 **검색조차 하지 않는다**(설계서 §16-2). 이건 안 바뀐다."""
-    state = _state()
-
-    assert _has_starting_point(state) is False
-    assert has_workspace(state) == "halt_no_material"
-
-
-def test_empty_string_keys_do_not_open_the_gate():
-    """★`[""]` 는 길이가 1 이라 `bool()` 로 보면 게이트가 열린다.
-
-    그러면 출발점이 없는 채로 검색까지 가고, `names_of([""])` 가 아무것도 못
-    찾아 앵커도 안 선다 — 「거절」이 아니라 **빈 답**이 나가는 길이다.
-    `scope.anchor_scope()` 가 빈 key 를 거르는 것과 같은 규약으로 막는다.
-    """
-    assert _has_starting_point(_state(context_keys=[""])) is False
-    assert _has_starting_point(_state(workspace_keys=["", ""])) is False
-    assert _has_starting_point(_state(workspace_keys=[""],
-                                      context_keys=["", _HYUNDAI])) is True
+    assert not hasattr(retrieve_service, "has_starting_point")
+    assert not hasattr(material, "has_workspace")
+    assert not hasattr(material, "_has_starting_point")
+    assert not hasattr(answer_service, "_NO_WORKSPACE_MESSAGE")
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  halt 문구 — 사용자가 할 일이 다르다
+#  halt 문구 — 남은 길은 `unresolved` 하나뿐이다
 # ══════════════════════════════════════════════════════════════════════
 
-def test_halt_message_for_no_starting_point():
-    state = _state() | {"decision": AnchorDecision(source=AnchorSource.UNRESOLVED)}
-    answer = answer_nodes.halt_no_material(state)["response"].answer
+def test_halt_message_is_always_the_unresolved_one():
+    """★들어오는 길이 하나로 줄었다(최종 설계 §17-1).
 
-    assert "담긴 기업이 없어" in answer
-
-
-def test_halt_message_with_context_is_the_unresolved_one():
-    """★`workspace_keys` 만 보면 여기서 **엉뚱한 문구**가 나간다.
-
-    보고 있는 기업은 있는데 이름을 못 찾아 온 길이다 — 사용자가 할 일은
+    전에는 둘이었고 문구도 둘이었다 — 「담긴 기업이 없다」와 「그 대상을 못
+    찾았다」. 앞의 길이 사라졌으므로 남은 문구도 하나다. 사용자가 할 일은
     기업을 담는 것이 아니라 **다시 묻는 것**이다.
     """
     state = _state(context_keys=[_HYUNDAI]) | {
@@ -222,12 +204,26 @@ def test_halt_message_with_context_is_the_unresolved_one():
 #  프롬프트 — 표기가 갈려야 LLM 이 대상을 안 헷갈린다
 # ══════════════════════════════════════════════════════════════════════
 
-def test_target_note_for_context_is_not_the_workspace_one():
-    """★한 문구를 돌려 쓰면 LLM 이 보고 있는 기업을 워크스페이스 기업으로 읽는다."""
+def test_target_note_for_context_is_not_the_anchorless_one():
+    """★한 문구를 돌려 쓰면 LLM 이 「대상이 정해진 기업」과 「그냥 걸린 기업」을
+    구별하지 못한다."""
     note = TARGET_NOTE_BY_SOURCE[AnchorSource.CONTEXT]
 
-    assert note and note != TARGET_NOTE_BY_SOURCE[AnchorSource.WORKSPACE]
+    assert note and note != TARGET_NOTE_BY_SOURCE[AnchorSource.ANCHORLESS]
     assert "보고 있는 기업" in note
+
+
+def test_anchorless_note_does_not_name_the_workspace_as_the_target():
+    """★문구가 곧 정책이다(최종 설계 §17-3).
+
+    「워크스페이스 기업들을 대상으로 삼았습니다」는 앵커 승격의 선언이었다.
+    지금 문구는 **대상이 없다**고 말해야 한다 — 재료는 관련도로 모은 것이지
+    답변 대상으로 지정된 기업이 아니다.
+    """
+    note = TARGET_NOTE_BY_SOURCE[AnchorSource.ANCHORLESS]
+
+    assert "지정 없음" in note
+    assert "워크스페이스" not in note
 
 
 def test_every_anchor_source_has_a_target_note():

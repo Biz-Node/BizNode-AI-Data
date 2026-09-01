@@ -19,8 +19,7 @@ from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, Ma
 from app.core.trace import trace_logger
 from app.services import claim_check, evidence_selector, material_consistency
 from app.services.query_understanding import AnchorDecision
-from app.services.retrieve_service import (RetrieveService, _default_embed,
-                                           has_starting_point)
+from app.services.retrieve_service import RetrieveService, _default_embed
 from app.llm import prompt as shared
 from app.llm.prompt import EventRef, RelationRef
 from pipeline.llm import ask_json
@@ -133,15 +132,15 @@ A에 대한 내용과 B에 대한 내용을 구분합니다.
 "공급망으로 연결된다"는 정보만으로 위와 같은 전망을 만들지 않습니다.
 
 
-[워크스페이스]
+[대상 지정 없음]
 
-[사실]의 "답변 대상: 워크스페이스"는
-질문이 특정 기업을 지정하지 않아 워크스페이스 기업을 대상으로 답한다는 뜻입니다.
+[사실]의 "답변 대상: 지정 없음"은
+질문이 특정 대상을 지정하지 않았다는 뜻입니다.
 
-워크스페이스 기업은 [사실]에 표시된
-"기업=워크스페이스"를 기준으로 판단합니다.
+아래 재료는 질문과의 관련도로 모은 것이며
+답변의 대상으로 지정된 기업이 아닙니다.
 
-워크스페이스 기업마다 확인된 내용을 독립적으로 설명합니다.
+기업마다 확인된 내용을 독립적으로 설명합니다.
 
 예:
 A: 확인된 관계 또는 사건
@@ -150,17 +149,21 @@ C: 관련 근거 없음
 
 기업들을 하나의 이야기로 억지로 연결하지 않습니다.
 
-인사이트를 작성할 때는 반드시 워크스페이스 기업이
-직접 주체이거나 직접적인 영향 대상이어야 합니다.
+특정 기업이 질문의 대상인 것처럼 서술하지 않습니다.
+"이 기업들에 대해 답한다"가 아니라
+"질문과 관련해 다음이 확인된다"로 씁니다.
 
-워크스페이스 밖의 기업들 사이의 관계만으로
-워크스페이스 기업의 인사이트를 만들지 않습니다.
+[사실] 머리말에 "워크스페이스:"가 있으면
+그 기업들은 사용자가 담아 둔 관심 기업입니다.
+재료 중 그 기업들과 닿는 것이 있으면 어떻게 닿는지 함께 밝힙니다.
 
-단, evidence의 about이 해당 워크스페이스 기업과 연결되지 않았다면
-워크스페이스 기업이라는 이유만으로 그 evidence를 사용하지 않습니다.
+워크스페이스 밖이라는 이유로 재료를 빼지 않습니다.
+워크스페이스 안이라는 이유로 근거 없이 끌어오지도 않습니다.
+evidence의 about이 그 기업과 연결되지 않았다면
+담아 둔 기업이라는 이유만으로 그 evidence를 사용하지 않습니다.
 
-이 [워크스페이스] 절의 규칙은
-"답변 대상: 워크스페이스"일 때만 적용합니다.
+이 [대상 지정 없음] 절의 규칙은
+"답변 대상: 지정 없음"일 때만 적용합니다.
 
 
 [보고 있는 기업]
@@ -300,8 +303,8 @@ freshness="stale"인 정보는 현재 사실처럼 표현하지 않고
 9. symmetric=True 관계에 방향을 부여하지 않았는가?
 10. 보도일을 사건 발생일로 잘못 표현하지 않았는가?
 11. SEMANTIC 결과를 확정된 사실처럼 표현하지 않았는가?
-12. ("답변 대상: 워크스페이스"일 때만)
-    워크스페이스 밖의 기업을 워크스페이스 인사이트의 주체로 사용하지 않았는가?
+12. ("답변 대상: 지정 없음"일 때만)
+    관련도로 걸린 기업을 질문이 지정한 대상인 것처럼 서술하지 않았는가?
     "답변 대상: 보고 있는 기업"이면 그 기업이 주체인 것이 정상입니다.
 13. 각 evidence_id가 실제 존재하는가?
 14. 각 claim의 evidence_ids가 해당 claim을 실제로 뒷받침하는가?
@@ -396,7 +399,10 @@ _SAFE_MESSAGE = "죄송합니다, 지금은 답변을 생성할 수 없습니다
 #
 # ★둘을 가르는 이유는 **사용자가 할 일이 다르기 때문**이다. 하나는 기업을
 #   추가해야 하고, 하나는 다른 이름으로 물어야 한다.
-_NO_WORKSPACE_MESSAGE = "이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다."
+# ★`_NO_WORKSPACE_MESSAGE` 는 **지웠다**(이번 개정 · 최종 설계 §17-1).
+#   「이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다」는 워크스페이스를
+#   검색 경계로 보던 정책의 사용자 문구였다. 이제 담긴 기업이 없어도 Global
+#   Search 로 답하므로 그 상태 자체가 없다.
 
 # ★조사를 변수 뒤에 붙이지 않는다 — 「'TSMC' 를」/「'심텍' 을」처럼 받침에 따라
 #   갈리는데, 영문·약어는 한글 발음으로 판정해야 해서 규칙이 커진다. 「~에
@@ -648,17 +654,13 @@ class AnswerService:
         self._retrieve_service = retrieve_service or RetrieveService()
 
     def ask(self, request: AskRequest) -> AskResponse:
-        """질문 하나 → 답변 문장 + 화이트리스트를 통과한 근거."""
-        # ── 출발점이 하나라도 있나 (설계서 §16-2) ───────────────────────
-        # ★검색조차 하지 않는다 — 재료를 모을 출발점이 없다. 「무엇에 대한
-        #   인사이트인가」가 정해지지 않으면 답하지 않는 것이 맞다.
-        # ★`context_keys` 를 함께 본다 — **그래프 경로와 같은 함수**를 쓴다
-        #   (`retrieve_service.has_starting_point`). 이 메서드가 대조 기준선이라
-        #   판정이 갈리면 parity 가 「고친 쪽이 틀렸다」고 말하게 된다.
-        if not has_starting_point(request):
-            log.info("ask.rejected reason=no_starting_point")
-            return _no_material(_NO_WORKSPACE_MESSAGE)
+        """질문 하나 → 답변 문장 + 화이트리스트를 통과한 근거.
 
+        ★**출발점 게이트가 사라졌다**(이번 개정 · 최종 설계 §17-1). 전에는
+          「담아 둔 기업도 보고 있는 기업도 없으면 검색조차 하지 않는다」로
+          여기서 끊었다. 워크스페이스가 없어도 Global Search 로 답한다 —
+          그래프 경로(`ask_graph`)도 같은 자리에서 같은 게이트를 걷어냈다.
+        """
         decision, retrieved = self._retrieve_service.retrieve_for_ask(request)
 
         # ── 대상을 못 찾았나 (설계서 §14-4) ─────────────────────────────

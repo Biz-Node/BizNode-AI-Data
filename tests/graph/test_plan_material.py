@@ -79,19 +79,35 @@ def test_anchor_names_prefer_resolved_entities(request_):
 
 
 def test_anchor_names_fall_back_to_decision_anchors(request_):
-    """`resolved_entities` 가 비면 앵커로 내려간다 — `source=workspace` 가 그렇다.
+    """`resolved_entities` 가 비면 앵커로 내려간다 — `source=context` 가 그렇다.
 
-    ★이 fallback 이 없으면 workspace 질의의 `anchor_names` 가 늘 `[]` 가 되어
-      `evidence_selector` 의 「질문과 라벨 양쪽에서 앵커명 제거」 규칙이 라벨
-      쪽에서 안 걸린다(현황서 §5-23 이 고친 퇴행).
+    ★이 fallback 이 없으면 `anchor_names` 가 `[]` 가 되어 `evidence_selector`
+      의 「질문과 라벨 양쪽에서 앵커명 제거」 규칙이 라벨 쪽에서 안 걸린다
+      (현황서 §5-23 이 고친 퇴행).
     """
     decision = AnchorDecision(
-        source=AnchorSource.WORKSPACE,
-        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.WORKSPACE)])
+        source=AnchorSource.CONTEXT,
+        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.CONTEXT)])
 
     got = plan_material(_state(request_, resolved=[], decision=decision))
 
     assert got["anchor_names"] == ["삼성전자"]
+
+
+def test_anchor_names_fall_back_to_material_companies_when_anchorless(request_):
+    """★**셋째 갈래**(최종 설계 §17-3 이 열었다 · `_anchor_names_for`).
+
+    `anchorless` 는 `resolved_entities` 도 `decision.anchors` 도 비어 있다.
+    거기서 멈추면 §5-23 이 고친 퇴행이 그대로 돌아온다 — 라벨에 든 기업명이
+    유사도 상위를 먹는다. 전에는 워크스페이스 앵커가 그 이름을 댔고, 지금은
+    **히트가 준 재료 기업**이 댄다.
+    """
+    decision = AnchorDecision(source=AnchorSource.ANCHORLESS)
+
+    got = plan_material(_state(request_, resolved=[], decision=decision,
+                               hits=[_hit("00164779", "SK하이닉스")]))
+
+    assert got["anchor_names"] == ["SK하이닉스"]
 
 
 def test_anchor_names_drop_empty_names(request_):
@@ -147,22 +163,39 @@ def test_hits_are_not_trusted_without_resolved_entities(request_):
     assert [c.key for c in got["companies"]] == [_SAMSUNG], "앵커 자신이 출발점이다"
 
 
-def test_workspace_anchor_never_trusts_hits(request_):
-    """`source=workspace` 는 정의상 `resolved_entities` 가 0 이다.
+def test_context_anchor_never_trusts_hits(request_):
+    """`source=context` 는 화면이 대상을 알고 있다 — 히트가 아니라 그 기업이다.
 
-    ★따라서 히트가 몇 건이든 재료는 앵커다. 워크스페이스 앵커에서 히트를
-      믿으면 「담아 둔 기업을 물었는데 의미가 비슷한 남의 기업으로 답하는」
-      것이 된다.
+    ★따라서 히트가 몇 건이든 재료는 앵커다. 여기서 히트를 믿으면 「현대차
+      페이지를 보며 물었는데 의미가 비슷한 남의 기업으로 답하는」 것이 된다.
     """
     decision = AnchorDecision(
-        source=AnchorSource.WORKSPACE,
-        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.WORKSPACE)])
+        source=AnchorSource.CONTEXT,
+        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.CONTEXT)])
 
     got = plan_material(_state(request_, hits=[_hit("00999999", "아무기업")],
                                decision=decision))
 
     assert [c.key for c in got["companies"]] == [_SAMSUNG]
     assert "00999999" not in [c.key for c in got["companies"]], "히트를 쓰면 안 된다"
+
+
+def test_anchorless_takes_its_material_from_the_hits(request_):
+    """★**앵커가 없으면 히트가 재료다**(최종 설계 §8 · `_hits_reflect_the_anchor`).
+
+    전에는 이 상태가 `workspace` 였고 담아 둔 기업이 재료가 됐다. 지금은 앵커가
+    없으므로 Global Search 가 찾아 준 것이 유일한 재료다 — 워크스페이스는
+    그 결과의 **순서**에만 관여한다.
+    """
+    decision = AnchorDecision(source=AnchorSource.ANCHORLESS,
+                              workspace_names={_SAMSUNG: "삼성전자"})
+
+    got = plan_material(_state(request_, resolved=[], decision=decision,
+                               hits=[_hit("00999999", "아무기업")]))
+
+    assert [c.key for c in got["companies"]] == ["00999999"]
+    assert _SAMSUNG not in [c.key for c in got["companies"]], \
+        "워크스페이스 기업이 재료로 승격되면 안 된다"
 
 
 # ══════════════════════════════════════════════════════════════════

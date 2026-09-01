@@ -234,9 +234,9 @@ def wired(monkeypatch, query, result, event, relation, evidence, decision, fake_
                         lambda question, resolved, names, context=None: decision)
     for name in ("get_events", "get_relations", "get_propagation"):
         monkeypatch.setattr(material.graph_tools, name, getattr(tools, name))
-    monkeypatch.setattr(material.relation_service, "evidence_for_ids",
-                        lambda ids: [e.model_dump() for e in tools.evidence])
-    # ★`evidence_validation` 은 자기 모듈에서 `relation_service` 를 본다
+    # ★근거 조회 대역은 **`agent_loop` 쪽 하나뿐**이다. `material.fetch_evidence`
+    #   가 지워지면서(최종 설계 §17-1 정리) `material` 은 `relation_service` 를
+    #   더 이상 import 하지 않는다 — 근거를 모으는 것은 `evidence_validation` 이다.
     from app.graph.nodes import agent_loop as agent_node
 
     monkeypatch.setattr(agent_node.relation_service, "evidence_for_ids",

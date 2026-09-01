@@ -9,18 +9,17 @@ from app.graph.nodes.agent_loop import (agent, evidence_validation, run_tools,
                                    should_continue)
 from app.graph.nodes.answer import (build_prompt, check_claims, generate,
                                     halt_no_material, respond, verify_sources)
-from app.graph.nodes.material import (fetch_evidence, fetch_events,
-                                      fetch_propagation, fetch_relations,
-                                      guard_workspace, plan_material,
+from app.graph.nodes.material import (fetch_propagation, plan_material,
                                       resolve_anchor, search)
 
+# ★`guard_workspace` 가 빠졌다(최종 설계 §17-1) — 워크스페이스는 검색 게이트가
+#   아니다. `fetch_events`·`fetch_relations`·`fetch_evidence` 도 빠졌다 —
+#   배선이 끊긴 지 오래고 `agent ⇄ run_tools`·`evidence_validation` 이 대신한다.
 __all__ = [
-    "guard_workspace", "search", "resolve_anchor", "plan_material",
+    "search", "resolve_anchor", "plan_material",
     # ── Agent 루프 (2차) ──
     "agent", "run_tools", "should_continue", "evidence_validation",
     "fetch_propagation",
-    # ★더 이상 배선되지 않는다 — `agent ⇄ run_tools` 와 `evidence_validation` 이 대신한다
-    "fetch_events", "fetch_relations", "fetch_evidence",
     "build_prompt", "generate", "verify_sources", "check_claims", "respond",
     "halt_no_material",
 ]

@@ -178,11 +178,11 @@ def test_backstop_never_exceeds_the_company_cap(wired):
     assert len(retrieved.companies) <= rs_module._MAX_COMPANIES
 
 
-def test_workspace_anchor_path_is_untouched(wired):
+def test_context_anchor_path_is_untouched(wired):
     """★워크스페이스 경로는 이미 앵커가 곧 companies 다 — 백스톱이 끼어들 자리가 없다."""
     wired["decision"] = AnchorDecision(
-        source=AnchorSource.WORKSPACE, workspace_names=_WS,
-        anchors=[Anchor(key=k, name=n, source=AnchorSource.WORKSPACE)
+        source=AnchorSource.CONTEXT, workspace_names=_WS,
+        anchors=[Anchor(key=k, name=n, source=AnchorSource.CONTEXT)
                  for k, n in _WS.items()])
     _, retrieved = RetrieveService(
         _orchestrator([_hit("x", "무관")], resolved=False)).retrieve_for_ask(_request())

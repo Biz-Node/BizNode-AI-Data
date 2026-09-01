@@ -60,15 +60,18 @@ def _head(title: str) -> None:
 
 
 def cmd_anchor(args) -> None:
-    """★`/ask` 의 척추는 `anchor_source` 세 갈래다. 이 모드가 그것만 본다.
+    """★`/ask` 의 척추는 `anchor_source` 네 갈래다. 이 모드가 그것만 본다.
 
         QUERY       질문이 대상을 지정했고 해소됐다     → Agent 호출됨
-        CONTEXT     **보고 있는 기업**이 있다           → Agent 호출됨 (워크스페이스보다 먼저)
-        WORKSPACE   질문이 대상을 **지정하지 않았다**    → Agent 호출됨 · 의미검색
+        CONTEXT     **보고 있는 기업**이 있다           → Agent 호출됨
+        ANCHORLESS  질문이 대상을 **지정하지 않았다**    → Agent 호출됨 · 검색 히트가 재료
         UNRESOLVED  지정했는데 못 찾았다                → ★Agent 를 아예 안 부른다
 
-    ★세 번째가 「TSMC 를 물었는데 삼성전자로 답하는」 오답을 막는 장치다 —
+    ★마지막이 「TSMC 를 물었는데 삼성전자로 답하는」 오답을 막는 장치다 —
       워크스페이스로 **갈아타지 않는다**(설계서 §14-3).
+
+    ★`ANCHORLESS` 도 워크스페이스로 갈아타지 않는다(최종 설계 §17-3). 전에는
+      이 자리가 `WORKSPACE` 였고 담아 둔 기업이 대상으로 승격됐다.
     """
     from app.api.schemas import AskRequest
     from app.graph.nodes import material
@@ -77,13 +80,8 @@ def cmd_anchor(args) -> None:
     state = initial_state(AskRequest(question=args.question,
                                      workspace_keys=args.workspace,
                                      context_keys=args.context))
-    # ★게이트를 **먼저** 보여 준다. `--workspace` 와 `--context` 가 둘 다 비면
-    #   실제 `/ask` 는 여기서 끝나므로, 그 아래 판정은 일어나지 않는 일이다.
-    if not material._has_starting_point(state):
-        _head(f"앵커 판정 — {args.question!r}")
-        print("  게이트        : halt_no_material — 담긴 기업도 보고 있는 기업도 없다")
-        print("  Agent 호출    : 안 함 (검색조차 하지 않는다)")
-        return
+    # ★출발점 게이트는 **없어졌다**(최종 설계 §17-1). `--workspace` 와
+    #   `--context` 가 둘 다 비어도 검색은 그대로 돈다.
     state.update(material.search(state))
     state.update(material.resolve_anchor(state))
 

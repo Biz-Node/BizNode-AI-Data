@@ -102,25 +102,27 @@ def test_prompt_states_the_answer_target_for_a_query_anchor():
     assert "답변 대상: 질문" in prompt
 
 
-def test_prompt_states_the_answer_target_for_a_workspace_anchor():
+def test_prompt_states_the_answer_target_when_there_is_no_anchor():
     prompt = as_module._build_user_prompt("q", _retrieved(),
-                                          _decision(AnchorSource.WORKSPACE))
-    assert "답변 대상: 워크스페이스" in prompt
+                                          _decision(AnchorSource.ANCHORLESS))
+    assert "답변 대상: 지정 없음" in prompt
 
 
-def test_workspace_anchor_prompt_says_we_chose_the_target():
-    """★헤지의 이유가 정확해진다 — 부정확한 것은 **대상을 누가 골랐나**이지
-    그 기업이 맞나가 아니다(설계서 §14-6)."""
+def test_anchorless_prompt_does_not_name_the_workspace_as_the_target():
+    """★헤지의 이유가 정확해진다(설계서 §14-6). 전에는 「워크스페이스 기업들을
+    대상으로 삼았습니다」였는데, 그것이 §17-3 이 폐기한 앵커 승격의 선언이었다.
+    지금은 **대상이 없다**고 말한다."""
     prompt = as_module._build_user_prompt("q", _retrieved(),
-                                          _decision(AnchorSource.WORKSPACE))
-    assert "대상을 지정하지 않아" in prompt
+                                          _decision(AnchorSource.ANCHORLESS))
+    assert "특정 대상을 지정하지 않았습니다" in prompt
+    assert "워크스페이스 기업들을 대상으로" not in prompt
 
 
-def test_query_anchor_prompt_does_not_add_the_workspace_hedge():
+def test_query_anchor_prompt_does_not_add_the_anchorless_hedge():
     """★질문이 대상을 지정했으면 그 헤지는 거짓이다 — 붙이면 안 된다."""
     prompt = as_module._build_user_prompt("q", _retrieved(),
                                           _decision(AnchorSource.QUERY))
-    assert "대상을 지정하지 않아" not in prompt
+    assert "지정하지 않" not in prompt
 
 
 def test_prompt_survives_without_a_decision():
@@ -130,19 +132,22 @@ def test_prompt_survives_without_a_decision():
 
 
 def test_system_prompt_tells_the_model_how_to_shape_each_answer():
-    """★문구가 바뀌었다(`1b7fbaa`) — 「하나의 서사로 엮지 말고 기업별 목록으로
-    설명합니다」 → 「워크스페이스 기업마다 확인된 내용을 독립적으로 설명합니다」.
-    A/B/C 예시와 「하나의 이야기로 억지로 연결하지 않습니다」는 그대로 남았다."""
+    """★목록형 지시는 남는다 — 앵커가 없을 때 기업들을 하나의 서사로 엮는 것이
+    가장 나쁜 실패다. 절 이름만 [워크스페이스] → [대상 지정 없음] 으로 바뀌었다."""
     assert "답변 대상" in as_module._SYSTEM_PROMPT
     assert "독립적으로 설명" in as_module._SYSTEM_PROMPT
     assert "하나의 이야기로" in as_module._SYSTEM_PROMPT
 
 
-def test_system_prompt_states_the_insight_rule():
-    """★설계서 §12 — 「인사이트 문장은 워크스페이스 기업 하나 이상을 주어 또는
-    영향 대상으로 가져야 한다」. 프롬프트 규칙이면서 **서버가 대조할 수 있는** 규칙이다."""
-    assert "워크스페이스" in as_module._SYSTEM_PROMPT
-    assert "인사이트" in as_module._SYSTEM_PROMPT
+def test_system_prompt_does_not_make_the_workspace_the_subject(monkeypatch):
+    """★**뒤집힌 규칙이다**(최종 설계 §6-2·§19-3).
+
+    전에는 「인사이트는 워크스페이스 기업이 직접 주체이거나 영향 대상이어야
+    한다」고 지시했다. 그건 프롬프트 층의 hard filter다 — 워크스페이스 밖 사실을
+    답변에서 지우게 만든다. 지금은 **닿으면 밝히고, 밖이라고 빼지 않는다.**
+    """
+    assert "워크스페이스 밖이라는 이유로 재료를 빼지 않습니다" in as_module._SYSTEM_PROMPT
+    assert "직접 주체이거나 직접적인 영향 대상이어야" not in as_module._SYSTEM_PROMPT
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -155,7 +160,7 @@ def _service(decision, retrieved):
     return service
 
 
-def test_ask_sends_the_workspace_shape_to_the_llm(monkeypatch):
+def test_ask_sends_the_anchorless_shape_to_the_llm(monkeypatch):
     captured = {}
 
     def _ask_json(system, user, **kw):
@@ -164,9 +169,9 @@ def test_ask_sends_the_workspace_shape_to_the_llm(monkeypatch):
 
     monkeypatch.setattr(as_module, "ask_json", _ask_json)
     as_module.AnswerService(
-        _service(_decision(AnchorSource.WORKSPACE), _retrieved())).ask(
+        _service(_decision(AnchorSource.ANCHORLESS), _retrieved())).ask(
         AskRequest(question="납품 단가 압박", workspace_keys=list(_WS)))
-    assert "답변 대상: 워크스페이스" in captured["user"]
+    assert "답변 대상: 지정 없음" in captured["user"]
 
 
 def test_ask_sends_workspace_membership_to_the_llm(monkeypatch):
@@ -195,8 +200,8 @@ def test_ask_still_hedges_semantic_match_type(monkeypatch):
 
     monkeypatch.setattr(as_module, "ask_json", _ask_json)
     as_module.AnswerService(
-        _service(_decision(AnchorSource.WORKSPACE),
+        _service(_decision(AnchorSource.ANCHORLESS),
                  _retrieved(match_type=MatchType.SEMANTIC))).ask(
         AskRequest(question="q", workspace_keys=list(_WS)))
     assert "SEMANTIC" in captured["user"]
-    assert "답변 대상: 워크스페이스" in captured["user"]
+    assert "답변 대상: 지정 없음" in captured["user"]

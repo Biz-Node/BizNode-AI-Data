@@ -515,8 +515,9 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
 
     `evidence[].evidence_id` 를 반드시 붙인다. 화면이 답과 근거를 나란히 놓는다.
 
-    - `workspace_keys` 를 주면 **그 범위 안에서만** 찾는다. 관계는 **양끝이 모두**
-      그 안에 있어야 한다 — 챗봇은 사용자의 워크스페이스 안에서 존재하는 기능이다.
+    - `workspace_keys` 는 **선택이고 필터가 아니다.** 주면 Global 검색 결과의
+      **순서**에 반영되고, 안 주면 Global Ranking 그대로다 — 워크스페이스 밖
+      기업도 그대로 나온다(최종 설계 §6-2).
     - `evidence[].missing=true` 는 **id 는 있는데 원문을 못 찾은 것**이다. 지우지
       않고 알린다 — 지우면 「근거가 없는 관계」로 읽힌다. **인용하면 안 된다.**
     - `propagation[].stated` 로 **보도와 계산을 가른다.** 섞어 말하면 추론을
@@ -536,6 +537,13 @@ async def ask(body: AskRequest) -> AskResponse:
     `/retrieve` 가 만든 재료 밖의 것은 인용할 수 없다 — `sources` 에 실리는
     `evidence_id` 는 전부 서버가 재료 안에서 확인한 것이다.
 
+    - `workspace_keys` 는 **선택이다.** 비어 있어도 Global Search 로 답한다
+      (최종 설계 §6-1) — 워크스페이스는 검색 경계가 아니라 랭킹 문맥이다.
+    - `anchor_source` 로 **무엇을 대상으로 답했는지**를 가른다 —
+      `query`(질문이 지정) / `context`(보고 있는 기업) /
+      `anchorless`(지정하지 않음 — 정상) / `unresolved`(지정했는데 못 찾음).
+      ★`unresolved` 면 LLM 을 부르지 않고 못 찾았다고만 답한다. 워크스페이스
+      기업으로 **갈아타지 않는다**(설계서 §14-3).
     - `failed=true` 면 `answer` 는 고정 안내 문구다. `sources` 는 그래도 원본
       근거를 담고 있다 — 답을 못 썼어도 근거는 보여줄 수 있다.
     - `missing=true` 였던 근거는 `sources` 에 오지 않는다.

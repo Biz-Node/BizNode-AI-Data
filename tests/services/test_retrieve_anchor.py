@@ -36,7 +36,7 @@ def _orchestrator(mode=SearchMode.NAME):
 @pytest.fixture
 def wired(monkeypatch):
     """이름 조회와 판정을 세운다 — 조립 경로만 본다."""
-    state = {"decision": AnchorDecision(source=AnchorSource.WORKSPACE,
+    state = {"decision": AnchorDecision(source=AnchorSource.ANCHORLESS,
                                         workspace_names=_WS)}
     monkeypatch.setattr(rs_module.workspace_service, "names_of", lambda keys: _WS)
     monkeypatch.setattr(rs_module.query_understanding, "decide_anchor",
@@ -53,12 +53,22 @@ def _request():
 # ══════════════════════════════════════════════════════════════════════
 
 def test_retrieve_carries_the_anchors(wired):
-    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.WORKSPACE)]
-    wired["decision"] = AnchorDecision(source=AnchorSource.WORKSPACE, anchors=anchors,
+    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.QUERY)]
+    wired["decision"] = AnchorDecision(source=AnchorSource.QUERY, anchors=anchors,
                                        workspace_names=_WS)
     got = RetrieveService(_orchestrator()).retrieve(_request())
     assert [(a.key, a.source) for a in got.anchors] == [
-        ("00126380", AnchorSource.WORKSPACE)]
+        ("00126380", AnchorSource.QUERY)]
+
+
+def test_anchorless_retrieve_carries_no_anchors(wired):
+    """★앵커가 없다는 것이 **응답에도 드러난다**(최종 설계 §17-3).
+
+    전에는 `source=workspace` 로 담아 둔 기업이 `anchors[]` 에 실렸다. 프론트가
+    그것을 「이 기업들에 대해 답했다」로 읽었는데, 질문은 그 기업들을 묻지 않았다.
+    """
+    got = RetrieveService(_orchestrator()).retrieve(_request())
+    assert got.anchors == []
 
 
 def test_retrieve_still_assembles_material_when_unresolved(wired):
@@ -97,7 +107,7 @@ def test_retrieve_for_ask_skips_material_when_unresolved(wired):
 
 def test_retrieve_for_ask_returns_material_when_anchored(wired):
     decision, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
-    assert decision.source is AnchorSource.WORKSPACE
+    assert decision.source is AnchorSource.ANCHORLESS
     assert retrieved is not None
     assert retrieved.question == "q"
 

@@ -575,12 +575,12 @@ def build(runs: dict[str, CaseRun],
         add("| | |")
         add("|---|---|")
         add(f"| 질문 | `{case.question}` |")
-        # ★`None` 은 **네 번째 앵커가 아니라 「판정 자체가 없었다」**이다. 출발점이
-        #   하나도 없으면 `guard_workspace` 가 검색 앞에서 끊어 `resolve_anchor` 를
-        #   지나지 않는다. `.value` 를 그냥 읽으면 보고서 생성이 통째로 죽는다.
+        # ★`None` 은 「판정 자체가 없었다」이고, 게이트가 사라진 뒤로는 **어느
+        #   케이스도 그렇지 않다**(최종 설계 §17-1). 필드가 아직 `Optional` 이라
+        #   방어만 남긴다 — `.value` 를 그냥 읽으면 보고서 생성이 통째로 죽는다.
         expected = (case.expected_anchor_source.value
                     if case.expected_anchor_source is not None
-                    else "**없음** (게이트에서 끝 — 앵커 판정 자체가 없다)")
+                    else "**없음** (앵커 판정 자체가 없다)")
         add(f"| 기대 anchor_source | {expected} |")
         # ★워크스페이스·화면 문맥을 **함께** 적는다. 두 케이스가 질문만 같고
         #   `workspace_keys` 만 다른 대조군이라(`ctx-*`), 이 줄이 없으면 표에서

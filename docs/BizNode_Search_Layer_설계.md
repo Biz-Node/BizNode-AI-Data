@@ -444,7 +444,21 @@ workspace   [삼성전자]
 hard filter 로 되돌리면 Event·Person·Organization·Product 가 후보 생성 단계에서 통째로
 사라집니다.
 
-### ★Workspace 기업을 material anchor 로 쓴다 (2026-08-25 확정)
+### ★Workspace 기업을 material anchor 로 쓴다 (2026-08-25 확정 → **2026-09-01 폐기**)
+
+> 🔴 **이 절은 폐기됐습니다 (2026-09-01).**
+> [최종 설계 §17-3·§19-4](BizNode_Workspace_Contextual_Agent_Final_Design.md) 가
+> 「Query 에 Anchor 가 없다고 Workspace Company 를 Query Anchor 로 승격시키지
+> 않는다」로 확정했습니다. `AnchorSource.WORKSPACE` 는 `ANCHORLESS` 로 바뀌었고
+> 앵커가 붙지 않습니다 — 앵커 없는 질의의 재료는 **Global Search 의 히트**입니다
+> (`retrieve_service._hits_reflect_the_anchor`).
+>
+> 아래에 적힌 근거(「그것 말고 재료를 모을 다른 출발점이 없다」)는 그때 anchorless
+> 경로의 품질이 낮았기 때문인데, **그 문제는 여전히 남아 있습니다** — 재료를
+> 워크스페이스로 바꿔치기하는 대신 「대상 지정 없음」을 답변에 표기하는 쪽으로
+> 처리하고, 근본 해결(Global Event Search)은 별도 과제입니다.
+>
+> 아래 내용은 **그 이전 정책의 기록**입니다.
 
 직전 개정이 두 층으로 갈라 둔 것 중 **2층을 확정합니다.**
 
@@ -1698,6 +1712,13 @@ ChromaDB `company` 컬렉션의 fallback, `evidence` 컬렉션의 `source_corp`.
 > ([현황서 §7-4](BizNode_Search_Layer_현황서.md#7-4-2026-08-25-개정이-새로-연-decide-2건)).
 
 ### 16-2. `workspace_keys` 가 비어 있을 때
+
+> 🔴 **이 절은 폐기됐습니다 (2026-09-01).**
+> [최종 설계 §6-1·§17-1](BizNode_Workspace_Contextual_Agent_Final_Design.md) 이
+> 「Workspace 는 Search Gate 가 아니다」로 확정했습니다. 빈 `workspace_keys` 는
+> **거부하지 않고** Global Search + Global Ranking 으로 답합니다.
+> `guard_workspace` 노드와 `has_starting_point()` 판정은 코드에서 제거됐습니다.
+> 아래 내용은 **그 이전 정책의 기록**입니다.
 
 ```text
 POST /ask { question, workspace_keys: [] }

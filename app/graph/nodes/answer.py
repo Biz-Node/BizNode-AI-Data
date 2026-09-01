@@ -19,10 +19,9 @@ from app.llm.adapter import LLMAdapter, LangChainAdapter
 from app.llm.schemas import AskAnswer
 from app.services import claim_check, evidence_selector
 from app.graph import prompt
-from app.services.answer_service import (_NO_WORKSPACE_MESSAGE, _SAFE_FALLBACK,
-                                         _SAFE_MESSAGE, _STRIP_UNLINKED_CLAIMS,
-                                         _SYSTEM_PROMPT, _no_material,
-                                         _unresolved_message)
+from app.services.answer_service import (_SAFE_FALLBACK, _SAFE_MESSAGE,
+                                         _STRIP_UNLINKED_CLAIMS, _SYSTEM_PROMPT,
+                                         _no_material, _unresolved_message)
 from app.services.retrieve_service import _default_embed
 
 log = trace_logger(__name__)
@@ -224,16 +223,12 @@ def respond(state: AskState) -> AskState:
 def halt_no_material(state: AskState) -> AskState:
     """재료 없이 내는 응답 — **`failed=false` 다.**
 
-    ★들어오는 길이 둘이고 **사용자가 할 일이 다르다.** 하나는 기업을 추가해야
-      하고, 하나는 다른 이름으로 물어야 한다. 어느 길로 왔는지는 State 로
-      판정한다 — 출발점이 하나도 없으면 앵커 판정 자체가 없다.
+    ★**들어오는 길이 하나로 줄었다**(이번 개정 · 최종 설계 §17-1). 전에는 둘이
+      었다 — 「담아 둔 기업도 보고 있는 기업도 없다」와 「대상을 못 찾았다」.
+      앞의 것은 워크스페이스를 검색 경계로 보던 게이트라 사라졌고, 이제 이
+      노드에 오는 길은 `resolve_anchor` 의 `UNRESOLVED` 뿐이다.
 
-    ★**`context_keys` 도 본다.** 게이트가 `workspace_keys or context_keys` 로
-      넓어졌으므로, `workspace_keys` 만 보면 「보고 있는 기업은 있는데 이름을
-      못 찾아」 온 길에 「담긴 기업이 없다」는 엉뚱한 문구가 나간다 — 그때
-      `decision` 은 실재하고 사용자가 할 일은 다시 묻는 것이다.
+    ★그래서 `state["decision"]` 은 **언제나 있다.** 게이트가 앵커 판정 앞에
+      서 있던 시절에만 없을 수 있었다.
     """
-    request = state["request"]
-    if not (request.workspace_keys or request.context_keys):
-        return {"response": _no_material(_NO_WORKSPACE_MESSAGE)}
     return {"response": _no_material(_unresolved_message(state["decision"]))}

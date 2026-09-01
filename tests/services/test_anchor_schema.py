@@ -26,14 +26,18 @@ def test_anchor_source_has_exactly_four_values():
 
           Anchor.source              Literal 에 추가 (안 하면 pydantic 이 막는다)
           TARGET_NOTE_BY_SOURCE      표기 문구 (전수 분기 dict — 빠뜨리면 KeyError)
-          _SYSTEM_PROMPT             그 대상일 때의 지시. ★[워크스페이스] 절의
+          _SYSTEM_PROMPT             그 대상일 때의 지시. ★[대상 지정 없음] 절의
                                      범위와 최종검증 12번을 함께 좁혀야 한다
           decide_anchor()            판정 분기와 **순서**
-          _has_starting_point()      게이트가 그 출발점을 통과시키나
+          _hits_reflect_the_anchor() 그 대상일 때 검색 히트를 재료로 쓰나
           halt_no_material()         문구 분기
+
+    ★**`workspace` 가 `anchorless` 로 바뀌었다**(최종 설계 §17-3). 이름만 바뀐
+      것이 아니라 뜻이 뒤집혔다 — 전에는 「워크스페이스 기업을 대상으로 삼았다」
+      였고 지금은 「대상이 없다」다. 그래서 `Anchor` 객체가 아예 안 붙는다.
     """
     assert {s.value for s in AnchorSource} == {
-        "query", "context", "workspace", "unresolved"}
+        "query", "context", "anchorless", "unresolved"}
 
 
 # ── Anchor — 재료 앵커 한 건 ─────────────────────────────────────────────
@@ -67,7 +71,7 @@ def test_retrieve_response_anchors_defaults_to_empty():
 
 
 def test_retrieve_response_carries_anchors():
-    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.WORKSPACE)]
+    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.CONTEXT)]
     assert _retrieved(anchors=anchors).anchors == anchors
 
 
@@ -75,7 +79,7 @@ def test_companies_and_anchors_are_separate_fields():
     """★`companies` 는 「재료가 된 기업」이고 `anchors` 는 「그 재료를 모은 출발점」이다
     (설계서 §5·현황서 §5-7). 둘이 달라질 수 있어야 한다."""
     retrieved = _retrieved(
-        anchors=[Anchor(key="00126380", name="삼성전자", source=AnchorSource.WORKSPACE)],
+        anchors=[Anchor(key="00126380", name="삼성전자", source=AnchorSource.CONTEXT)],
         companies=[RelationEndpoint(key="01095722", name="심텍")])
     assert [a.key for a in retrieved.anchors] != [c.key for c in retrieved.companies]
 

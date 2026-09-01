@@ -104,39 +104,37 @@ def test_unresolved_message_is_deterministic(no_llm):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  빈 workspace_keys — 거부한다 (설계서 §16-2)
+#  빈 workspace_keys — ★거부하지 않는다 (최종 설계 §17-1)
 # ══════════════════════════════════════════════════════════════════════
 
-def test_empty_workspace_is_rejected_without_calling_the_llm(no_llm):
-    """★워크스페이스가 비면 「무엇에 대한 인사이트인가」가 정해지지 않는다."""
-    service = MagicMock()
+def test_empty_workspace_goes_through_to_retrieval(monkeypatch):
+    """★**뒤집힌 계약이다.** 전에는 검색 앞에서 거부했다(옛 설계서 §16-2).
+
+    워크스페이스는 검색 경계가 아니라 랭킹 문맥이므로, 비어 있다는 것은
+    「순서를 정할 문맥이 없다」이지 「답할 수 없다」가 아니다.
+    """
+    monkeypatch.setattr(as_module, "ask_json",
+                        lambda *a, **k: {"answer": "답변", "evidence_ids": []})
+    service = _service(_decision(AnchorSource.ANCHORLESS), _retrieved())
     got = as_module.AnswerService(service).ask(
         AskRequest(question="납품 단가 압박", workspace_keys=[]))
-    assert no_llm == []
+
+    assert got.answer == "답변"
     assert got.failed is False
-    assert got.sources == []
-    assert got.anchor_source is AnchorSource.UNRESOLVED
+    assert got.anchor_source is AnchorSource.ANCHORLESS
 
 
-def test_empty_workspace_does_not_even_search():
-    """★검색도 하지 않는다 — 재료를 모을 출발점이 없다."""
+def test_empty_workspace_still_searches():
+    """★검색까지 간다 — 「출발점이 없으니 조회도 하지 않는다」가 사라졌다."""
     service = MagicMock()
+    service.retrieve_for_ask.return_value = (
+        _decision(AnchorSource.ANCHORLESS), None)
     as_module.AnswerService(service).ask(AskRequest(question="q", workspace_keys=[]))
-    service.retrieve_for_ask.assert_not_called()
-
-
-def test_empty_workspace_message_differs_from_unresolved(no_llm):
-    """★사용자가 할 일이 다르다 — 하나는 기업 추가, 하나는 다른 이름으로 질문."""
-    empty = as_module.AnswerService(MagicMock()).ask(
-        AskRequest(question="q", workspace_keys=[]))
-    unresolved = as_module.AnswerService(
-        _service(_decision(AnchorSource.UNRESOLVED, named="TSMC"))).ask(
-        AskRequest(question="q", workspace_keys=list(_WS)))
-    assert empty.answer != unresolved.answer
+    service.retrieve_for_ask.assert_called_once()
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  query · workspace — 평소대로 답하되 anchor_source 를 싣는다
+#  query · anchorless — 평소대로 답하되 anchor_source 를 싣는다
 # ══════════════════════════════════════════════════════════════════════
 
 def test_query_anchor_answers_normally(monkeypatch):
@@ -150,13 +148,15 @@ def test_query_anchor_answers_normally(monkeypatch):
     assert got.anchor_source is AnchorSource.QUERY
 
 
-def test_workspace_anchor_answers_normally(monkeypatch):
+def test_anchorless_answers_normally(monkeypatch):
+    """★워크스페이스가 **있어도** 앵커로 승격되지 않는다(최종 설계 §17-3)."""
     monkeypatch.setattr(as_module, "ask_json",
                         lambda *a, **k: {"answer": "답변", "evidence_ids": []})
-    got = as_module.AnswerService(
-        _service(_decision(AnchorSource.WORKSPACE), _retrieved())).ask(
+    decision = _decision(AnchorSource.ANCHORLESS)
+    got = as_module.AnswerService(_service(decision, _retrieved())).ask(
         AskRequest(question="납품 단가 압박", workspace_keys=list(_WS)))
-    assert got.anchor_source is AnchorSource.WORKSPACE
+    assert got.anchor_source is AnchorSource.ANCHORLESS
+    assert decision.anchors == []
 
 
 def test_anchor_source_survives_an_llm_failure(monkeypatch):
@@ -164,7 +164,7 @@ def test_anchor_source_survives_an_llm_failure(monkeypatch):
     아는 결정론적 값이라 LLM 과 무관하다(설계서 §14-3)."""
     monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: as_module._SAFE_FALLBACK)
     got = as_module.AnswerService(
-        _service(_decision(AnchorSource.WORKSPACE), _retrieved())).ask(
+        _service(_decision(AnchorSource.ANCHORLESS), _retrieved())).ask(
         AskRequest(question="q", workspace_keys=list(_WS)))
     assert got.failed is True
-    assert got.anchor_source is AnchorSource.WORKSPACE
+    assert got.anchor_source is AnchorSource.ANCHORLESS

@@ -3055,6 +3055,100 @@ LLM 이 합니다.** 모듈 독스트링의 「LLM 을 실제로 부르지 않�
 ★**어느 쪽이든 랭킹(작업 1~4)이 원인이 아닙니다** — 3회 중 1회는 차이가 아예 없었고,
 `events` 는 세 번 다 동일했습니다.
 
+### 8-22. Workspace 검색 게이트·앵커 승격 제거 (2026-09-01 · 최종 설계 Phase 1)
+
+근거 문서: [BizNode_Workspace_Contextual_Agent_Final_Design.md](BizNode_Workspace_Contextual_Agent_Final_Design.md)
+· [BizNode_Contextual_Agent_User_Scenarios.md](BizNode_Contextual_Agent_User_Scenarios.md).
+
+**무엇이 바뀌었나 — 정책 둘**
+
+| | 전 | 후 | 근거 |
+|---|---|---|---|
+| 워크스페이스가 비면 | **검색조차 하지 않고 거부** | Global Search + Global Ranking 으로 답한다 | 최종 설계 §6-1·§17-1 |
+| 질문이 대상을 지정하지 않으면 | 워크스페이스 기업을 **앵커로 승격**(`source=workspace`) | 앵커 없음(`source=anchorless`) · 재료는 검색 히트 | 최종 설계 §17-3·§19-4 |
+
+★**두 번째가 이번 작업의 본질입니다.** 「최근 주요 투자 이벤트가 뭐야?」가
+「삼성전자·SK하이닉스의 투자 이벤트」로 조용히 바뀌던 자리입니다 —
+[§14-3](BizNode_Search_Layer_설계.md#14-3-해소-실패는-워크스페이스로-떨어지면-안-된다)
+이 `unresolved` 에서 막던 「물은 것과 다른 대상으로 답하기」를, **정상 질의에서**
+저지르고 있었습니다.
+
+**지운 것 (10)**
+
+```text
+guard_workspace 노드 + has_workspace 조건부 엣지     ask_graph · nodes/material
+has_starting_point()                                 retrieve_service
+decide_anchor() 의 workspace 분기                     query_understanding
+AnchorSource.WORKSPACE + Anchor.source Literal        api/schemas
+TARGET_NOTE_BY_SOURCE[WORKSPACE]                      llm/prompt
+_NO_WORKSPACE_MESSAGE + halt 의 워크스페이스 분기       answer_service · nodes/answer
+AnswerService.ask() 의 출발점 게이트                   answer_service
+시스템 프롬프트 [워크스페이스] 절 → [대상 지정 없음]     answer_service
+배선 끊긴 fetch_events·fetch_relations·fetch_evidence  nodes/material
+그 셋만 쓰던 _scope·_scope_keys                        nodes/material
+```
+
+**새로 만든 것 (2)**
+
+```text
+AnchorSource.ANCHORLESS      「대상을 지정하지 않았다」 — ★정상 상태다
+_anchor_names_for()          사건 랭킹의 앵커명 목록. 셋째 갈래(재료 기업 이름)를 연다
+```
+
+★`_anchor_names_for` 가 왜 필요했나 — `anchorless` 는 `resolved_entities` 도
+`decision.anchors` 도 비어 있습니다. 그대로 두면 목록이 `[]` 가 되어
+[§5-23](#5-23-workspace-앵커-질의에서-사건-순위가-실험-로-퇴행한다--해소-2026-08-26)
+이 고친 퇴행(「기업명이 든 라벨이 유사도 상위를 먹는다」)이 그대로 돌아옵니다.
+`workspace` 경로에서 그 이름을 대던 것이 워크스페이스 앵커였고, 지금은 **히트가 준
+재료 기업**이 댑니다. 계산식은 `/ask` 그래프와 `/retrieve` 가 **같은 함수**를 씁니다.
+
+**`_hits_reflect_the_anchor` 의 갈래가 하나 늘었다**
+
+```text
+query + resolved_entities   히트를 쓴다   그 기업의 관계 상대가 곧 답이다
+anchorless                  히트를 쓴다   ★신설 — 앵커가 없으니 히트 말고 재료가 없다
+context                     앵커를 쓴다   화면이 대상을 알고 있다
+query + norm_name fallback  앵커를 쓴다   ② Search 가 못 잡은 앵커라 히트와 어긋난다
+```
+
+**테스트** — `1118 passed · 3 xfailed`, **변경 전과 같은 수**입니다. 갱신한 파일 9개:
+
+```text
+뒤집힌 계약   test_conditional_edges(빈 워크스페이스가 검색을 막지 않는다) ·
+              test_ask_anchor_flow(거부 → 통과) · test_context_anchor(게이트 부재)
+이름만 바뀜   test_query_understanding · test_anchor_schema · test_retrieve_anchor ·
+              test_answer_shape · test_answer_service
+앵커 종류 교체 test_material_anchor · test_anchor_backstop (workspace → context 앵커)
+갈래 신설     test_plan_material(anchorless 가 히트를 재료로 쓴다 · 재료 기업 이름 fallback)
+평가셋        cases.py(anchor:WORKSPACE → anchor:ANCHORLESS · 게이트 케이스 →
+              global-no-context-at-all) · test_agent_eval(옛 비대칭 검사 제거)
+```
+
+★**되돌리기 방지 그물을 둘 심었습니다** — `test_workspace_is_no_longer_a_gate`
+(`has_workspace`·`guard_workspace` 가 없다) 와
+`test_there_is_no_starting_point_gate_any_more`(판정이 있던 세 곳 전부 없다).
+게이트는 세 곳에 흩어져 있었으므로 하나라도 되살아나면 그 입구만 조용히 거절합니다.
+
+**계약 변경 2건 — 백엔드·프론트 통보 필요** `[TODO]`
+
+```text
+POST /ask   workspace_keys  필수 → **선택** (빈 배열이 더 이상 거부되지 않는다)
+AskResponse.anchor_source   "workspace" → **"anchorless"**  ← 값이 사라진다
+```
+
+[연동 가이드](BizNode_백엔드_연동_가이드.md)에 적었습니다. 화면이 `"workspace"` 를
+분기 조건으로 쓰고 있으면 그 분기가 죽습니다.
+
+**아직 안 한 것 — 이번 범위 밖** `[TODO]`
+
+| 무엇 | 왜 미뤘나 |
+|---|---|
+| **랭킹 결합** (`result_ranker` 사전식 → Global+Workspace 결합) | 랭킹을 게이트 제거와 같은 커밋에 섞으면 `ranking_baseline` diff 에서 둘을 못 가른다 |
+| `graph_tools` 의 링 정렬 후 절단 | 위와 같은 이유. Ring 3 가 상한에서 잘리는 것은 [§5-17](#5-17-비-company-관계가-ring-2-로-밀려-상한에서-잘린다-todo) 과 같은 자리다 |
+| **Anchor 를 Company 밖으로** (Event·Person·Organization·Product) | 해소기 신설 + Neo4j 이름 인덱스가 필요하다 |
+| **Global Anchorless 검색 품질** | ★가장 큰 공백이다. anchorless 히트는 SEMANTIC 폴백이거나 source 5+target 5 슬롯이라(§14-7 ⓑ) 질이 보장되지 않는다. 지금은 「대상 지정 없음」 표기로 사용자에게 알릴 뿐이고, Global Event Search 는 **코드에 없다**(Chroma 컬렉션이 `company`·`evidence` 둘뿐) |
+| Conversation | 코드에 개념이 0 이고 소유권(Backend 인가 우리인가)이 미정이다 |
+
 ---
 
 ## 9. 실측 근거 없는 잠정치
@@ -3296,6 +3390,7 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-09-01 | ★**Workspace 검색 게이트·앵커 승격 제거 — 최종 설계 Phase 1** (§8-22) | [최종 설계](BizNode_Workspace_Contextual_Agent_Final_Design.md) §6-1·§17-1·§17-3 이 「Workspace 는 Search Boundary 가 아니라 Ranking Signal 이다」로 확정했다. **둘을 지웠다** — ① `guard_workspace`(담아 둔 기업도 보고 있는 기업도 없으면 **검색조차 안 함**) ② `AnchorSource.WORKSPACE`(질문이 대상을 안 지정하면 워크스페이스 기업을 **앵커로 승격**). ②가 본질이다 — 「최근 주요 투자 이벤트가 뭐야?」가 「삼성전자·SK하이닉스의 투자 이벤트」로 조용히 바뀌던 자리이고, §14-3 이 `unresolved` 에서 막던 오답을 **정상 질의에서** 저지르고 있었다. `ANCHORLESS` 를 신설해 「대상 없음」을 정상 상태로 두고, 재료는 Global Search 히트가 댄다(`_hits_reflect_the_anchor` 에 갈래 신설). `_anchor_names_for` 로 사건 랭킹의 앵커명 셋째 갈래(재료 기업 이름)를 열어 §5-23 퇴행을 막았다 — 두 입구가 **같은 함수**를 쓴다. 배선 끊긴 `fetch_events`·`fetch_relations`·`fetch_evidence` 와 그들만 쓰던 `_scope` 도 함께 치웠다. **테스트 1118 passed · 3 xfailed — 변경 전과 같은 수**(9개 파일 갱신). 되돌리기 방지 그물 2개(`test_workspace_is_no_longer_a_gate` · `test_there_is_no_starting_point_gate_any_more`). ★**계약 변경 2건 통보 필요** — `/ask` 의 `workspace_keys` 필수→선택 · `anchor_source` 의 `"workspace"`→`"anchorless"`. ★**랭킹 결합·Anchor 확장·Conversation 은 이번 범위 밖**이다 — 랭킹을 게이트 제거와 섞으면 `ranking_baseline` diff 에서 둘을 못 가른다 |
 | 2026-08-30 | ★**평가셋 전후 대조(23/23 유지 · 토큰 −6.2%) · 파리티 18/20 원인 규명 · 「18→19」 귀속 철회** (§8-21) | **평가셋을 HEAD 사본과 변경본에서 각각 1회씩 실호출**했다(DB 가 08-29 에 바뀌어 옛 기록을 기준선으로 못 쓴다). **23/23 PASS 동일** · 도구 호출 38→37 · **입력 토큰 268,176 → 251,614(−6.2%)** · 출력 11,801→12,237 · uncited 1(2.6%)→**0(0.0%)**. ★**사건·근거 개수가 전 케이스에서 동일**하다 — 유일한 예외 `ws-semantic-collusion`(근거 47→27)은 Agent 가 `get_relations` 를 안 부른 **도구 선택 차이**다. 질의 유형별(최근성 5 · 리스크 5 · 해당없음 13)로 갈라도 사건·근거는 전부 동일. ★**인용 수와 claim 지표는 판단을 보류한다** — 최근성군 13→10 · 리스크군 16→21 로 움직였지만 **각 N=1** 이고, 이 저장소는 같은 함정을 이미 겪었다(`unlinked` 가 n=1 세 번에 4→2→8). 재료 품질 개선은 **결정적인** `ranking_baseline` 이 증명한다(risk 3→10 · recent 4→10). ★`unlinked` 0→2 는 둘 다 「파두 실적 논란」이고 **현황서가 이미 오탐으로 기록해 둔 그 문장들**이다. 「논란」이 `risk_intent` 를 켜 위험사건이 더 들어왔고 `intent_linked` 는 `event_type` 축만 봐서 「연결 없음」으로 센다 — 고칠 자리는 `matched_event_types` 라는 기존 `[DECIDE]` 그대로다(`_STRIP_UNLINKED_CLAIMS=False` 라 답변 무변경). ★**파리티 18/20 의 원인** — `ask_graph_parity --materials` 는 **Agent 도구 선택에 실제 LLM 을 쓴다**(답변 LLM 만 스텁). 한 질문 3회에 **차이 2회·동일 1회**로 비결정성을 실측했다. 18건 사유는 관계 9 · 근거 8 · 사건 1 이고, 관계 쪽 표본 셋이 전부 **`1차에만` 10·10·20건 = 2차 관계 0건**이다. **`RetrieveService` 는 관계를 항상 모으고 2차는 `get_relations` 를 Agent 가 불러야만** 생기는데 그 도구는 23 케이스 중 4~5회만 불린다. **구조 차이지 랭킹이 아니다.** ★**「현대모비스 공급망 리스크」** — companies 동일 · events 동일. 표적 근거 2건은 `HAS_EVENT` 가 아니라 **`IMPACTS` 엣지**의 **다른 기업**(기아·현대자동차·현대차 인도법인) 쪽에 있고 노드 합집합에만 존재한다. 2차 근거 합집합에는 1차에 없는 **네 번째 출처(인용 가능 도구 결과 · `search_news` 하나)** 가 있다. `search_news` 3가지 질의로 재현 실패 · Agent 의 실제 질의를 모름 → **미확정** `[DECIDE]`. `PropagationDTO` 는 `evidence_id` 가 없어 파급은 배제. 판정: DB·selector·scope **아님**, **검색 계층의 근거 합집합 정의 차이**까지 확정. ★**「18→19」 귀속은 철회한다**(§8-20 정정). **DB 무수정 · 코드 무변경 · 분석만** |
 | 2026-08-30 | ★**사건 랭킹 — 세 축을 잇고 오늘을 실었다 · 「최근 리스크」가 3/10 → 10/10** (§8-20 · 작업 1~4) | ★**먼저 기준선을 고정했다** — `batch/audit/ranking_baseline.py` + `docs/ranking_baseline.json`. 데이터 팀이 같은 기간에 그래프를 고치고 있어 「코드가 바꾼 것」과 「데이터가 바꾼 것」을 못 가르기 때문이다(이 저장소가 이미 **네 번** 밟은 함정). 순위 규칙을 옮겨 적지 않고 `graph_tools.get_events()` 를 `scope` 안에서 그대로 부른다 — 사본은 낡는다. 재실행 14/14 무변화로 결정성 확인. **축이 셋인데 질문에서 읽는 쪽에는 하나뿐이었다** — ERD 가 `event_type` 과 `is_risk` 를 「별개 축」이라 못 박아 뒀는데 `matched_event_types()` 만 있었고, 시간은 아무도 해석하지 않았다. **①** `risk_intent()` 신설 + `select(risk_wanted=)` 티어. ★`_EVENT_TYPE_KEYWORDS` 에 「리스크」를 **안 넣었다** — 그 값은 `claim_check._intent_linked` 도 읽어 `intent_link` 지표가 조용히 움직인다. 「이슈」는 일부러 뺐다(「HBM 이슈」는 주제다). **②** `_SIM_BUCKET = 0.05`. ★아래 `위험사건`·`최신순` 이 **닿지 않는 죽은 키**였다(float 유사도는 동점이 안 난다). 실측 인접 gap 중앙 **0.0034**·p90 0.0167 인데 상위 20건 폭이 질의마다 0.072~0.267 — 규칙이 걸리면 넓고(유사도가 된다) 안 걸리면 좁다(잡음이다). 0.05 는 그 사이. 가중합은 계수 셋을 실측 없이 정해야 하고 로그에서 안 읽혀 **안 갔다**. **③** `app/core/clock.py`(오늘의 단일 출처 — `app/` 에 `date.today()` 가 **한 곳도 없었다**) + `recent_intent()`·`recent_window()`·`select(recent_since=)`. 창은 **위험 티어 아래**다 — 「최근 리스크」는 「위험한 것 중 최근인 것」이지 그 반대가 아니다. `occurred_at` 이 문자열이라 `date()` 캐스팅은 조용히 0건이 된다. **④** `prompt.assemble()` 에 `오늘:` — `질문:` 바로 뒤(그 아래는 `with_target_note()` 자리이고 규칙 7·13 이 위치를 참조한다). 두 경로가 이 함수를 공유하므로 한쪽만 날짜를 갖는 일이 없다. 최종 정렬: `event_id → 최신순 → 위험사건 → 유사도(덩어리) → 최근창 → 위험 티어 → 규칙 티어`. 셋 다 hard filter 가 아니다. ★**결과** — 「이 회사 최근 리스크 어때?」 risk **3→10** · recent **4→10**(삼성전자·SK하이닉스 둘 다) · 「최근 위험한 일」도 10/10. **그래프 지문이 그대로인 채**로 움직였으므로 개선이 코드에 귀속된다. ★**대조군이 「불변」은 아니었다** — 작업 2 는 무조건이라 「안전사고」·「소송 상황」도 움직인다(내 라벨이 부정확했다). 대신 **규칙 티어가 온전한지**를 직접 쟀다: 사고재해 3/3 · 9/9 · 분쟁소송 10/18(상한) · 노무 10/10 **전부 지켜졌다.** 움직인 것은 규칙 티어 **밖의 남는 자리**뿐이다. ★**파리티는 내 변경 전부터 깨져 있다** — `ask_graph_parity --materials` 20건 중 **18건**. HEAD(`03c3b54`) 사본을 따로 만들어 돌려 **18건이 글자까지 같음을 확인**했다(데이터 담당 영역). ★**내 변경으로 1건 더 드러났다(18→19)** — 「현대모비스 공급망 리스크」에서 **사건은 같고 근거만 2차에 2건 더**. 둘 다 **여러 기업이 공유하는 사건**의 것이라(`evt_news_25ff4eb0b6e1` 은 3곳) 공유 사건 근거 병합이 두 경로에서 다르게 발동한 모양이고, 원인은 **두 경로의 기업 집합 차이**로 **보이나 확정 못 했다** `[DECIDE]`. **1102 passed · 0 failed · 3 xfailed**(기존). ★LLM 실호출 평가셋은 **아직 안 돌렸다** — 비용이 드는 일이라 판단을 받고 돌린다 |
 | 2026-08-29 | ★**「기타」 사건은 판정 불가다 — 구조적으로 늘 「연결 없음」이었다** (§5-25) | `_EVENT_TYPE_KEYWORDS["기타"]` 의 패턴이 `(?!)`(아무것에도 안 걸림)이라 `matched_event_types` 가 절대 안 담는데, `_intent_linked` 는 근거 출처가 `기타` 면 「종류를 안다」로 읽고 대조했다 → **겹칠 수가 없어 늘 `False`**. 「분류를 못 했다」가 「연결 없음」으로 샌 것이고 그 함수의 docstring 이 하지 말라고 적어 둔 바로 그것이다. 실측: 솔리다임 지분 조사 사건이 매 실행 여기 있었다(`35ac6a5` 6건 중 2건 · `6d672d1` 5건 중 1건). 사실은 `evidence_selector.UNCLASSIFIED_EVENT_TYPES` 에, 읽기는 `claim_check` 에 — 문자열을 두 번 적지 않는다. ★**재료·답변 무변경**(관측 전용 · `_STRIP_UNLINKED_CLAIMS=False`), 움직이는 것은 §4-1 계수뿐(`6d672d1` 기준 연결 없음 5 → 4 · 판정 불가 18 → 19). 테스트 +3(전제 1 · 판정 1 · 덮어쓰지 않음 1) · 변이 검사 통과 |

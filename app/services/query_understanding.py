@@ -6,12 +6,21 @@
 
         O  ×  O   → query        그것을 대상으로 답한다
         O  ×  ✗   → unresolved   ★못 찾았다고 말하고 끝낸다. 워크스페이스로 안 갈아탄다
-        ✗  ×  —   → context      **보고 있는 기업**이 있으면 그것 (★워크스페이스보다 먼저)
-        ✗  ×  —   → workspace    없으면 워크스페이스 기업을 대상 문맥으로 해석한다
+        ✗  ×  —   → context      **보고 있는 기업**이 있으면 그것
+        ✗  ×  —   → anchorless   없으면 **앵커 없음**. ★워크스페이스로 갈아타지 않는다
 
-★**`context` 가 `workspace` 앞이다.** 상세 페이지에서 「이 회사 노조 리스크
-  어때?」를 물으면 답은 그 회사이지 담아 둔 기업이 아니다. 화면이 보여주는 것을
-  무시하고 담아 둔 것으로 답하면, 그것도 「물은 것과 다른 대상으로 답하기」다.
+★**`workspace` 갈래가 사라졌다** (최종 설계 §17-3, 이번 개정). 앵커가 없을 때
+  워크스페이스 기업을 대상으로 승격시키던 자리다. 그러면 「최근 주요 투자
+  이벤트가 뭐야?」가 「담아 둔 기업들의 투자 이벤트」로 조용히 바뀐다 —
+  §14-3 이 막으려는 「물은 것과 다른 대상으로 답하기」와 **같은 종류**의 오답을,
+  해소 실패가 아니라 **정상 질의**에서 저지르고 있었다.
+
+  워크스페이스는 이제 **대상이 아니라 랭킹 문맥**이다. 앵커 없는 질의도 Global
+  Search 를 그대로 타고, 워크스페이스는 그 결과의 순서에만 관여한다.
+
+★**`context` 는 남는다.** 「보고 있는 기업」은 담아 둔 것과 달리 화면이 **대상을
+  알고 있는** 상태다 — 상세 페이지에서 「이 회사 노조 리스크 어때?」를 물으면
+  답은 그 회사다. 담아 둔 것과 한 값으로 묶으면 안 되는 이유가 이것이다.
 
 ★**왜 이 모듈이 따로 있나** — 판정 조각이 세 곳에 흩어져 있었다
   (`AnchorExtractor`·`EntityResolver`·`GraphSearcher._primary_resolution`). 「하나의
@@ -58,9 +67,10 @@ class AnchorDecision:
     """「무엇을 대상으로 답하는가」 — 서버가 아는 **결정론적** 값이다."""
 
     source: AnchorSource
-    # `source=query` 면 질문이 지정한 기업, `context` 면 보고 있는 기업,
-    # `workspace` 면 워크스페이스 기업.
-    # `unresolved` 면 **비어 있다** — 재료를 만들지 않는다(설계서 §14-4).
+    # `source=query` 면 질문이 지정한 기업, `context` 면 보고 있는 기업.
+    # `unresolved`·`anchorless` 면 **비어 있다** — 앵커가 없는 상태다.
+    #   · `unresolved` 는 재료를 만들지 않는다(설계서 §14-4)
+    #   · `anchorless` 는 **재료를 만든다** — Global Search 히트가 재료다
     anchors: list[Anchor] = field(default_factory=list)
     # `unresolved` 일 때 사용자가 지목한 것으로 보이는 문자열. 「'TSMC' 에
     # 해당하는 기업을 찾지 못했습니다」 문구가 이걸 쓴다.
@@ -72,8 +82,7 @@ class AnchorDecision:
     workspace_names: dict[str, str] = field(default_factory=dict)
     # ★보고 있는 기업 key → 이름. `workspace_names` 와 **같은 이유로** 항상
     #   채운다 — 조회는 경계에서 끝났고, 문구를 조립하는 쪽이 같은 조회를
-    #   또 하지 않게 한다. `halt_no_material` 이 「담긴 기업도 보고 있는 기업도
-    #   없다」를 가를 때와 프롬프트 머리말이 이 값을 쓴다.
+    #   또 하지 않게 한다. 프롬프트 머리말이 이 값을 쓴다.
     context_names: dict[str, str] = field(default_factory=dict)
 
 
@@ -159,15 +168,13 @@ def decide_anchor(
                               workspace_names=workspace_names,
                               context_names=context_names)
 
-    # ── ③ 보고 있는 기업 — ★**워크스페이스보다 먼저** ───────────────────
+    # ── ③ 보고 있는 기업 — ★**UI 가 대상을 알고 있을 때만** ─────────────
     #
-    #   ★순서가 이 분기의 전부다. 상세 페이지에서 「이 회사 노조 리스크 어때?」를
-    #     물으면 답은 **그 회사**이지 담아 둔 기업이 아니다. 워크스페이스를 먼저
-    #     보면 화면이 무엇을 보여주고 있든 담아 둔 기업으로 답하게 된다 —
-    #     §14-3 이 막으려는 「물은 것과 다른 대상으로 답하기」의 같은 종류다.
+    #   ★상세 페이지에서 「이 회사 노조 리스크 어때?」를 물으면 답은 **그
+    #     회사**다. 화면이 무엇을 보여주는지가 곧 질문의 대상이다.
     #
-    #   ★워크스페이스가 **비어 있어도** 여기가 성립한다. 그래서 `guard_workspace`
-    #     의 게이트가 `workspace_keys or context_keys` 로 넓어진다.
+    #   ★**워크스페이스는 여기 오지 않는다.** 담아 둔 것은 「지금 보고 있는
+    #     것」이 아니라 「관심 영역」이다 — 대상이 아니라 랭킹 문맥이다.
     if context_names:
         anchors = [Anchor(key=key, name=name, source=AnchorSource.CONTEXT)
                    for key, name in context_names.items()]
@@ -176,10 +183,23 @@ def decide_anchor(
                               workspace_names=workspace_names,
                               context_names=context_names)
 
-    anchors = [Anchor(key=key, name=name, source=AnchorSource.WORKSPACE)
-               for key, name in workspace_names.items()]
-    log.info("anchor.source=workspace anchors=%d", len(anchors))
-    return AnchorDecision(source=AnchorSource.WORKSPACE, anchors=anchors,
+    # ── ④ 앵커 없음 — ★**워크스페이스로 갈아타지 않는다** ────────────────
+    #
+    #   ★여기가 이번 개정의 핵심이다(최종 설계 §17-3·§19-4). 전에는 워크스페이스
+    #     기업을 앵커로 **승격**시켜 `source=workspace` 를 냈다. 그러면
+    #     「최근 주요 투자 이벤트가 뭐야?」가 「삼성전자·SK하이닉스의 투자
+    #     이벤트」로 조용히 바뀐다 — **질문이 묻지 않은 것을 대상으로 답하기**다.
+    #
+    #   ★**실패가 아니다.** 앵커 없는 질의는 정상이고, 재료는 Global Search 의
+    #     히트가 댄다(`retrieve_service._hits_reflect_the_anchor`). 워크스페이스는
+    #     그 결과의 **순서**에만 관여한다(`result_ranker.workspace_priority`).
+    #
+    #   ★`workspace_names` 는 **그대로 싣는다.** 앵커가 아니라 **소속 표기**로
+    #     쓰인다(설계서 §12, `llm/prompt.membership`) — 「이 기업이 담아 둔
+    #     것인가」를 답변이 밝힐 수 있어야 한다.
+    log.info("anchor.source=anchorless workspace=%d — 워크스페이스를 앵커로 쓰지 않는다",
+             len(workspace_names))
+    return AnchorDecision(source=AnchorSource.ANCHORLESS,
                           workspace_names=workspace_names,
                           context_names=context_names)
 

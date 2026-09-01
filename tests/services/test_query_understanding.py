@@ -108,14 +108,21 @@ def test_foreign_name_counts_as_named(graph):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  workspace — 질문이 대상을 지정하지 않았다
+#  anchorless — 질문이 대상을 지정하지 않았다
 # ══════════════════════════════════════════════════════════════════════
 
-def test_question_without_a_named_target_uses_the_workspace(graph):
+def test_question_without_a_named_target_is_anchorless(graph):
+    """★**워크스페이스를 앵커로 승격시키지 않는다**(최종 설계 §17-3).
+
+    전에는 여기서 담아 둔 두 기업이 `source=workspace` 앵커가 됐다. 그러면
+    「납품 단가 압박」이 「삼성전자·SK하이닉스의 납품 단가 압박」으로 조용히
+    바뀐다 — 질문이 묻지 않은 대상이다.
+    """
     decision = qu.decide_anchor("납품 단가 압박", [], _WS)
-    assert decision.source is AnchorSource.WORKSPACE
-    assert [(a.key, a.source) for a in decision.anchors] == [
-        (_SAMSUNG, AnchorSource.WORKSPACE), (_HYNIX, AnchorSource.WORKSPACE)]
+    assert decision.source is AnchorSource.ANCHORLESS
+    assert decision.anchors == []
+    # 랭킹·표기용으로는 그대로 따라간다.
+    assert decision.workspace_names == _WS
 
 
 def test_product_name_is_not_a_named_target(graph):
@@ -123,7 +130,7 @@ def test_product_name_is_not_a_named_target(graph):
     태그가 붙지만 **Product 노드**다. 기업을 지목한 것이 아니다."""
     graph["non_company"]["HBM"] = "Product"
     decision = qu.decide_anchor("HBM을 만드는 기업", [], _WS)
-    assert decision.source is AnchorSource.WORKSPACE
+    assert decision.source is AnchorSource.ANCHORLESS
 
 
 def test_non_company_filter_matches_exactly_not_by_substring(graph):
@@ -133,12 +140,18 @@ def test_non_company_filter_matches_exactly_not_by_substring(graph):
     assert qu.decide_anchor("자스트리브노고르스크는 어떤가?", [], _WS).source is AnchorSource.UNRESOLVED
 
 
-def test_empty_workspace_still_reports_workspace_source(graph):
-    """★빈 워크스페이스의 **거부**는 여기 책임이 아니다(설계서 §16-2) —
-    `answer_service` 가 판단한다. 여기서는 「대상을 지정하지 않았다」만 말한다."""
-    decision = qu.decide_anchor("납품 단가 압박", [], {})
-    assert decision.source is AnchorSource.WORKSPACE
-    assert decision.anchors == []
+def test_empty_workspace_is_just_anchorless_too(graph):
+    """★워크스페이스 유무가 **판정을 바꾸지 않는다**(최종 설계 §17-3).
+
+    있든 없든 「질문이 대상을 지정하지 않았다」는 같은 사실이다. 전에는 있으면
+    `workspace`, 없으면 거절이었는데 지금은 둘 다 `anchorless` 다 — 거부는
+    아예 사라졌다(§17-1).
+    """
+    with_ws = qu.decide_anchor("납품 단가 압박", [], _WS)
+    without_ws = qu.decide_anchor("납품 단가 압박", [], {})
+
+    assert with_ws.source is without_ws.source is AnchorSource.ANCHORLESS
+    assert with_ws.anchors == without_ws.anchors == []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -163,7 +176,7 @@ def test_question_without_name_tokens_skips_the_non_company_lookup(monkeypatch):
     monkeypatch.setattr(qu.company_service, "find_by_names", lambda n: None)
     monkeypatch.setattr(qu.company_service, "non_company_labels",
                         lambda n: called.append(n) or {})
-    assert qu.decide_anchor("납품 단가 압박", [], _WS).source is AnchorSource.WORKSPACE
+    assert qu.decide_anchor("납품 단가 압박", [], _WS).source is AnchorSource.ANCHORLESS
     assert called == []
 
 
