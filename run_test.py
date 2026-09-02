@@ -5,12 +5,27 @@
     python run_test.py                          모드 목록
     python run_test.py anchor "질문"             앵커가 어느 갈래로 가나      무료
     python run_test.py search "질의"             검색 계층만                  무료
+    python run_test.py global "질문"             ★전역 사건 검색만            무료
+    python run_test.py retrieve "질문"           ★재료 조립 끝까지            무료
     python run_test.py tools 삼성전자             도구 7종을 직접 부른다        무료
     python run_test.py ask "질문"                ★Agent 루프 끝까지           LLM 호출
 
-  앞의 셋이 무료인 것이 중요하다 — 도구가 무엇을 돌려주는지, 앵커가 어디로
-  가는지는 **LLM 없이 전부 확인된다.** `ask` 는 「Agent 가 그 도구들을 실제로
-  골라 부르는가」를 볼 때만 쓰면 된다.
+  앞의 다섯이 무료인 것이 중요하다 — 도구가 무엇을 돌려주는지, 앵커가 어디로
+  가는지, **앵커 없는 질문에 무슨 사건이 잡히는지**는 LLM 없이 전부 확인된다.
+  `ask` 는 「Agent 가 그 도구들을 실제로 골라 부르는가」를 볼 때만 쓰면 된다.
+
+★**앵커 없는 질문**(「최근 주요 투자 이벤트가 뭐야?」)을 볼 때의 순서 (2026-09-02)
+
+    ① anchor    → `anchor_source` 가 `anchorless` 로 나오나
+                  ★여기서 `query` 가 나오면 그 아래는 볼 것도 없다 —
+                    「요즘」·「대상」·「미래」 같은 흔한 낱말이 실제 사명이라
+                    엉뚱한 기업이 앵커로 잡힌다(F2). 이 모드가 경고를 찍는다
+    ② global    → 전역 후보에서 무엇이 뽑히나 (규칙 티어·위험·최근창이 보인다)
+    ③ retrieve  → 그 사건에서 기업이 역산되고 관계·근거까지 붙는가
+    ④ ask       → Agent 가 그 재료를 실제로 집어 답하나 (LLM)
+
+  ②와 ③이 **같은 사건 목록**을 내야 한다. 다르면 `scope.event_pairs` 배선이
+  깨진 것이다.
 
 ★`ask` 는 **관측치를 함께 찍는다** — 도구 호출 · 링 분포 · 예산 · 임베딩 ·
   최종 인용. 답변만 보면 「왜 이 재료가 왔나」를 되짚을 수 없다.
@@ -97,6 +112,25 @@ def cmd_anchor(args) -> None:
     if result.hits:
         print(f"  상위          : {' · '.join(h.name for h in result.hits[:5])}")
 
+    # ★재료가 **어디서 오나** — 2026-09-02 부터 갈래가 둘이다.
+    if decision.source.value == "anchorless":
+        print(f"  match_type    : SEMANTIC  (앵커가 없으면 「정확 일치」가 아니다)")
+        print("\n  ★위 히트는 **재료가 아니다**(2026-09-02). 관계 신선도 순이라 기업이")
+        print("    사실상 임의로 정해지던 자리다 — 이제 앵커가 없으면 히트를 안 쓰고")
+        print("    전역 사건을 먼저 골라 **거기서 기업을 역산**한다.")
+        print("\n  → 재료는 **전역 사건 검색**이 댄다. `global` 모드로 이어서 보라:")
+        print(f"       python run_test.py global {args.question!r}")
+    elif decision.source.value in ("query", "context"):
+        # ★F2 — 흔한 한국어 낱말과 겹치는 실제 사명이 있다. 앵커가 그중 하나로
+        #   잡히면 전역 경로로 갔어야 할 질문이 **통째로 막힌다**(사건 0건).
+        trap = {"요즘", "오늘", "우리", "미래", "대상"}
+        hit_trap = [a.name for a in decision.anchors if a.name in trap]
+        if hit_trap:
+            print(f"\n  ★★경고 — 앵커 {hit_trap} 은(는) 실제 사명이지만 **흔한 낱말**이다(F2).")
+            print("    질문이 그 회사를 물은 게 아니라면 이건 오탐이고, 앵커가 잡히는 바람에")
+            print("    전역 사건 검색으로 **안 간다** — 재료가 0건이 되기 쉽다.")
+            print("    확인: 같은 질문에서 그 낱말만 빼고 다시 돌려 보라.")
+
 
 # ══════════════════════════════════════════════════════════════════
 #  search — 검색 계층만 (무료 · 기존 동작)
@@ -121,6 +155,128 @@ def cmd_search(args) -> None:
         rrf = f" rrf={hit.rrf_score:.5f}" if hit.rrf_score is not None else ""
         print(f"  {hit.rank:2}. {hit.name:24} {hit.entity_id:12} "
               f"score={hit.source_score:.4f}{rrf} {hit.sources}")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  global — 전역 사건 검색만 (무료 · 임베딩만 부른다)
+# ══════════════════════════════════════════════════════════════════
+
+
+def cmd_global(args) -> None:
+    """★**앵커 없는 질문의 재료가 어디서 오나** — 최종 설계 §5 시나리오 3 · §17-2.
+
+    전에는 이 질문이 Event 노드를 **한 번도 안 건드렸다**(F1). 「투자」가 사건이
+    아니라 지분관계로 읽혀 관계 신선도 순으로 기업 5곳을 채웠고, 그 결과가
+    (주)DB Inc.·IMANTOAG·유진로봇이었다.
+
+    ★**앵커 판정을 거치지 않는다.** 질문이 실제로 `anchorless` 로 가는지는
+      `anchor` 모드가 본다 — 여기서는 「전역 후보에서 무엇이 뽑히나」만 본다.
+      둘을 섞으면 「앵커가 잘못 잡혀서」와 「랭킹이 잘못돼서」를 못 가른다.
+
+    ★세 축이 따로 보인다 — 규칙 티어(`matched`) · 위험(`risk`) · 최근창(`recent`).
+      셋 다 hard filter 가 아니라 **정렬 키**다. 「최근 리스크 뭐가 있어?」는
+      `matched=∅` 인데도 제대로 서는 것이 정상이다(위험·시간 축만으로).
+    """
+    import time
+
+    from app.services import company_service, evidence_selector as es
+    from app.services.retrieve_service import (_companies_of_events,
+                                               _default_embed,
+                                               select_global_events)
+
+    _head(f"전역 사건 검색 — {args.question!r}   (LLM 없음 · 임베딩만)")
+
+    intent = es.intent_of(args.question, [])
+    matched = es.matched_event_types(intent)
+    risk = es.risk_intent(intent)
+    recent = es.recent_window() if es.recent_intent(intent) else None
+
+    print(f"  intent  : {intent!r}")
+    print(f"  규칙 티어: {', '.join(sorted(matched)) or '∅  (임베딩·위험·최근창이 순위를 만든다)'}")
+    print(f"  위험 축  : {'켜짐' if risk else '꺼짐'}"
+          f"   최근 축 : {recent or '꺼짐'}")
+
+    t0 = time.perf_counter()
+    rows = company_service.global_events()
+    t_q = (time.perf_counter() - t0) * 1000
+    t0 = time.perf_counter()
+    events = select_global_events(args.question, embed=_default_embed,
+                                  limit=args.limit)
+    t_s = (time.perf_counter() - t0) * 1000
+
+    firms = _companies_of_events(events)
+    print(f"\n  후보    : {len(rows)}행 · 고유 사건 {len({r['event_id'] for r in rows})}"
+          f" · 기업 {len({r['company']['key'] for r in rows if r['company']})}"
+          f"   (Cypher {t_q:.0f}ms)")
+    print(f"  선택    : {len(events)}건 → 기업 {len(firms)}곳 역산   (선택 {t_s:.0f}ms)")
+
+    print(f"\n  {'날짜':<12} {'type':<8} {'위험':<4} 사건 · 기업")
+    print("  " + "─" * 68)
+    for event in events:
+        firm = event.company.name if event.company else "★기업 없음"
+        mark = "★" if event.event_type in matched else " "
+        print(f"  {event.occurred_at or '?':<12} {event.event_type:<8} "
+              f"{'위험' if event.is_risk else '  ':<4} {mark}{event.name[:34]} · {firm}")
+
+    print(f"\n  ★ 표시 = 규칙 티어가 켠 type. 없는 것은 임베딩·위험·최근창이 올린 것이다.")
+    print(f"  역산 기업: {' · '.join(c.name for c in firms)}")
+    print(f"\n  → 같은 사건이 `/retrieve` 에서도 나와야 한다:")
+    print(f"       python run_test.py retrieve {args.question!r}")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  retrieve — 재료 조립 끝까지 (무료 · 임베딩만)
+# ══════════════════════════════════════════════════════════════════
+
+
+def cmd_retrieve(args) -> None:
+    """`/retrieve` 종단 — **LLM 없이 재료가 다 나온다.**
+
+    ★`ask` 와 다른 것 — 여기는 Agent 가 없다. 그래서 「재료가 없다」가 나오면
+      **Agent 문제가 아니라 조립 문제**임이 바로 갈린다. `ask` 만 보면 그 둘이
+      섞인다.
+
+    ★앵커 없는 질문에서는 `events[].company` 가 차 있어야 한다 — 사건마다 기업이
+      다르므로, 비어 있으면 화면이 「누구에게 난 일인지 모르는 사건」을 그리게 된다.
+    """
+    import time
+
+    from app.api.schemas import AskRequest
+    from app.services.retrieve_service import RetrieveService
+
+    _head(f"/retrieve — {args.question!r}   (LLM 없음)")
+
+    t0 = time.perf_counter()
+    got = RetrieveService().retrieve(AskRequest(
+        question=args.question, workspace_keys=args.workspace,
+        context_keys=args.context))
+    ms = (time.perf_counter() - t0) * 1000
+
+    with_company = sum(1 for e in got.events if e.company)
+    print(f"  match_type : {got.match_type.value}"
+          f"{'   ← 앵커 없음' if got.match_type.value == 'SEMANTIC' else ''}")
+    print(f"  앵커       : {', '.join(f'{a.name}({a.key})' for a in got.anchors) or '없음'}")
+    print(f"  재료       : 기업 {len(got.companies)} · 사건 {len(got.events)} · "
+          f"관계 {len(got.relations)} · 파급 {len(got.propagation)} · "
+          f"근거 {len(got.evidence)}   ({ms:.0f}ms)")
+    print(f"  사건의 기업 : {with_company}/{len(got.events)}건에 실렸다"
+          f"{'   (앵커 경로는 0 이 정상)' if with_company == 0 else ''}")
+
+    if not got.events:
+        print("\n  ★사건이 0건이다. 앵커 판정부터 보라:")
+        print(f"       python run_test.py anchor {args.question!r}")
+        return
+
+    print(f"\n  {'날짜':<12} {'type':<8} 사건 · 기업")
+    print("  " + "─" * 68)
+    for event in got.events[:args.limit]:
+        firm = event.company.name if event.company else "—"
+        print(f"  {event.occurred_at or '?':<12} {event.event_type:<8} "
+              f"{event.name[:34]} · {firm}")
+    if len(got.events) > args.limit:
+        print(f"  … {len(got.events) - args.limit}건 더 (--limit 로 늘린다)")
+
+    print(f"\n  기업: {' · '.join(f'{c.name}({c.key})' for c in got.companies)}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -198,8 +354,11 @@ def _one_line(item: dict) -> str:
         return (f"{item.get('source')} --{item.get('edge_type')}{sub}--> "
                 f"{item.get('target')}  {item.get('freshness_note') or ''}".rstrip())
     if "event_id" in item:                           # EventDTO
+        # ★`company` 는 **앵커 없는 질문에서만** 찬다. 안 찍으면 「누구에게 난
+        #   일인지 모르는 사건」이 재료로 나가는 것을 손으로 못 잡는다.
+        firm = f" · {item['company']['name']}" if item.get("company") else ""
         return (f"{item.get('name')}  [{item.get('event_type')}]  "
-                f"{item.get('occurred_at') or '시점 없음'}")
+                f"{item.get('occurred_at') or '시점 없음'}{firm}")
     if "evidence_id" in item:                        # EvidenceHitDTO
         text = (item.get("text") or "").replace("\n", " ")
         edge = f" [{item['edge_type']}]" if item.get("edge_type") else ""
@@ -270,6 +429,18 @@ def cmd_ask(args) -> None:
           f"사건 {len(state.get('events') or [])} · "
           f"파급 {len(state.get('propagation') or [])} · "
           f"근거 {len(state.get('evidence') or [])}")
+
+    # ★앵커 없는 경로는 **서버가 사건을 먼저 고르고** 그 쌍을 도구에 넘긴다.
+    #   도구가 다시 고르면 기업당 10건 × 최대 10곳이 되어 `/retrieve` 와 갈린다.
+    pairs = state.get("event_pairs") or []
+    if pairs:
+        events = state.get("events") or []
+        with_company = sum(1 for e in events if getattr(e, "company", None))
+        print(f"  [전역]  서버가 고른 사건 {len(pairs)}쌍 → 재료 사건 {len(events)}건 "
+              f"· 기업 실린 사건 {with_company}건")
+        if len(events) > len(pairs):
+            print("          ★재료가 고른 것보다 많다 — 도구가 다시 고르고 있다."
+                  " `scope.event_pairs` 배선을 볼 것")
 
     if seen.ring_seen or seen.ring_kept:
         print(f"  [링]    본 것 {dict(sorted(seen.ring_seen.items()))} → "
@@ -349,6 +520,18 @@ def main() -> None:
                        help="검색 계층만 (무료)")
     p.add_argument("question")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("global", parents=[workspace_opt],
+                       help="★전역 사건 검색만 — 앵커 없는 질문의 재료 (무료)")
+    p.add_argument("question")
+    p.add_argument("--limit", type=int, default=10, help="몇 건까지 고르나")
+    p.set_defaults(func=cmd_global)
+
+    p = sub.add_parser("retrieve", parents=[workspace_opt, context_opt],
+                       help="★재료 조립 끝까지 — Agent 없이 (무료)")
+    p.add_argument("question")
+    p.add_argument("--limit", type=int, default=10, help="사건을 몇 건까지 찍나")
+    p.set_defaults(func=cmd_retrieve)
 
     p = sub.add_parser("tools", parents=[workspace_opt],
                        help="도구 7종을 직접 부른다 (무료)")
