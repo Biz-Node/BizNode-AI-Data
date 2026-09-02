@@ -132,7 +132,11 @@ def _scope_of(state: AskState):
         anchor_names=state["anchor_names"],
         intent=state.get("intent") or "",
         edge_types=query.edge_types or (),
-        direction=getattr(query.direction, "value", None))
+        direction=getattr(query.direction, "value", None),
+        # ★앵커 없는 질문에서 `plan_material` 이 **이미 고른 사건**. 차 있으면
+        #   `get_events` 는 고르지 않고 조회만 한다 — 두 입구가 같은 사건을
+        #   내게 하는 자리다(`scope.ToolContext.event_pairs`).
+        event_pairs=state.get("event_pairs") or ())
 
 
 # ══════════════════════════════════════════════════════════════════

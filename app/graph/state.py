@@ -84,6 +84,19 @@ class AskState(TypedDict, total=False):
     anchor_names: list[str]
     intent: str
 
+    # ★**앵커 없는 질문에서 서버가 고른 사건**(2026-09-02).
+    #   `(event_id, company_key)` 쌍의 순서 있는 목록. 앵커 경로에서는 비어 있다.
+    #
+    #   `plan_material` 이 전역 사건 검색을 **한 번** 돌려 여기 싣고,
+    #   `_scope_of` 가 `scope.event_pairs` 로 넘기면 `get_events` 가 **고르지 않고
+    #   조회만** 한다. 도구가 다시 고르면 `/retrieve` 의 전역 10건과 재료가
+    #   갈린다 — 앵커 없는 경로에서 `companies` 는 이미 그 사건에서 역산된
+    #   것이라, 기업별로 다시 조회하면 기업당 10건 × 최대 10곳이 된다.
+    #
+    #   ★`companies` 와 달리 이건 **사건 쪽 순서**다. 둘의 순서가 어긋나도
+    #     문제가 없다 — 기업은 사건에서 나온 부산물이고 범위 설정에만 쓰인다.
+    event_pairs: list[tuple[str, str]]
+
     # ── agent ⇄ run_tools 노드 (2차) ──────────────────────────
     # ★Agent 대화. `agent` 가 고르고 `run_tools` 가 결과를 붙인다.
     messages: Annotated[list, add_messages]

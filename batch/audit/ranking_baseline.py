@@ -52,7 +52,9 @@ import sys
 from datetime import date
 
 from app.services import company_service, evidence_selector
-from app.services.retrieve_service import _MAX_EVENTS_PER_COMPANY, _default_embed
+from app.services.retrieve_service import (_MAX_EVENTS_PER_COMPANY,
+                                           _MAX_GLOBAL_EVENTS, _default_embed,
+                                           select_global_events)
 from app.tools import graph_tools, scope
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -74,6 +76,24 @@ _QUESTIONS = [
     ("안전사고", "control-rule"),                   # 규칙만 — 움직이면 회귀
     ("소송 상황", "control-rule"),                  # 규칙만 — 움직이면 회귀
     ("", "control-nointent"),                       # 의도 없음(기업명만) — 폴백 경로
+]
+
+
+# ── 앵커 없는 질의 (2026-09-02) ──────────────────────────────────────────
+# ★위 `_QUESTIONS` 는 **기업 key 가 필수**라(`scope.anchor_scope([key])`) 앵커 없는
+#   경로를 못 잰다. 그쪽은 후보가 기업 5곳의 사건이 아니라 **전역 933행**이고,
+#   기업은 고른 사건에서 역산된다 — 재는 대상 자체가 다르다.
+#
+# ★`(global)` 을 기업 자리에 쓴다. `_compare()` 가 `(company, question)` 으로
+#   케이스를 잇는데, 앵커 없는 질의는 기업이 입력이 아니라 **출력**이라 고정된
+#   이름이 필요하다.
+_GLOBAL = "(global)"
+
+_ANCHORLESS_QUESTIONS = [
+    ("최근 주요 투자 이벤트가 뭐야?", "anchorless-rule"),   # 설계서 §5 시나리오 3 의 그 질의
+    ("최근 소송 걸린 기업 알려줘", "anchorless-rule"),      # 규칙(분쟁소송)이 걸린다
+    ("최근 리스크 뭐가 있어?", "anchorless-risk"),          # matched=∅ · 위험 축만
+    ("이번 주 주요 사건 뭐야?", "anchorless-nointent"),     # 축이 하나도 안 걸린다
 ]
 
 
@@ -144,6 +164,46 @@ def _measure(key: str, name: str, question: str, recent_since: str) -> dict:
     }
 
 
+def _measure_anchorless(question: str, recent_since: str) -> dict:
+    """앵커 없는 질의 하나. **프로덕션 함수를 그대로 부른다** — 사본 금지.
+
+    ★`/retrieve` 와 `/ask` 가 **같은 이 함수**를 부른다(`plan_material` 경유).
+      그래서 한쪽만 재도 두 입구를 다 잰 것이다 — 갈릴 자리가 없는 구조다.
+    """
+    kept = select_global_events(question, embed=_default_embed)
+
+    rows = company_service.global_events()
+    wrapped = [_Row(r) for r in rows]
+    sims = evidence_selector.similarities(
+        wrapped, intent=evidence_selector.intent_of(question, []),
+        embed=_default_embed, anchor_names=[])
+    fallback, _ = evidence_selector.select(
+        wrapped, matched=frozenset(), sims={}, limit=_MAX_GLOBAL_EVENTS)
+    fallback_ids = [e.event_id for e in fallback]
+
+    intent = evidence_selector.intent_of(question, [])
+    selected = [{
+        "event_id": e.event_id, "name": e.name, "event_type": e.event_type,
+        "is_risk": e.is_risk, "occurred_at": e.occurred_at,
+        "company": e.company.name if e.company else None,
+        "sim": round(sims.get(e.event_id, 0.0), 4),
+    } for e in kept]
+
+    return {
+        "question": question, "intent": intent,
+        "matched": sorted(evidence_selector.matched_event_types(intent)),
+        "selected": selected,
+        "risk_kept": sum(1 for s in selected if s["is_risk"]),
+        "recent_kept": sum(1 for s in selected
+                           if (s["occurred_at"] or "") >= recent_since),
+        "fallback_overlap": len({s["event_id"] for s in selected}
+                                & set(fallback_ids)),
+        "fallback": fallback_ids,
+        # ★앵커 없는 경로에만 있는 지표 — 기업은 **입력이 아니라 출력**이다.
+        "companies_derived": len({s["company"] for s in selected if s["company"]}),
+    }
+
+
 def _capture() -> dict:
     today = date.today()
     recent_since = _recent_since(today)
@@ -161,11 +221,30 @@ def _capture() -> dict:
             "fingerprint": _fingerprint(r["event_id"] for r in rows),
         }
 
+    # ★전역 후보도 지문을 찍는다 — 앵커 없는 경로의 순위 변화를 코드에 귀속하려면
+    #   기업 5곳이 아니라 **이쪽**이 그대로여야 한다.
+    global_rows = company_service.global_events()
+    out["companies"][_GLOBAL] = {
+        "name": "전역 사건 후보", "candidates": len(global_rows),
+        "risk": sum(1 for r in global_rows if r.get("is_risk")),
+        "recent_risk": sum(1 for r in global_rows if r.get("is_risk")
+                           and (r.get("occurred_at") or "") >= recent_since),
+        "latest": max((r.get("occurred_at") or "") for r in global_rows) or None,
+        # 쌍 단위로 찍는다 — 같은 사건도 기업이 다르면 다른 행이다
+        "fingerprint": _fingerprint(f"{r['event_id']}|{r['company']['key']}"
+                                    for r in global_rows),
+    }
+
     for question, kind in _QUESTIONS:
         for key, name in _COMPANIES:
             case = _measure(key, name, question, recent_since)
             case.update(company=key, kind=kind)
             out["cases"].append(case)
+
+    for question, kind in _ANCHORLESS_QUESTIONS:
+        case = _measure_anchorless(question, recent_since)
+        case.update(company=_GLOBAL, kind=kind)
+        out["cases"].append(case)
     return out
 
 
@@ -192,6 +271,17 @@ def _print(snap: dict) -> None:
               f"recent {case['recent_kept']:>2}/10 · overlap {case['fallback_overlap']:>2}/10"
               f"   matched={case['matched'] or '∅'}")
 
+    anchorless = [c for c in snap["cases"] if c["company"] == _GLOBAL]
+    if anchorless:
+        print("\n[앵커 없는 질의]  ★기업은 입력이 아니라 **고른 사건에서 역산된 것**이다")
+        for case in anchorless:
+            print(f"  {case['question']:<26} risk {case['risk_kept']:>2}/10 · "
+                  f"recent {case['recent_kept']:>2}/10 · overlap {case['fallback_overlap']:>2}/10"
+                  f" · 기업 {case['companies_derived']:>2}   matched={case['matched'] or '∅'}")
+            for s in case["selected"][:3]:
+                print(f"       {s['occurred_at'] or '?':<12} [{s['event_type']}] "
+                      f"{s['name'][:30]} · {s['company']}")
+
     print("\n[원 질의가 실제로 뽑는 것 — 삼성전자]")
     for case in snap["cases"]:
         if case["company"] == "00126380" and case["question"].startswith("이 회사 최근"):
@@ -212,7 +302,13 @@ def _compare(old: dict, new: dict) -> int:
     for key, c in new["companies"].items():
         o = old["companies"].get(key)
         if not o:
-            print(f"  {c['name']}: 기준선에 없음"); graph_moved = True; continue
+            # ★**「새 항목」과 「지문 바뀜」은 다르다.** 도구에 후보 집합을 추가한
+            #   것을 그래프 변동으로 세면, 다음 대조에서 「코드에 귀속할 수 없다」가
+            #   떠서 정작 회귀를 볼 때 그 문장을 안 믿게 된다.
+            print(f"  {c['name']:<10} ＋새 항목  후보 {c['candidates']}"
+                  f" · 위험 {c['risk']} · 최근위험 {c['recent_risk']}"
+                  f"  지문 {c['fingerprint']}")
+            continue
         same = o["fingerprint"] == c["fingerprint"]
         graph_moved |= not same
         mark = "그대로" if same else "★바뀜"
@@ -245,8 +341,11 @@ def _compare(old: dict, new: dict) -> int:
         name = new["companies"][case["company"]]["name"]
         label = case["question"] or "(기업명만)"
         flag = "  ⚠대조군" if case["kind"].startswith("control") else ""
+        d_firms = (case.get("companies_derived", 0) - o.get("companies_derived", 0)
+                   if "companies_derived" in case else None)
+        firms = f" · 기업 {d_firms:+d}" if d_firms else ""
         print(f"  {label:<22} {name:<10} risk {d_risk:+d} · recent {d_recent:+d}"
-              f" · overlap {d_lap:+d}{flag}")
+              f" · overlap {d_lap:+d}{firms}{flag}")
         gone = {a["event_id"] for a in o["selected"]} - {a["event_id"] for a in case["selected"]}
         came = {a["event_id"] for a in case["selected"]} - {a["event_id"] for a in o["selected"]}
         for s in case["selected"]:

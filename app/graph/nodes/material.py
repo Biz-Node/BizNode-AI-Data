@@ -28,8 +28,10 @@ from app.tools import graph_tools
 from app.graph import budget
 from app.services.retrieve_service import (RetrieveService, _anchor_companies,
                                            _anchor_names_for, _companies_from,
+                                           _companies_of_events, _default_embed,
                                            _hits_reflect_the_anchor,
-                                           _match_type_of, _with_anchor_backstop)
+                                           _match_type_of, _with_anchor_backstop,
+                                           is_anchorless, select_global_events)
 from search.dto.search_request import SearchRequest
 
 log = trace_logger(__name__)
@@ -71,12 +73,12 @@ def search(state: AskState) -> AskState:
       이 노드가 발급하면 자기 로그 4줄만 id 를 달고 **나머지 9줄이 `-` 로**
       찍혔다. 발급은 진짜 요청 경계인 `run_ask()` 가 한다.
 
-    ★`match_type` 도 **여기서 정한다.** 저건 `result.mode` 만 보고 정해지는
-      값이라(`_match_type_of`) 검색이 끝난 순간 확정된다. 전에는
-      `fetch_evidence` 가 정했는데, 그 노드는 근거를 조회·조립하는 자리라
-      「검색이 어느 경로로 답했나」를 거기서 되짚을 이유가 없었다 — 재료를
-      다 모을 때까지 미뤄 둔 것뿐이다. 값을 만드는 노드와 값이 정해지는
-      시점을 맞춘다.
+    ★`match_type` 은 **여기서 안 정한다**(2026-09-02 개정). 한동안 여기 있었고
+      그 근거는 「`result.mode` 만 보고 정해지는 값이라 검색이 끝난 순간
+      확정된다」였는데, **그 전제가 깨졌다** — 앵커가 없으면 `EXACT` 가 아니다
+      (F1: 앵커를 하나도 못 잡았는데 `EXACT` 로 나갔다). 이제 `decision` 이
+      있어야 정해지므로 판정이 나는 `resolve_anchor` 로 옮겼다. 「값을 만드는
+      노드와 값이 정해지는 시점을 맞춘다」는 원칙은 그대로다.
     """
     request = state["request"]
     query, result = _svc()._orchestrator.search(SearchRequest(
@@ -85,8 +87,7 @@ def search(state: AskState) -> AskState:
         # 인용이 목적이라 항상 켠다.
         include_evidence=True,
     ))
-    return {"query": query, "result": result,
-            "match_type": _match_type_of(result)}
+    return {"query": query, "result": result}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -115,7 +116,11 @@ def resolve_anchor(state: AskState) -> AskState:
         context_names)
     if decision.source is AnchorSource.UNRESOLVED:
         log.info("ask.unresolved named=%r — 재료를 만들지 않는다", decision.named)
-    return {"decision": decision}
+    # ★`match_type` 이 **여기서 확정된다**(2026-09-02). 검색 모드만으로는 안
+    #   정해진다 — 앵커가 없으면 `EXACT` 가 아니다(F1). `search` 노드에 있던
+    #   것을 판정이 나는 이 자리로 옮겼다.
+    return {"decision": decision,
+            "match_type": _match_type_of(state["result"], decision)}
 
 
 def is_resolved(state: AskState) -> str:
@@ -162,26 +167,38 @@ def plan_material(state: AskState) -> AskState:
     request, query, result = state["request"], state["query"], state["result"]
     decision = state["decision"]
 
-    use_hits = _hits_reflect_the_anchor(decision, query)
-    if use_hits:
-        companies = _companies_from(result)
+    event_pairs: list[tuple[str, str]] = []
+    if is_anchorless(decision):
+        # ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3 · 2026-09-02).
+        #   `/retrieve` 와 **같은 함수**를 부르고, 고른 결과를 `event_pairs` 로
+        #   실어 도구가 다시 고르지 않게 한다. 전에는 히트에서 Company 만 추려
+        #   재료 기업을 정했는데 그 5곳이 사실상 임의였다(F1) — 히트에 실려 오던
+        #   Event 노드는 `_companies_from()` 이 통째로 버렸다(F4).
+        events = select_global_events(request.question, embed=_default_embed)
+        companies = _companies_of_events(events)
+        event_pairs = [(e.event_id, e.company.key) for e in events if e.company]
+        log.info("material.anchorless events=%d companies=%d",
+                 len(event_pairs), len(companies))
     else:
-        # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-        companies = _anchor_companies(decision)
-        log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
-                 [c.key for c in companies], len(result.hits))
+        use_hits = _hits_reflect_the_anchor(decision, query)
+        if use_hits:
+            companies = _companies_from(result)
+        else:
+            # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
+            companies = _anchor_companies(decision)
+            log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
+                     [c.key for c in companies], len(result.hits))
 
-    # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
-    #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이고, `anchorless` 는
-    #   앵커가 없어 역시 무동작이다 — 그쪽은 히트가 유일한 재료다.
-    companies = _with_anchor_backstop(companies, decision)
+        # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
+        #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이다.
+        companies = _with_anchor_backstop(companies, decision)
 
     anchor_names = _anchor_names_for(query, decision, companies)
     intent = evidence_selector.intent_of(request.question, anchor_names)
 
     # ★탐색 예산을 **여기서 연다.** Agent 가 도구를 부르기 전 마지막 결정론
     #   노드라, 카운터가 0 인 시점이 여기 하나로 고정된다.
-    return {"companies": companies,
+    return {"companies": companies, "event_pairs": event_pairs,
             "anchor_names": anchor_names, "intent": intent,
             **budget.initial()}
 

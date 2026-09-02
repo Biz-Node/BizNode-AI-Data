@@ -60,6 +60,23 @@ class ToolContext:
     #     넘기던 형태를 그대로 쓴다. `relation_selector._direction_matches` 는
     #     둘 다 받지만, 형태를 바꾸면 그게 대조에서 티가 안 나는 차이가 된다.
     direction: Optional[str] = None
+    # ★**앵커 없는 질문에서 서버가 이미 고른 사건**(2026-09-02).
+    #   `(event_id, company_key)` 쌍의 순서 있는 목록이고, 비어 있으면 앵커
+    #   경로다. `get_events` 는 이게 차 있으면 **고르지 않고 조회만 한다.**
+    #
+    #   ★왜 도구가 다시 고르지 않는가. 앵커 없는 경로에서 `companies` 는 이미
+    #     **선택된 사건에서 역산한 것**이라, 그 기업들로 기업별 조회를 다시 돌리면
+    #     기업당 10건 × 최대 10곳 = 100건이 나와 `/retrieve` 의 전역 10건과
+    #     **재료가 갈린다**(`ask_graph_parity` 가 잡는 바로 그 차이). 한 번 고른
+    #     것을 나눠 쓰면 갈릴 자리가 없다.
+    #
+    #   ★왜 `event_id` 만으로는 안 되는가. 사건 하나에 기업이 둘 이상 붙은 것이
+    #     5.7%(실측)이고, 그때 `role`·`occurred_at`·`evidence_ids` 가 기업마다
+    #     다르다. 앵커 없는 질문에서는 **누구에게 난 일인가**가 답의 일부다.
+    #
+    #   ★인자가 아니라 여기 있는 이유는 `intent`·`edge_types` 와 같다 — 재료
+    #     범위를 부르는 쪽(=LLM)이 정하게 하면 방어가 장식이 된다(4원칙 ①).
+    event_pairs: tuple[tuple[str, str], ...] = ()
 
 
 _SCOPE: ContextVar[Optional[ToolContext]] = ContextVar("tool_scope", default=None)
@@ -71,7 +88,8 @@ def anchor_scope(keys: Iterable[str], *, workspace_keys: Iterable[str] = (),
                  anchor_names: Iterable[str] = (),
                  intent: str = "",
                  edge_types: Iterable[str] = (),
-                 direction: Optional[str] = None):
+                 direction: Optional[str] = None,
+                 event_pairs: Iterable[tuple[str, str]] = ()):
     """이 블록 안에서 도구가 만질 수 있는 key 와 랭킹 문맥을 정한다."""
     token = _SCOPE.set(ToolContext(
         allowed=frozenset(k for k in keys if k),
@@ -80,7 +98,8 @@ def anchor_scope(keys: Iterable[str], *, workspace_keys: Iterable[str] = (),
         anchor_names=tuple(n for n in anchor_names if n),
         intent=intent,
         edge_types=tuple(t for t in (edge_types or ()) if t),
-        direction=direction))
+        direction=direction,
+        event_pairs=tuple((e, c) for e, c in (event_pairs or ()) if e and c)))
     try:
         yield
     finally:

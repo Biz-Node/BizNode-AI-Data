@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from app.core import observe
+from app.core import observe, querylog
 from app.core.trace import trace_logger
 from app.services import (company_service, evidence_selector, relation_selector,
                           relation_service)
@@ -36,8 +36,8 @@ from app.services.retrieve_service import _ring_of
 from app.tools import scope
 from app.tools.dto import (CAUTION_NEWS_DEVELOPS, DIRECTION_NOTE, FRESHNESS_WEIGHT,
                            ROLE_NOTE, SOURCE_NOTE, STATED_NOTE,
-                           SYMMETRIC_EDGE_TYPES, EventDTO, EventPhaseDTO,
-                           PropagationDTO, RelationDTO)
+                           SYMMETRIC_EDGE_TYPES, EventCompanyDTO, EventDTO,
+                           EventPhaseDTO, PropagationDTO, RelationDTO)
 from app.tools.errors import KeyNotResolved
 
 log = trace_logger(__name__)
@@ -229,6 +229,8 @@ def _event_dto(row: dict[str, Any]) -> EventDTO:
         #   0 이나 "neutral" 로 메우면 **모르는 것을 아는 척**하는 것이 된다.
         role=role, role_note=ROLE_NOTE[role], sign=row.get("sign"),
         timeline=phases, timeline_summary=_timeline_summary(phases),
+        # ★전역 경로에서만 찬다 — 기업 기준 조회는 `None` 을 싣는다.
+        company=(EventCompanyDTO(**row["company"]) if row.get("company") else None),
     )
 
 
@@ -255,6 +257,21 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
       「관련 없어서」가 아니라 「다른 기업이라서」 버린 것이다.
     """
     ctx = scope.context()
+    # ★**앵커 없는 질문에서는 고르지 않고 조회만 한다**(2026-09-02).
+    #   서버가 `plan_material` 에서 전역 사건 검색을 이미 돌렸고, 그 결과가
+    #   `scope.event_pairs` 로 와 있다. 여기서 기업별로 다시 고르면 기업당
+    #   10건 × 최대 10곳이 되어 `/retrieve` 의 전역 10건과 **재료가 갈린다** —
+    #   앵커 없는 경로의 `companies` 는 애초에 그 사건에서 역산된 것이다.
+    #
+    #   ★`keys` 를 보지 않는다. Agent 가 그 중 일부만 넘겨도 재료는 서버가 정한
+    #     목록 그대로다 — 범위를 부르는 쪽이 좁히는 것도 넓히는 것과 같은
+    #     종류의 재량이다(4원칙 ①). 다만 범위 밖 key 는 여전히 거부한다.
+    if ctx is not None and ctx.event_pairs:
+        scope.check(keys)
+        rows = company_service.events_by_pairs(ctx.event_pairs)
+        log.info("tools.events anchorless 쌍=%d 조회=%d", len(ctx.event_pairs), len(rows))
+        return [_event_dto(r) for r in rows]
+
     norms = _resolve(keys)
     if not norms:
         return []
@@ -313,6 +330,12 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     if suspect_dropped:
         log.info("tools.events eventness_suspect 제외=%d kept=%d",
                  suspect_dropped, len(out))
+    # ★Phase 6 의 재료. 앵커 없는 경로는 `select_global_events` 가 이미 남겼으므로
+    #   여기는 **기업별 경로만** 남는다 — 한 요청이 두 줄로 세어지지 않는다.
+    querylog.record(question=intent, intent=intent, matched=matched,
+                    selected_types=[r.get("event_type") or "기타" for r in out],
+                    anchor_source="anchored", n_events=len(out),
+                    n_companies=len(norms), path="per_company")
     return [_event_dto(r) for r in out]
 
 

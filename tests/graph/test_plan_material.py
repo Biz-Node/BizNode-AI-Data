@@ -21,8 +21,12 @@ from datetime import date
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from app.api.schemas import Anchor, AnchorSource
+from app.graph.nodes import material as material_module
 from app.graph.nodes.material import plan_material
+from app.services import retrieve_service as rs_module
 from app.services.query_understanding import AnchorDecision
 from pipeline.normalizer.resolver import Resolution
 from search.dto.search_hit import SearchHit
@@ -51,6 +55,29 @@ def _result(hits=()):
 def _hit(entity_id, name):
     return SearchHit(entity_id=entity_id, entity_type=EntityType.COMPANY, name=name,
                      source_score=1.0, sources=["neo4j"])
+
+
+def _global_row(event_id, name, ckey, cname, *, event_type="사업확장"):
+    """`company_service.global_events()` 가 주는 행 모양 — (기업, 사건) 한 쌍."""
+    return {"event_id": event_id, "name": name, "event_type": event_type,
+            "is_risk": False, "eventness_suspect": False, "sign": None,
+            "role": "subject", "occurred_at": "2026-06-01", "article_count": 1,
+            "timeline": [], "evidence_ids": [],
+            "company": {"key": ckey, "name": cname}}
+
+
+@pytest.fixture
+def stub_global_events(monkeypatch):
+    """전역 사건 후보를 통제한다. **DB 경계에서** 막아 선택 로직은 진짜로 돈다.
+
+    ★임베더도 끈다 — 켜 두면 단위 테스트가 OpenAI 를 부르고 유사도 때문에
+      순서가 흔들려 재현이 안 된다(`test_retrieve_service` 와 같은 이유).
+    """
+    company = MagicMock()
+    company.global_events.return_value = []
+    monkeypatch.setattr(rs_module, "company_service", company)
+    monkeypatch.setattr(material_module, "_default_embed", None)
+    return company
 
 
 def _state(request_, *, resolved=(), hits=(), decision=None):
@@ -94,14 +121,17 @@ def test_anchor_names_fall_back_to_decision_anchors(request_):
     assert got["anchor_names"] == ["삼성전자"]
 
 
-def test_anchor_names_fall_back_to_material_companies_when_anchorless(request_):
+def test_anchor_names_fall_back_to_material_companies_when_anchorless(
+        request_, stub_global_events):
     """★**셋째 갈래**(최종 설계 §17-3 이 열었다 · `_anchor_names_for`).
 
     `anchorless` 는 `resolved_entities` 도 `decision.anchors` 도 비어 있다.
     거기서 멈추면 §5-23 이 고친 퇴행이 그대로 돌아온다 — 라벨에 든 기업명이
     유사도 상위를 먹는다. 전에는 워크스페이스 앵커가 그 이름을 댔고, 지금은
-    **히트가 준 재료 기업**이 댄다.
+    **선택된 전역 사건에서 역산한 재료 기업**이 댄다(2026-09-02).
     """
+    stub_global_events.global_events.return_value = [
+        _global_row("e1", "EUV 장비 투자", "00164779", "SK하이닉스")]
     decision = AnchorDecision(source=AnchorSource.ANCHORLESS)
 
     got = plan_material(_state(request_, resolved=[], decision=decision,
@@ -180,22 +210,35 @@ def test_context_anchor_never_trusts_hits(request_):
     assert "00999999" not in [c.key for c in got["companies"]], "히트를 쓰면 안 된다"
 
 
-def test_anchorless_takes_its_material_from_the_hits(request_):
-    """★**앵커가 없으면 히트가 재료다**(최종 설계 §8 · `_hits_reflect_the_anchor`).
+def test_anchorless_takes_its_material_from_global_events(request_, stub_global_events):
+    """★**앵커가 없으면 전역 사건이 재료다**(최종 설계 §5 시나리오 3 · §17-2).
 
-    전에는 이 상태가 `workspace` 였고 담아 둔 기업이 재료가 됐다. 지금은 앵커가
-    없으므로 Global Search 가 찾아 준 것이 유일한 재료다 — 워크스페이스는
-    그 결과의 **순서**에만 관여한다.
+    세 번 옮겨 온 자리다. `workspace` 시절에는 담아 둔 기업이 재료였고, §17-3 이
+    그걸 폐기한 뒤로는 **검색 히트**가 재료였다. 그런데 앵커 없는 질의의 히트는
+    관계 freshness 순으로 채운 것이라 기업이 사실상 임의로 정해졌다 —
+    「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다(F1).
+    히트에 실려 오던 Event 노드는 `_companies_from()` 이 통째로 버려, **살아 있는
+    유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
+
+    ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3). 그래서 아래 두 가지가
+      동시에 성립해야 한다 — 히트에만 있던 기업은 안 오고, 사건이 지목한 기업은
+      온다.
     """
+    stub_global_events.global_events.return_value = [
+        _global_row("e1", "EUV 장비 투자", "00164779", "SK하이닉스")]
     decision = AnchorDecision(source=AnchorSource.ANCHORLESS,
                               workspace_names={_SAMSUNG: "삼성전자"})
 
     got = plan_material(_state(request_, resolved=[], decision=decision,
                                hits=[_hit("00999999", "아무기업")]))
 
-    assert [c.key for c in got["companies"]] == ["00999999"]
+    assert [c.key for c in got["companies"]] == ["00164779"]
+    assert "00999999" not in [c.key for c in got["companies"]], \
+        "히트에만 있는 기업이 재료가 되면 안 된다 — 사건이 기업을 정한다"
     assert _SAMSUNG not in [c.key for c in got["companies"]], \
         "워크스페이스 기업이 재료로 승격되면 안 된다"
+    # ★도구가 다시 고르지 않도록 **고른 쌍**을 실어 보낸다.
+    assert got["event_pairs"] == [("e1", "00164779")]
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -427,6 +427,16 @@ class Event(BaseModel):
         description="**이 기업이 이 사건에 엮인 근거만.** 같은 사건에 붙은 다른 "
                     "기업의 근거는 들어 있지 않다",
         examples=[["ev_1fdde758922d6de6"]])
+    # ★**앵커 없는 질문에서만 찬다**(2026-09-02). 「최근 주요 투자 이벤트가
+    #   뭐야?」처럼 대상을 안 지정한 질문은 사건마다 기업이 다르다 — 안 실으면
+    #   「누구에게 난 일인지 모르는 사건」이 재료로 나간다.
+    #
+    #   앵커가 있는 질문에서는 `companies` 가 이미 그 기업을 말하므로 `None` 이다.
+    #   **비파괴다** — 기존 응답의 모양이 바뀌지 않는다.
+    company: Optional[RelationEndpoint] = Field(
+        None,
+        description="★**앵커 없는 질문에서만 찬다.** 이 사건이 누구에게 난 일인가. "
+                    "대상을 지정한 질문에서는 `companies` 가 그 답이라 `None` 이다")
 
 
 class NewsItem(BaseModel):

@@ -286,3 +286,87 @@ def test_norm_names_are_unique_in_the_graph():
                        WITH c.norm_name AS n, count(*) AS c WHERE c > 1
                        RETURN count(*) AS dup""").single()
     assert row["dup"] == 0, "norm_name 이 겹친다 — _resolve() 의 전제가 깨졌다"
+
+
+# ══════════════════════════════════════════════════════════════════
+#  전역 사건 — 앵커 없는 질문 (2026-09-02)
+# ══════════════════════════════════════════════════════════════════
+#
+# ★앵커가 없으면 도구는 **고르지 않고 조회만 한다.** 서버가 `plan_material` 에서
+#   전역 사건 검색을 이미 돌렸고, 그 결과가 `scope.event_pairs` 로 와 있다.
+#
+#   여기서 기업별로 다시 고르면 기업당 10건 × 최대 10곳 = 100건이 나와
+#   `/retrieve` 의 전역 10건과 **재료가 갈린다** — 앵커 없는 경로의 `companies`
+#   자체가 그 사건에서 역산된 것이기 때문이다.
+
+def _global(event_id, ckey, cname, **over):
+    row = _event(event_id=event_id, company={"key": ckey, "name": cname})
+    row.update(over)
+    return row
+
+
+def test_anchorless_events_come_from_the_scope_not_from_a_new_selection(monkeypatch):
+    """★쌍 목록이 차 있으면 **그것이 재료다.** 기업별 조회는 부르지 않는다."""
+    called = []
+    monkeypatch.setattr(gt.company_service, "events_by_pairs",
+                        lambda pairs: [_global("evt_a", _SAMSUNG, "삼성전자"),
+                                       _global("evt_b", _HYNIX, "SK하이닉스")])
+    monkeypatch.setattr(gt.company_service, "events_of",
+                        lambda key: called.append(key) or [])
+
+    with scope.anchor_scope([_SAMSUNG, _HYNIX],
+                            event_pairs=[("evt_a", _SAMSUNG), ("evt_b", _HYNIX)]):
+        got = gt.get_events([_SAMSUNG, _HYNIX], "최근 주요 투자 이벤트")
+
+    assert [e.event_id for e in got] == ["evt_a", "evt_b"]
+    assert called == [], "기업별 조회를 부르면 두 입구의 재료가 갈린다"
+
+
+def test_the_company_rides_along_when_there_is_no_anchor(monkeypatch):
+    """★사건마다 기업이 다르다 — 안 실으면 「누구에게 난 일인지 모르는 사건」이 된다."""
+    monkeypatch.setattr(gt.company_service, "events_by_pairs",
+                        lambda pairs: [_global("evt_a", _HYNIX, "SK하이닉스")])
+
+    with scope.anchor_scope([_HYNIX], event_pairs=[("evt_a", _HYNIX)]):
+        got = gt.get_events([_HYNIX], "최근 사고")
+
+    assert got[0].company is not None
+    assert (got[0].company.key, got[0].company.name) == (_HYNIX, "SK하이닉스")
+
+
+def test_the_anchored_path_leaves_the_company_empty(stub):
+    """★앵커가 있으면 서버가 정한 재료 기업이 하나뿐이라 `company` 는 비운다.
+    거기에 값을 채우면 **없는 구분을 만드는 것**이다."""
+    stub(events=[_event(event_id="evt_1")])
+
+    with scope.anchor_scope([_SAMSUNG]):
+        got = gt.get_events([_SAMSUNG], "압수수색")
+
+    assert got[0].company is None
+
+
+def test_narrowing_the_keys_does_not_narrow_the_material(monkeypatch):
+    """★Agent 가 key 를 **덜** 넘겨도 재료는 서버가 정한 그대로다.
+
+    범위를 부르는 쪽이 좁히는 것도 넓히는 것과 같은 종류의 재량이다(4원칙 ①).
+    앵커 없는 경로에서 재료를 정한 것은 사건 선택이지 `keys` 가 아니다.
+    """
+    monkeypatch.setattr(gt.company_service, "events_by_pairs",
+                        lambda pairs: [_global("evt_a", _SAMSUNG, "삼성전자"),
+                                       _global("evt_b", _HYNIX, "SK하이닉스")])
+    pairs = [("evt_a", _SAMSUNG), ("evt_b", _HYNIX)]
+
+    with scope.anchor_scope([_SAMSUNG, _HYNIX], event_pairs=pairs):
+        both = gt.get_events([_SAMSUNG, _HYNIX], "q")
+        one = gt.get_events([_SAMSUNG], "q")
+
+    assert [e.event_id for e in both] == [e.event_id for e in one]
+
+
+def test_the_scope_is_still_enforced_without_an_anchor(monkeypatch):
+    """★재료를 서버가 정한다고 범위 검사가 풀리는 것은 아니다."""
+    monkeypatch.setattr(gt.company_service, "events_by_pairs", lambda pairs: [])
+
+    with scope.anchor_scope([_SAMSUNG], event_pairs=[("evt_a", _SAMSUNG)]):
+        with pytest.raises(OutOfScopeKey):
+            gt.get_events(["00999999"], "q")
