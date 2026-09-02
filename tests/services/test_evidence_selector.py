@@ -105,6 +105,68 @@ def test_unmatched_wording_yields_no_rule_signal():
     assert sel.matched_event_types("요즘 어때?") == frozenset()
 
 
+# ── 형태소 경계 (2026-09-02) ────────────────────────────────────────────
+#
+# ★**오탐은 누락보다 훨씬 나쁘다.** 규칙 티어는 `select()` 의 최상위 정렬 키라
+#   틀린 type 이 켜지면 상한 10 을 다 먹고 정답이 통째로 밀려난다 — 임베딩이
+#   그 아래에 깔려 구제하지 못한다. 실측: 「공장에서 인명 피해 난 곳 있어?」가
+#   `사업확장` 을 켜서 상위 10건이 전부 증설 사건이 됐다(적중 0/10).
+#
+#   경계 없는 부분일치로 되돌리면 아래가 전부 깨진다.
+
+def test_a_keyword_inside_a_longer_word_does_not_fire():
+    """★「사고팔다」의 `사고` 는 사고재해가 아니다."""
+    assert sel.matched_event_types("회사를 사고판 사례 있어?") == frozenset()
+
+
+def test_a_keyword_followed_by_a_particle_still_fires():
+    """★조사가 붙은 것은 **낱말의 끝**이다 — 여기까지 막으면 한국어를 못 읽는다."""
+    assert "사고재해" in sel.matched_event_types("사고가 났다")
+    assert "사고재해" in sel.matched_event_types("사고를 냈다")
+    assert "자본거래" in sel.matched_event_types("보안업체 인수한 곳 있어?")
+
+
+def test_the_head_of_a_compound_still_fires():
+    """★**앞은 보지 않는다.** 한국어 복합명사는 뒤가 머리다.
+
+        설비 + 투자   투자가 머리다        ← 정당한 질의
+        투자 + 증권   투자는 수식일 뿐이다   ← 다른 낱말
+
+    앞뒤를 다 막아 봤더니 이 질의가 죽어 정답이 18 → 17 로 떨어졌다(실측).
+    """
+    assert "사업확장" in sel.matched_event_types("최근 대규모 설비투자 사례 알려줘")
+
+
+def test_a_high_precision_keyword_is_not_guarded():
+    """★정밀도가 높은 낱말에는 경계를 걸지 않는다.
+
+    한때 임금(정밀도 100%)·품질(100%)·지분(92%)까지 걸었다가 「임금협약」·
+    「임금교섭」이 죽었다. 목록의 근거는 정밀도이지 낱말의 길이가 아니다.
+    """
+    assert "노무" in sel.matched_event_types("임금협약 잠정합의안 가결")
+
+
+def test_one_clean_match_is_enough():
+    """★`search` 가 아니라 `finditer` 인 이유 — 첫 매치가 막혀도 뒤를 마저 본다.
+
+    「투자증권」의 `투자` 는 막히고 「설비투자한」의 `투자` 는 통과한다.
+    """
+    assert "사업확장" in sel.matched_event_types("투자증권이 설비투자한 곳")
+
+
+def test_the_measured_probes_stay_shut():
+    """★실측 probe(2026-09-02) — 경계 검사 전에는 **12건 전부** 오검출이었다."""
+    for question in ("회사를 사고판 사례 있어?", "매출채권 회수 문제 있는 곳?",
+                     "투자증권 계열사 뭐 있어?", "기술보증기금 지원받은 곳?",
+                     "안전상비의약품 판매 기업?", "조사료 사업하는 기업?",
+                     "주식회사 형태로 바꾼 곳?", "노사연 콘서트 후원 기업?"):
+        assert sel.matched_event_types(question) == frozenset(), question
+
+    # 나머지 둘은 **정당한 쪽만** 남아야 한다 — 통째로 끄는 것이 목적이 아니다.
+    assert sel.matched_event_types("보안업체 인수한 곳 있어?") == frozenset({"자본거래"})
+    assert sel.matched_event_types("연구소 신설한 회사?") == frozenset({"사업확장"})
+
+
 # ── 위험 축 (event_type 과 별개) ─────────────────────────────────────────
 
 def test_risk_wording_is_detected():
