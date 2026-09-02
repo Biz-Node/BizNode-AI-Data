@@ -167,6 +167,66 @@ def test_the_measured_probes_stay_shut():
     assert sel.matched_event_types("연구소 신설한 회사?") == frozenset({"사업확장"})
 
 
+# ── 어휘 3낱말 (2026-09-02) ──────────────────────────────────────────────
+#
+# 경계 수정으로 오탐은 껐지만 **누락 둘**이 남았다. 실측으로 고른 것은 세 낱말이고,
+# 함께 검토했던 나머지 넷(`피해`·`추락`·`중상`·`법적`)은 **일부러 뺐다** — 아래
+# 테스트들이 그 「빼기로 한 결정」까지 같이 고정한다. 다시 넣으면 깨진다.
+
+def test_a_casualty_question_fires_the_accident_type():
+    """★「인명」이 없으면 `공장` 때문에 사업확장만 켜져 적중이 0/10 이었다."""
+    assert "사고재해" in sel.matched_event_types("공장에서 인명 피해 난 곳 있어?")
+
+
+def test_the_compound_form_fires_too():
+    """★`인명피해` 가 `인명` **앞에** 있어야 한다 — 교대는 왼쪽부터 시도한다.
+
+    순서가 뒤집히면 붙여 쓴 「인명피해」가 `인명` 으로 걸리고, `인명` 은 뒤 경계를
+    거는 낱말이라 뒤따르는 「피해」에 막혀 **통째로 꺼진다.**
+    """
+    assert "사고재해" in sel.matched_event_types("공장에서 인명피해 난 곳 있어?")
+
+
+def test_a_rescue_product_is_not_an_accident():
+    """★`인명` 을 경계 대상에 넣은 이유 — 「인명구조」는 사건이 아니다."""
+    assert "사고재해" not in sel.matched_event_types("인명구조 장비 만드는 회사?")
+
+
+def test_a_dispute_question_fires_the_litigation_type():
+    assert "분쟁소송" in sel.matched_event_types("요즘 법적 다툼 있는 곳?")
+
+
+def test_the_rejected_words_stay_out():
+    """★검토했지만 **넣지 않기로** 한 넷. 근거는 전부 실측이다.
+
+        법적  「합법적」·「불법적」에 걸린다. 이건 **앞** 충돌이라 뒤 경계로 못 막고,
+              앞 경계는 복합명사를 죽여 이미 금지했다
+        추락  「주가 추락」은 실적이다 — 형태소가 아니라 의미 충돌이라 못 막는다
+        피해  「해킹 피해」·「유출 피해」는 정보유출이다 (사건명 4건 중 2건이 정보유출)
+        중상  「중상모략」에 걸린다. 그러면서 33건 세트에 기여가 **0** 이었다
+
+    셋(`법적`·`추락`·`피해`)이 고치려던 질의는 `인명`·`다툼` 이 이미 고친다.
+    """
+    assert "분쟁소송" not in sel.matched_event_types("합법적으로 처리한 곳 있어?")
+    assert "분쟁소송" not in sel.matched_event_types("불법적 거래 적발된 기업?")
+    assert "사고재해" not in sel.matched_event_types("주가 추락한 기업 알려줘")
+    assert "사고재해" not in sel.matched_event_types("최근 해킹 피해 기업?")
+    assert "사고재해" not in sel.matched_event_types("중상모략 논란 있는 곳?")
+
+
+def test_words_absent_from_event_names_are_not_dead():
+    """★`제소`·`출자`·`조달`·`불량` 은 **사건명에 0건**이지만 지우면 안 된다.
+
+    이 표는 질의에도 걸린다. 사건명만 보고 「죽었다」고 판정하면 방향 하나를
+    통째로 못 본 것이다 — 지워 봤더니 아래 넷이 전부 `∅` 가 되고, 그 대가로
+    얻는 것은 리콜·오탐률·정방향 어디에도 없었다(실측).
+    """
+    assert "분쟁소송" in sel.matched_event_types("최근 제소당한 기업 알려줘")
+    assert "자본거래" in sel.matched_event_types("최근 출자한 곳 있어?")
+    assert "공급망" in sel.matched_event_types("부품 조달 문제 있는 곳?")
+    assert "품질" in sel.matched_event_types("불량률 높은 제품 있어?")
+
+
 # ── 위험 축 (event_type 과 별개) ─────────────────────────────────────────
 
 def test_risk_wording_is_detected():
