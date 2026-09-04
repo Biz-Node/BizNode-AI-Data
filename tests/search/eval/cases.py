@@ -228,6 +228,13 @@ CASES: tuple[EvalCase, ...] = (
         expected_edge_types=("OWNS_STAKE_IN",),
         expected_sources=_NEO,
         min_hits=5,
+        # ★관측 창을 넓힌다(2026-09-04). 이 케이스는 **구조**를 보는 것이지 순위를
+        #   재는 것이 아닌데, 기본 10 으로는 방향 구성이 안 보인다 — 경로 A 재적재로
+        #   삼성전자 `OWNS_STAKE_IN` 이 180건(outgoing 162 · incoming 18)이 되면서
+        #   상위 10 이 전부 outgoing 이 됐다. 후보에는 양방향이 그대로 있다
+        #   (`test_graph_searcher.test_investment_query_direction_none_returns_both_sides`).
+        #   실측: top_k 20 → out 19·in 1 · **30 → out 20·in 7** · 50 → out 40·in 7.
+        top_k=30,
     ),
     EvalCase(
         id="rel-sues-incoming",

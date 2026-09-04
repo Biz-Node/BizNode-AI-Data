@@ -16,12 +16,14 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
+from app.core.database import neo4j_session
 from app.services.graph_service import Relation
 from pipeline.freshness import Freshness
 from pipeline.normalizer.resolver import Resolution
 from search.model.enums import Direction, EntityType
 from search.service import graph_searcher as gs_module
 from search.service.graph_searcher import (
+    _HARD_LIMIT,
     _WORKSPACE_FETCH_CEILING,
     GraphSearcher,
     _fetch_limit,
@@ -407,21 +409,36 @@ def test_investment_query_direction_none_returns_both_sides(entity_resolver, que
     assert directions == {"incoming", "outgoing"}
 
 
-def test_investment_query_reports_person_counterparty_correctly(entity_resolver, graph_searcher):
-    """OWNS_STAKE_IN에는 Person(이재용) 상대가 실제로 존재한다 —
-    Task6 이전엔 COMPANY로 오분류됐던 케이스. 이제 PERSON으로 정확히 표현된다.
+def test_person_counterparty_is_typed_as_person(entity_resolver, graph_searcher):
+    """지분 상대가 Person 이면 `EntityType.PERSON` 으로 나온다 — Task6 이전엔
+    COMPANY 로 오분류되던 자리다.
 
-    ★top_k를 걸지 않는다. 전에는 top_k=20이었는데 2026-08-09 실측 당시엔 이재용이
-      상위 20 안에 들었다. 이후 OWNS_STAKE_IN 관계가 늘면서(스킬드AI·미스트랄AI·
-      주타코어·그록·앤트로픽 등) 30/49위로 밀려 테스트가 깨졌다. 이 테스트가
-      확인하려는 건 **순위가 아니라 상대 엔티티의 타입 분류**이므로, 순위에
-      의존하지 않게 전체(하드캡 100)를 받는다.
+    ★**순위에 기대지 않는다.** 이 시험이 보는 것은 분류인데, 앵커의 관계 수가
+      늘면 상한이 먼저 걸려 **조용히 순위 시험으로 바뀐다.** 실제로 두 번 깨졌다 —
+      2026-08-09 에는 `top_k=20` 밖으로(전체를 받게 고쳤다), 2026-09-04 에는 경로 A
+      재적재로 삼성전자 `OWNS_STAKE_IN` 이 180건이 되며 **하드캡 100 밖으로** 밀렸다
+      (그때도 관계 자체는 그래프에 그대로 있었다).
+
+    ★그래서 ① 상한이 **걸리지 않는 규모**의 앵커를 쓰고, ② 걸리지 않았다는 것을
+      함께 못 박고, ③ 특정 인물 이름이 아니라 **그래프 라벨과의 일치**를 본다.
+      이름을 박으면 그 사람이 병합·개명될 때 분류와 무관하게 깨진다.
     """
-    resolution = entity_resolver.resolve("삼성전자")
+    resolution = entity_resolver.resolve("엔젤로보틱스")
     hits = graph_searcher.search([resolution], ["OWNS_STAKE_IN"], None)
-    person_hits = [h for h in hits if h.name == "이재용"]
-    assert len(person_hits) == 1
-    assert person_hits[0].entity_type == EntityType.PERSON
+
+    assert 0 < len(hits) < _HARD_LIMIT, "상한이 걸리면 분류가 아니라 순위를 재게 된다"
+
+    with neo4j_session() as session:
+        label_of = {r["n"]: r["l"] for r in session.run(
+            "MATCH (x)-[:OWNS_STAKE_IN]-(c:Company {corp_code: $cc}) "
+            "RETURN x.name AS n, head(labels(x)) AS l", cc=resolution.corp_code)}
+
+    assert "Person" in label_of.values(), "지분 상대에 Person 이 없으면 분류를 못 본다"
+    for hit in hits:
+        expected = (EntityType.PERSON if label_of.get(hit.name) == "Person"
+                    else EntityType.COMPANY)
+        assert hit.entity_type == expected, (
+            f"{hit.name}: 그래프 라벨 {label_of.get(hit.name)} 인데 {hit.entity_type}")
 
 
 def test_lawsuit_query_without_resolved_entity(entity_resolver, query_router, graph_searcher):
