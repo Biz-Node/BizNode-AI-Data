@@ -1,33 +1,32 @@
-"""답변을 쓰는 노드 여섯 — `AnswerService` 의 조립 함수에 위임한다.
+"""답변을 쓰는 노드 여섯.
 
-★**프롬프트를 옮기지 않았다.** `_SYSTEM_PROMPT` 는 `answer_service` 에서
-  import 한다. 300줄짜리라 옮기면 diff 가 프롬프트 전문으로 덮여, 정작 이번에
-  바뀐 것(실행 담당)이 안 보인다. 문구가 두 곳에 생기면 갈릴 위험도 진짜다.
+★프롬프트와 스키마는 **`app/llm/` 이 갖는다.** 이 파일은 노드 배선과 상태
+  전이만 담는다 — 문구가 두 곳에 생기면 갈린다.
 
-★LLM 호출만 어댑터로 바뀐다. `pipeline.llm.ask_json()` → `LLMAdapter.structured()`
-  인데, **실패 규약이 같다** — 예외를 던지지 않고 `fallback | {"failed": True}` 를
-  돌려준다. 그래서 아래 `verify_sources` 는 예전 코드 그대로 `failed` 만 본다.
+★LLM 호출은 어댑터를 지난다. `LLMAdapter.structured()` 는 예외를 던지지 않고
+  `fallback | {"failed": True}` 를 돌려주므로 아래 `verify_sources` 는
+  `failed` 만 본다.
 """
 
 from __future__ import annotations
 
-from app.api.schemas import AskResponse
+from typing import Optional
+
+from app.api.schemas import AnchorSource, AskResponse
 from app.core import observe
 from app.core.trace import trace_logger
 from app.graph.state import AskState
 from app.llm.adapter import LLMAdapter, LangChainAdapter
-from app.llm.schemas import AskAnswer
+from app.llm.prompt import SAFE_MESSAGE, STRIP_UNLINKED_CLAIMS, SYSTEM_PROMPT
+from app.llm.schemas import SAFE_FALLBACK, AskAnswer
 from app.services import claim_check, evidence_selector
 from app.graph import prompt
-from app.services.answer_service import (_SAFE_FALLBACK, _SAFE_MESSAGE,
-                                         _STRIP_UNLINKED_CLAIMS, _SYSTEM_PROMPT,
-                                         _no_material, _unresolved_message)
+from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import _default_embed
 
 log = trace_logger(__name__)
 
-# ★모듈 전역으로 노출한다 — **테스트가 patch 할 이음매**다. 예전 테스트들이
-#   `answer_service.ask_json` 을 patch 하던 자리를 이것이 대신한다.
+# ★모듈 전역으로 노출한다 — **테스트가 patch 할 이음매**다.
 _llm: LLMAdapter = LangChainAdapter()
 
 
@@ -45,9 +44,6 @@ def bind_llm(adapter: LLMAdapter) -> None:
 def build_prompt(state: AskState) -> AskState:
     """사용자 프롬프트를 조립한다. **DTO 를 읽는 `app/graph/prompt.py` 가 쓴다.**
 
-    ★`answer_service._build_user_prompt()` 를 쓰지 않는다 — 저쪽은 API 스키마
-      객체를 읽고 표기가 없다. 고치면 `AnswerService.ask()`(대조 기준선)가 같이
-      움직인다(현황서 §5-28).
     """
     decision = state["decision"]
     user = prompt.build_user_prompt(
@@ -75,8 +71,8 @@ def build_prompt(state: AskState) -> AskState:
 def generate(state: AskState) -> AskState:
     """LLM 을 부른다. ★**예외가 올라오지 않는다** — 어댑터가 표시를 붙여 준다."""
     return {"llm_result": _llm.structured(
-        _SYSTEM_PROMPT, state["user_prompt"],
-        schema=AskAnswer, name="ask_answer", fallback=_SAFE_FALLBACK)}
+        SYSTEM_PROMPT, state["user_prompt"],
+        schema=AskAnswer, name="ask_answer", fallback=SAFE_FALLBACK)}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -129,6 +125,27 @@ def verify_sources(state: AskState) -> AskState:
 # ══════════════════════════════════════════════════════════════════
 
 
+def check_state_claims(state: AskState, claims: Optional[list] = None) -> list:
+    """State 하나로 `claim_check.check()` 를 부른다 — **인자 조립을 한 곳에.**
+
+    ★`batch/audit/claim_grounding.py` 가 같은 인자로 불러야 분포가 운영과 같은
+      것을 잰다. 조립이 두 벌이면 배치가 **다른 것을 재면서 같다고 보고**한다.
+    """
+    decision, intent = state["decision"], state["intent"]
+    return claim_check.check(
+        claims if claims is not None else (state["llm_result"].get("claims") or []),
+        {e.evidence_id: e for e in state["evidence"]},
+        # ★파급 대상을 넘겨야 claim ⑤(우리가 계산한 파급)와 ⑥(자유 결합)이
+        #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
+        propagation_targets=[p.target for p in state["propagation"]],
+        # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고 워크스페이스
+        #   기업 중 하나로 귀속시키는」 실패를 센다.
+        workspace_names=list(decision.workspace_names.values()),
+        embed=_default_embed, intent=intent,
+        event_types_by_evidence=prompt.event_types_by_evidence(state["events"]),
+        matched_event_types=evidence_selector.matched_event_types(intent))
+
+
 def check_claims(state: AskState) -> AskState:
     """★**State 를 바꾸지 않는다.** 임계값도 판정도 없고 문장을 지우지도 않는다.
 
@@ -153,18 +170,7 @@ def check_claims(state: AskState) -> AskState:
                                "unlinked": 0, "link_unknown": 0})
         return {}
 
-    decision, intent = state["decision"], state["intent"]
-    checked = claim_check.check(
-        claims, {e.evidence_id: e for e in state["evidence"]},
-        # ★파급 대상을 넘겨야 claim ⑤(우리가 계산한 파급)와 ⑥(자유 결합)이
-        #   갈린다 — 안 넘기면 정상적인 파급 문장이 ⑥ 으로 잘못 세어진다.
-        propagation_targets=[p.target for p in state["propagation"]],
-        # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고 워크스페이스
-        #   기업 중 하나로 귀속시키는」 실패를 센다.
-        workspace_names=list(decision.workspace_names.values()),
-        embed=_default_embed, intent=intent,
-        event_types_by_evidence=prompt.event_types_by_evidence(state["events"]),
-        matched_event_types=evidence_selector.matched_event_types(intent))
+    checked = check_state_claims(state, claims)
     summary = claim_check.summarize(checked)
     # ★로그와 **함께** 담는다. 로그는 운영에서 한 건을 되짚는 통로이고, 버킷은
     #   평가셋이 20 케이스를 모아 「uncited 비율」로 읽는 통로다 — 둘 중 하나만
@@ -185,7 +191,7 @@ def check_claims(state: AskState) -> AskState:
                      for n in (*c.misattributed, *c.title_only)}),
              [c.score for c in checked if c.score is not None])
 
-    # ★연결성 없는 주장 — **기본은 관측만** 한다(`_STRIP_UNLINKED_CLAIMS`).
+    # ★연결성 없는 주장 — **기본은 관측만** 한다(`STRIP_UNLINKED_CLAIMS`).
     cut = claim_check.unlinked(checked)
     # ★**버킷에도 담는다**(2026-08-29). 여태 이 값은 아래 로그 한 줄에만 있어서,
     #   평가셋이 「오탐률」을 재려면 사람이 로그를 긁어야 했다. 플래그를 켤지는
@@ -194,12 +200,12 @@ def check_claims(state: AskState) -> AskState:
     observe.record_claim_links(checked, cut)
     if cut:
         log.info("claim.unlinked count=%d strip=%s texts=%s",
-                 len(cut), _STRIP_UNLINKED_CLAIMS, [c.text for c in cut])
+                 len(cut), STRIP_UNLINKED_CLAIMS, [c.text for c in cut])
     # ★strip 은 이 노드에 **배선하지 않았다.** 플래그가 `False` 라 지금은 무동작
     #   이고, 켜려면 이 노드가 `answer` 를 돌려주도록 배선해야 한다 — 그건
     #   「관측만 한다」를 깨는 결정이라 사람이 정할 일이다. 조용히 안 되는 일이
     #   없도록 켜져 있으면 경고를 남긴다.
-    if cut and _STRIP_UNLINKED_CLAIMS:
+    if cut and STRIP_UNLINKED_CLAIMS:
         log.warning("claim.strip_not_wired count=%d — 그래프 경로는 답변을 지우지 "
                     "않는다. 켜려면 check_claims 를 배선해야 한다", len(cut))
     return {}
@@ -215,9 +221,47 @@ def respond(state: AskState) -> AskState:
     실패 경로에도 그대로 실린다(설계서 §14-3)."""
     failed = state["failed"]
     return {"response": AskResponse(
-        answer=_SAFE_MESSAGE if failed else state["answer"],
+        answer=SAFE_MESSAGE if failed else state["answer"],
         sources=state["sources"], failed=failed,
         anchor_source=state["decision"].source)}
+
+
+# ★LLM 을 부르지 않고 내는 문구 둘. **결정론적으로 조립한다**(설계서 §14-4·§16-2) —
+#   재료가 없으면 해석할 것도 없다.
+#
+# ★둘을 가르는 이유는 **사용자가 할 일이 다르기 때문**이다. 하나는 기업을
+#   추가해야 하고, 하나는 다른 이름으로 물어야 한다.
+# ★`_NO_WORKSPACE_MESSAGE` 는 **지웠다**(이번 개정 · 최종 설계 §17-1).
+#   「이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다」는 워크스페이스를
+#   검색 경계로 보던 정책의 사용자 문구였다. 이제 담긴 기업이 없어도 Global
+#   Search 로 답하므로 그 상태 자체가 없다.
+
+# ★조사를 변수 뒤에 붙이지 않는다 — 「'TSMC' 를」/「'심텍' 을」처럼 받침에 따라
+#   갈리는데, 영문·약어는 한글 발음으로 판정해야 해서 규칙이 커진다. 「~에
+#   해당하는」은 받침과 무관하게 성립한다.
+_UNRESOLVED_TEMPLATE = "질문하신 '{named}' 에 해당하는 기업을 저희 데이터에서 찾지 못했습니다."
+_WORKSPACE_HINT_TEMPLATE = "현재 워크스페이스에 담긴 기업은 다음과 같습니다 — {names}"
+
+
+def _no_material(message: str) -> AskResponse:
+    """재료 없이 내는 응답 — **`failed=false` 다.**
+
+    ★`failed` 는 「LLM 호출이 실패했다」는 뜻이다(설계서 §15-4). 여기서는
+      애초에 안 불렀으므로 실패가 아니다. 섞으면 화면이 「서버가 고장났다」와
+      「그 기업을 못 찾았다」를 구별하지 못한다.
+    """
+    return AskResponse(answer=message, sources=[], failed=False,
+                       anchor_source=AnchorSource.UNRESOLVED)
+
+
+def _unresolved_message(decision: AnchorDecision) -> str:
+    """★대안은 **「제안」까지만**이다(설계서 §14-4) — 워크스페이스 기업 이름을
+    보여줄 뿐, 그 기업들에 대해 답하지 않는다. 답하면 그게 곧 조용한 오답이다."""
+    lines = [_UNRESOLVED_TEMPLATE.format(named=decision.named)]
+    if decision.workspace_names:
+        lines.append(_WORKSPACE_HINT_TEMPLATE.format(
+            names=" · ".join(decision.workspace_names.values())))
+    return "\n".join(lines)
 
 
 def halt_no_material(state: AskState) -> AskState:

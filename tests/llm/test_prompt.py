@@ -310,3 +310,27 @@ def test_event_types_by_evidence_maps_only_event_sourced_evidence():
     assert got["ev_a"] == frozenset({"사고재해", "노무"})
     assert got["ev_b"] == frozenset({"사고재해"})
     assert "ev_rel" not in got
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  시스템 프롬프트 — ★답변의 **모양**을 지시하는 규칙들
+# ══════════════════════════════════════════════════════════════════════
+
+
+def test_system_prompt_tells_the_model_how_to_shape_each_answer():
+    """★목록형 지시는 남는다 — 앵커가 없을 때 기업들을 하나의 서사로 엮는 것이
+    가장 나쁜 실패다. 절 이름만 [워크스페이스] → [대상 지정 없음] 으로 바뀌었다."""
+    assert "답변 대상" in sut.SYSTEM_PROMPT
+    assert "독립적으로 설명" in sut.SYSTEM_PROMPT
+    assert "하나의 이야기로" in sut.SYSTEM_PROMPT
+
+
+def test_system_prompt_does_not_make_the_workspace_the_subject():
+    """★**뒤집힌 규칙이다**(최종 설계 §6-2·§19-3).
+
+    전에는 「인사이트는 워크스페이스 기업이 직접 주체이거나 영향 대상이어야
+    한다」고 지시했다. 그건 프롬프트 층의 hard filter다 — 워크스페이스 밖 사실을
+    답변에서 지우게 만든다. 지금은 **닿으면 밝히고, 밖이라고 빼지 않는다.**
+    """
+    assert "워크스페이스 밖이라는 이유로 재료를 빼지 않습니다" in sut.SYSTEM_PROMPT
+    assert "직접 주체이거나 직접적인 영향 대상이어야" not in sut.SYSTEM_PROMPT

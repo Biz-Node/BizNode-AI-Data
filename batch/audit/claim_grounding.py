@@ -1,5 +1,9 @@
 """/ask 답변의 claim-근거 겹침 **분포**를 모은다 — 판정하지 않는다.
 
+★**운영 경로(LangGraph)를 그대로 돌린다**(2026-09-04). 전에는 1차
+  (`AnswerService`) 의 프롬프트로 돌았는데, 1.5차부터 표기가 붙어 두 프롬프트가
+  갈렸다 — 그 상태로 재면 **나가지 않는 프롬프트의 분포**를 재는 셈이었다.
+
 ★왜 분포부터인가 (Step4a, 2026-08-23)
 
   `batch/audit/grounding.py` 는 노드 **이름**(토큰 2~3개)이 근거에 있는지 보려고
@@ -24,11 +28,10 @@ import argparse
 import sys
 
 from app.api.schemas import AskRequest
+from app.graph.ask_graph import ask_graph
+from app.graph.nodes import answer as answer_node
+from app.graph.state import initial_state
 from app.services import claim_check
-from app.services.answer_service import (_ANSWER_SCHEMA, _SAFE_FALLBACK,
-                                         _SYSTEM_PROMPT, _build_user_prompt)
-from app.services.retrieve_service import RetrieveService
-from pipeline.llm import ask_json
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -85,20 +88,21 @@ QUESTIONS = [
 
 
 def _run_one(question: str) -> dict:
-    """`AnswerService.ask()` 를 그대로 쓰지 않는다 — 그쪽은 claims 를 응답에
-    내보내지 않기 때문이다(Step4a 의 외부 계약 무변경 원칙). 같은 프롬프트·
-    같은 스키마로 직접 부르고 claims 를 받아 본다."""
-    request = AskRequest(question=question)
-    retrieved = RetrieveService().retrieve(request)
-    user = _build_user_prompt(question, retrieved)
-    result = ask_json(_SYSTEM_PROMPT, user, schema=_ANSWER_SCHEMA,
-                      name="ask_answer", fallback=_SAFE_FALLBACK)
+    """`run_ask()` 대신 **그래프를 직접 돌린다** — `AskResponse` 에는 claims 가
+    없기 때문이다(Step4a 의 외부 계약 무변경 원칙). 최종 State 에서 꺼내 본다.
 
-    checked = claim_check.check(
-        result.get("claims") or [],
-        {e.evidence_id: e for e in retrieved.evidence})
+    ★판정 인자는 `check_state_claims()` 한 곳에서 조립한다. 여기서 따로 부르면
+      **운영과 다른 것을 재면서 같다고 보고**하게 된다.
+    """
+    state = ask_graph().invoke(initial_state(AskRequest(question=question)))
+    result = state.get("llm_result")
+    if result is None:
+        # 앵커를 못 찾아 `halt_no_material` 로 빠진 질문 — LLM 을 안 불렀다.
+        return {"question": question, "failed": False, "evidence": 0,
+                "checked": [], "summary": claim_check.summarize([])}
+    checked = answer_node.check_state_claims(state)
     return {"question": question, "failed": bool(result.get("failed")),
-            "evidence": len(retrieved.evidence), "checked": checked,
+            "evidence": len(state.get("evidence") or []), "checked": checked,
             "summary": claim_check.summarize(checked)}
 
 

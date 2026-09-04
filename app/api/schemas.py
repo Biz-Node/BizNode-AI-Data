@@ -998,7 +998,7 @@ class Source(BaseModel):
     edge_id: Optional[str] = Field(None, description="근거가 관계에서 왔을 때만")
     text: str
     source_doc: str
-    # ★`Evidence.source_type` 을 그대로 물려받는다(`answer_service` 가 옮겨 담는다).
+    # ★`Evidence.source_type` 을 그대로 물려받는다(`app/llm/prompt.source_of()` 가 옮겨 담는다).
     #   좁히면 근거에서 답변으로 넘어오는 길목에서만 값이 사라진다.
     source_type: Literal["dart", "dart_filing", "news"] = "news"
     published_at: Optional[str] = Field(None, examples=["2026-03-23"])

@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.api.schemas import AskRequest
-from app.services.answer_service import AnswerService
+from app.graph.ask_graph import run_ask
 from app.services.retrieve_service import RetrieveService
 
 HERE = Path(__file__).parent
@@ -42,11 +42,8 @@ def main() -> int:
     request = json.loads((HERE / f"{CASE}.request.json").read_text(encoding="utf-8"))
     body = AskRequest(**request["body"])
 
-    retrieve = RetrieveService()
-    answer = AnswerService(retrieve)
-
-    retrieved = retrieve.retrieve(body)          # 재료 — §5-14 가 보는 층
-    response = answer.ask(body)                  # 답변 — §5-12·§5-13 이 보는 층
+    retrieved = RetrieveService().retrieve(body)  # 재료 — §5-14 가 보는 층
+    response = run_ask(body)                     # 답변 — §5-12·§5-13 이 보는 층
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     observed = {

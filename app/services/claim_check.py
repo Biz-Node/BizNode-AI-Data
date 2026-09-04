@@ -23,7 +23,7 @@
     무인용  인용 0건인데 실질 주장을 여럿 했다             evidence_ids 가 비어 있다
 
 앞의 것은 점수로 보이고, 뒤의 것은 점수 없이 `uncited` 로 바로 드러난다 —
-화이트리스트(`answer_service._sources_from`)는 **인용된 id 만** 검사하므로
+화이트리스트(`app/llm/prompt.sources_from()`)는 **인용된 id 만** 검사하므로
 인용하지 않은 주장은 원리적으로 못 잡는다. 그 구멍이 여기서 보인다.
 """
 
@@ -210,7 +210,7 @@ def _attribution(text: str, texts: Sequence[str],
     ★**여기서도 판정하지 않는다.** 이름이 없다고 곧 거짓이 아니다 — 별칭·약어·
       대명사로 가리켰을 수 있다. 세는 것은 「의심」이지 「오류」가 아니다.
 
-    ★`about` 표기(`answer_service._evidence_about`)가 **예방**이고 이것이 **관측**이다.
+    ★`about` 표기(`app/llm/prompt.evidence_about()`)가 **예방**이고 이것이 **관측**이다.
       둘은 서로를 대신하지 않는다.
     """
     bodies = [_body_of(t) for t in texts]
@@ -432,6 +432,6 @@ def unlinked(checked: Sequence[ClaimCheck]) -> list[ClaimCheck]:
       두고 `supported`/`verdict` 같은 말을 쓰지 않았다 — 재는 것은 「질문이 지목한
       사건 종류에서 온 근거인가」뿐이지 참·거짓이 아니다.
 
-    ★**지우는 것은 여기서 하지 않는다.** 호출측(`answer_service`)이 정한다.
+    ★**지우는 것은 여기서 하지 않는다.** 호출측(`app/graph/nodes/answer.py`)이 정한다.
     """
     return [c for c in checked if c.intent_linked is False]

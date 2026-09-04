@@ -184,7 +184,7 @@ UNCLASSIFIED_EVENT_TYPES: frozenset[str] = frozenset({"기타"})
 #   ★**`_EVENT_TYPE_KEYWORDS` 에 「리스크」를 넣지 않는다.** 그러면
 #     `matched_event_types()` 의 뜻이 「질문이 지목한 **사건 종류**」에서 벗어나고,
 #     그 값을 **같이 쓰는** `claim_check._intent_linked` 의 판정까지 조용히
-#     움직인다(`answer.py:168` · `answer_service.py:720`). 축이 둘이면 함수도
+#     움직인다(`app/graph/nodes/answer.py::check_state_claims`). 축이 둘이면 함수도
 #     둘이어야 한다.
 #
 #   ★「이슈」는 **일부러 뺐다.** 「최근 이슈 있어?」는 위험을 묻는 말이지만

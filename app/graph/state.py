@@ -73,12 +73,12 @@ class AskState(TypedDict, total=False):
     #   Phase 0 이전에는 두 곳에서 따로 계산됐고 값이 갈릴 수 있었다:
     #
     #       retrieve_service._events_of()   resolved_entities 우선, 비면 decision.anchors
-    #       answer_service.ask()            decision.anchors 만
+    #       (폐기된 1차 경로)               decision.anchors 만
     #
     #   `source=query` 일 때 `decision.anchors` 는 **최고점 1개**인데
     #   (`query_understanding._primary`) `resolved_entities` 는 **복수 후보**라
-    #   두 리스트가 다를 수 있다. `answer_service` 주석이 「의도는 재료를 고를 때
-    #   쓴 것과 같아야 한다」고 못 박아 놓고도 코드가 못 지키고 있었다.
+    #   두 리스트가 다를 수 있다. 1차 주석이 「의도는 재료를 고를 때 쓴 것과
+    #   같아야 한다」고 못 박아 놓고도 코드가 못 지키고 있었다.
     #
     #   ★**retrieve 쪽 계산식을 채택한다** — 재료를 실제로 고른 것이 그쪽이다.
     #     `check_claims` 가 이 값을 읽으므로 「무엇으로 골랐나」와 「무엇으로

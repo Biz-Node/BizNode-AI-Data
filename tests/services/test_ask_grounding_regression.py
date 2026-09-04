@@ -27,8 +27,9 @@ from pathlib import Path
 
 import pytest
 
-from app.api.schemas import RetrieveResponse
-from app.services import answer_service as as_module
+from app.api.schemas import AnchorSource, RetrieveResponse
+from app.graph import prompt as graph_prompt
+from app.tools.dto import ROLE_NOTE, SOURCE_NOTE, EventDTO
 from app.services import claim_check, material_consistency
 
 _FIXTURE = (Path(__file__).parent / "fixtures"
@@ -54,6 +55,36 @@ def retrieved() -> RetrieveResponse:
     return RetrieveResponse(**json.loads(_FIXTURE.read_text(encoding="utf-8"))["retrieved"])
 
 
+def _events(retrieved) -> list[EventDTO]:
+    """녹화본의 API 스키마 `Event` → 운영 경로가 읽는 `EventDTO`.
+
+    ★2026-09-04 — 1차(`AnswerService`) 폐기로 **운영 렌더러에 옮겨 붙였다.**
+      녹화는 1차 시절 것이지만 이 파일이 보는 것은 격리 장치(⑥.5)이고, 그
+      장치는 두 렌더러가 **같은 `material_consistency` 를** 부른다.
+    """
+    return [EventDTO(event_id=e.event_id, name=e.name, event_type=e.event_type,
+                     is_risk=e.is_risk, occurred_at=e.occurred_at,
+                     evidence_ids=list(e.evidence_ids), role="subject",
+                     role_note=ROLE_NOTE["subject"])
+            for e in retrieved.events]
+
+
+def _facts(retrieved) -> str:
+    """운영 렌더러의 `[사실]`. **관계·파급은 이 파일의 관심 밖**이라 비운다."""
+    return graph_prompt.fact_lines(
+        match_type=retrieved.match_type, companies=retrieved.companies,
+        events=_events(retrieved), relations=[], propagation=[],
+        evidence=retrieved.evidence, workspace_keys=set())
+
+
+def _prompt(retrieved) -> str:
+    return graph_prompt.build_user_prompt(
+        "q", match_type=retrieved.match_type, companies=retrieved.companies,
+        events=_events(retrieved), relations=[], propagation=[],
+        evidence=retrieved.evidence, anchor_source=AnchorSource.QUERY,
+        workspace_names={})
+
+
 # ── §5-12 극성 반전 ──────────────────────────────────────────────────────
 
 def test_the_polarity_reversed_event_is_flagged(retrieved):
@@ -63,7 +94,7 @@ def test_the_polarity_reversed_event_is_flagged(retrieved):
 
 def test_the_polarity_reversed_label_is_gone_from_the_confirmed_facts(retrieved):
     """★「HBM3E 대량 양산 차질」이 **사실로** 실리지 않는다."""
-    facts = as_module._fact_lines(retrieved)
+    facts = _facts(retrieved)
     event_lines = [l for l in facts.splitlines() if l.startswith("사건 ")]
 
     assert not any("HBM3E 대량 양산 차질" in l for l in event_lines)
@@ -81,7 +112,7 @@ def test_the_background_clause_event_is_flagged(retrieved):
 
 def test_the_report_date_is_no_longer_presented_as_the_event_date(retrieved):
     """★「2024년 2월 16일에 질소 누출 사고가 **발생**」이 나온 자리다."""
-    line = next(l for l in as_module._fact_lines(retrieved).splitlines()
+    line = next(l for l in _facts(retrieved).splitlines()
                 if "질소 누출" in l and l.startswith("사건 "))
 
     assert "보도 2024-02-16" not in line
@@ -90,7 +121,7 @@ def test_the_report_date_is_no_longer_presented_as_the_event_date(retrieved):
 
 def test_the_nitrogen_event_itself_survives(retrieved):
     """★사건 자체는 근거 원문에 실재한다 — 날짜만 격리하고 사건은 남긴다."""
-    assert "이천 공장 질소 누출 사고" in as_module._fact_lines(retrieved)
+    assert "이천 공장 질소 누출 사고" in _facts(retrieved)
 
 
 # ── §5-13 근거에 없는 인과 ───────────────────────────────────────────────
@@ -121,7 +152,7 @@ def test_the_two_grounded_claims_are_not_typed_as_free_combination(retrieved):
 def test_no_evidence_is_dropped_by_any_of_the_three_devices(retrieved):
     """★⑥.5 금지사항(설계서 §10) — 근거를 **버리지 않는다.** 화면이 인용할 수
     있는 것이 줄면 안 된다."""
-    prompt = as_module._build_user_prompt("q", retrieved)
+    prompt = _prompt(retrieved)
 
     for evidence in retrieved.evidence:
         if not evidence.missing:
@@ -131,7 +162,7 @@ def test_no_evidence_is_dropped_by_any_of_the_three_devices(retrieved):
 def test_the_contradicting_source_text_is_still_quotable(retrieved):
     """★격리한 사건의 근거 원문도 [근거] 블록에 그대로 있다 — 원문이 실제로
     말하는 내용(양산 시작)은 답변에 쓸 수 있어야 한다."""
-    prompt = as_module._build_user_prompt("q", retrieved)
+    prompt = _prompt(retrieved)
 
     assert "세계 최초로 시작했다" in prompt
 
@@ -142,8 +173,8 @@ def test_the_retrieve_response_is_untouched(retrieved):
     before = (len(retrieved.events), len(retrieved.evidence),
               len(retrieved.relations))
 
-    as_module._fact_lines(retrieved)
-    as_module._build_user_prompt("q", retrieved)
+    _facts(retrieved)
+    _prompt(retrieved)
 
     assert (len(retrieved.events), len(retrieved.evidence),
             len(retrieved.relations)) == before

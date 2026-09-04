@@ -136,6 +136,27 @@ def test_unresolved_searches_but_builds_no_material(monkeypatch, wired, fake_llm
     # 대안은 **제안까지만** — 그 기업들에 대해 답하지 않는다.
     assert "삼성전자" in state["response"].answer
     assert state["response"].sources == []
+    # ★`failed=false` 다 — `failed` 는 「LLM 호출이 실패했다」는 뜻이고 여기서는
+    #   애초에 안 불렀다(설계서 §14-4). 섞으면 화면이 「서버가 고장났다」와
+    #   「그 기업을 못 찾았다」를 구별하지 못한다.
+    assert state["response"].failed is False
+    assert state["response"].anchor_source is AnchorSource.UNRESOLVED
+
+
+def test_the_unresolved_message_is_deterministic(monkeypatch, wired, fake_llm,
+                                                 request_):
+    """★문구는 이름만으로 조립된다 — 같은 입력에 같은 문장이 나와야 한다."""
+    from app.graph.nodes import material
+
+    graph, _ = wired
+    monkeypatch.setattr(
+        material.query_understanding, "decide_anchor",
+        lambda q, r, n, c=None: AnchorDecision(source=AnchorSource.UNRESOLVED, named="TSMC",
+                                       workspace_names={"00126380": "삼성전자"}))
+
+    first = graph.invoke({"request": request_})["response"].answer
+    second = graph.invoke({"request": request_})["response"].answer
+    assert first == second
 
 
 def test_resolved_path_runs_every_fetch(wired, fake_llm, request_):

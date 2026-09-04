@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.answer_service import _SYSTEM_PROMPT
+from app.llm.prompt import SYSTEM_PROMPT
 from app.tools import citation
 
 
@@ -98,30 +98,30 @@ def test_prompt_says_the_article_full_text_is_not_available():
     """★「뉴스 원문」은 어디에도 없다 — `news_articles` 는 본문을 저장하지 않고
     (저작권) `evidence` 도 승격된 문장만 담는다. 이걸 안 적으면 LLM 이 기사
     전문을 아는 척한다."""
-    assert "기사 원문은 제공되지 않습니다" in _SYSTEM_PROMPT
-    assert "기사 전문이 아니라" in _SYSTEM_PROMPT
+    assert "기사 원문은 제공되지 않습니다" in SYSTEM_PROMPT
+    assert "기사 전문이 아니라" in SYSTEM_PROMPT
 
 
 def test_prompt_forbids_padding_beyond_the_evidence_sentence():
-    assert "[근거]에 없는 내용을 덧붙이지 않습니다" in _SYSTEM_PROMPT
+    assert "[근거]에 없는 내용을 덧붙이지 않습니다" in SYSTEM_PROMPT
 
 
 def test_prompt_says_business_overview_is_context_not_citation():
     """★이걸 안 적으면 LLM 이 사업개요를 claims 에 넣고, 인용할 id 가 없어
     `claim_check` 의 uncited 카운터가 오염된다 — 지표를 못 읽게 된다."""
-    assert "사업개요는 참고 맥락입니다" in _SYSTEM_PROMPT
-    assert "claims에 넣지 않습니다" in _SYSTEM_PROMPT
+    assert "사업개요는 참고 맥락입니다" in SYSTEM_PROMPT
+    assert "claims에 넣지 않습니다" in SYSTEM_PROMPT
 
 
 def test_prompt_and_policy_agree_on_business_overview():
     """★규칙과 프롬프트가 **같은 말을 하는지**를 마주 세운다."""
     assert not citation.is_citable("get_business_overview")
-    assert "인용할 수 없습니다" in _SYSTEM_PROMPT
+    assert "인용할 수 없습니다" in SYSTEM_PROMPT
 
 
-def test_both_paths_share_one_system_prompt():
-    """★그래프 경로가 `answer_service` 의 프롬프트를 그대로 쓴다. 사본이 생기면
-    한쪽만 고쳐지고 그 차이를 아무도 못 본다(계약 5번과 같은 이유)."""
+def test_the_answer_node_uses_the_one_system_prompt():
+    """★프롬프트 사본이 생기지 않았나. 사본이 생기면 한쪽만 고쳐지고 그 차이를
+    아무도 못 본다(계약 5번과 같은 이유)."""
     from app.graph.nodes import answer as answer_node
 
-    assert answer_node._SYSTEM_PROMPT is _SYSTEM_PROMPT
+    assert answer_node.SYSTEM_PROMPT is SYSTEM_PROMPT

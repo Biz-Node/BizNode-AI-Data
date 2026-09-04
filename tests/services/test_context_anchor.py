@@ -169,15 +169,14 @@ def test_there_is_no_starting_point_gate_any_more():
     「담아 둔 기업도 보고 있는 기업도 없으면 검색조차 하지 않는다」는 판정이
     세 곳(`retrieve_service.has_starting_point`·`material.has_workspace`·
     `AnswerService.ask`)에 걸쳐 있었다. 셋 다 없어야 한다 — 하나라도 남으면
-    그 입구만 조용히 거절한다.
+    그 입구만 조용히 거절한다. ★셋째는 모듈째 폐기됐다(2026-09-04).
     """
     from app.graph.nodes import material
-    from app.services import answer_service, retrieve_service
+    from app.services import retrieve_service
 
     assert not hasattr(retrieve_service, "has_starting_point")
     assert not hasattr(material, "has_workspace")
     assert not hasattr(material, "_has_starting_point")
-    assert not hasattr(answer_service, "_NO_WORKSPACE_MESSAGE")
 
 
 # ══════════════════════════════════════════════════════════════════════

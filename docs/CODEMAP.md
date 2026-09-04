@@ -128,7 +128,6 @@ DART API   ──┐
 | `api_contract.py` | 응답 계약과 `app/api/examples.py` 예시를 **살아 있는 DB 와 대조** |
 | `api_fuzz.py` | 무작위 기업 조합으로 API 를 **수백 번 두들겨** 이상한 것을 찾는다 |
 | `ranking_baseline.py` | ★사건 랭킹 **기준선 고정** — 코드가 바꾼 것과 데이터가 바꾼 것을 가른다 (0원) |
-| `ask_graph_parity.py` | `/ask` 출력 대조 — 그래프 경로 vs `AnswerService.ask()` |
 | `claim_grounding.py` | 답변 claim 과 근거의 겹침 **분포** — 판정하지 않는다 |
 | `discovered_cohesion.py` | `discovered` 앵커의 판정 신호 계측 — 거리인가 응집도인가 |
 
@@ -285,7 +284,6 @@ DART API   ──┐
 | `material_consistency.py` | 그래프 라벨과 근거 원문을 **답변 전에** 대조 (극성·시간 격리) |
 | `claim_check.py` | 답변의 주장이 **자기가 든 근거 안의 낱말**을 쓰고 있나 |
 | `embedding_cache.py` | 같은 텍스트는 언제나 같은 벡터 (영속 캐시) |
-| `answer_service.py` | ★**1차 답변 경로.** 운영은 `graph/` 로 넘어갔고 지금은 출력 대조 기준선이다 |
 
 ## app/graph/ — `/ask` 실행 그래프 (LangGraph)
 
@@ -315,8 +313,9 @@ DART API   ──┐
 
 ## app/llm/ — LLM 경계
 
-`adapter.py`(구조화 응답 하나 · **실패를 통과와 구별**) · `schemas.py`(응답 스키마)
-· `prompt.py`(★두 답변 경로가 **글자까지 같은** 조립 부분 — 사본을 하나로 줄인 자리)
+`adapter.py`(구조화 응답 하나 · **실패를 통과와 구별**) ·
+`schemas.py`(응답 스키마 — pydantic 판과 JSON Schema 판) ·
+`prompt.py`(★**시스템 프롬프트의 정본** + 조립 부품. 사본을 두지 않는 자리)
 
 ## app/core/ — 공통
 
