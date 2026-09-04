@@ -1,4 +1,4 @@
-"""시드 기업 → PostgreSQL companies + Neo4j Company 노드 (경로 A, 1B-8).
+"""시드 기업 → PostgreSQL company_attributes + Neo4j Company 노드 (경로 A, 1B-8).
 
 기업개황 + 시드 JSON(sector·etf_list·market) 병합.
 Neo4j 노드는 SET으로 항상 full 속성(is_stub=false) — graph_loader가 만든
@@ -16,15 +16,27 @@ from app.core.database import neo4j_session, postgres_connection
 from pipeline.extractors.dart.company_info import CORP_CLS_MARKET, fetch_company_info, to_iso_date
 from pipeline.normalizer.base import normalize_company_name
 
+# ★대상이 `companies` 였다. 그 표는 2026-08-15 에 지웠는데(`batch/repair/pg_tidy.py`
+#   2번 — 64행이 전부 `company_attributes` 에 있고 값도 같았다) **이 SQL 만 따라가지
+#   않아 경로 A 2단계가 그날 이후 죽어 있었다.** 데이터 이관은 그때 끝났고,
+#   여기는 코드가 옮겨간 표를 가리키게 하는 것뿐이다.
+#
+# ★`stock_code`·`market` 은 싣지 않는다. `company_attributes` 에 그 칸이 없고,
+#   값은 아래 Cypher 가 Neo4j 노드에 쓴다 — `pg_tidy` 가 표를 지워도 되는 근거로
+#   확인한 것이 바로 그 자리다.
+#
+# ★**여기 적은 칸만 덮어쓴다.** `sector_label`·`revenue_snapshot` 등은 다른 배치가
+#   채우므로 `DO UPDATE SET` 에 넣지 않는다 — 넣으면 시드를 돌릴 때마다 지워진다.
 _UPSERT_COMPANY_SQL = """
-INSERT INTO companies (corp_code, name, stock_code, market, sector, etf_list,
-                       ceo_nm, induty, est_dt, is_seed)
-VALUES (%(corp_code)s, %(name)s, %(stock_code)s, %(market)s, %(sector)s, %(etf_list)s,
-        %(ceo_nm)s, %(induty)s, %(est_dt)s, true)
-ON CONFLICT (corp_code) DO UPDATE SET
-    name=EXCLUDED.name, stock_code=EXCLUDED.stock_code, market=EXCLUDED.market,
-    sector=EXCLUDED.sector, etf_list=EXCLUDED.etf_list, ceo_nm=EXCLUDED.ceo_nm,
-    induty=EXCLUDED.induty, est_dt=EXCLUDED.est_dt, is_seed=true, updated_at=now()
+INSERT INTO company_attributes (node_key, corp_code, name, norm_name, name_en,
+                                sector, etf_list, ceo_nm, induty, est_dt, is_seed)
+VALUES (%(node_key)s, %(corp_code)s, %(name)s, %(norm_name)s, %(name_en)s,
+        %(sector)s, %(etf_list)s, %(ceo_nm)s, %(induty)s, %(est_dt)s, true)
+ON CONFLICT (node_key) DO UPDATE SET
+    corp_code=EXCLUDED.corp_code, name=EXCLUDED.name, norm_name=EXCLUDED.norm_name,
+    name_en=EXCLUDED.name_en, sector=EXCLUDED.sector, etf_list=EXCLUDED.etf_list,
+    ceo_nm=EXCLUDED.ceo_nm, induty=EXCLUDED.induty, est_dt=EXCLUDED.est_dt,
+    is_seed=true, updated_at=now()
 """
 
 _MERGE_NODE_CYPHER = """
@@ -37,7 +49,7 @@ SET c.name=$name, c.norm_name=$norm_name, c.name_en=$name_en,
 
 
 def load_seed_companies(delay: float = 0.25) -> int:
-    """시드 리스트 전체를 companies 테이블 + Neo4j Company 노드로 적재."""
+    """시드 리스트 전체를 company_attributes + Neo4j Company 노드로 적재."""
     with open(ETF_LIST_PATH, encoding="utf-8") as f:
         seed = json.load(f)["companies"]
 
@@ -54,10 +66,14 @@ def load_seed_companies(delay: float = 0.25) -> int:
             est_dt = to_iso_date(info.get("est_dt"))
 
             row: dict[str, Any] = {
+                # ★`node_key` 를 따로 넘긴다. 같은 값이지만 `node_key` 는 text,
+                #   `corp_code` 는 character 라 한 파라미터를 두 자리에 쓰면
+                #   psycopg 가 타입을 못 정한다(AmbiguousParameter).
+                "node_key": corp_code,
                 "corp_code": corp_code,
                 "name": name,
-                "stock_code": company.get("stockCode"),
-                "market": market,
+                "norm_name": norm_name,
+                "name_en": info.get("corp_name_eng"),
                 "sector": json.dumps(company.get("sector"), ensure_ascii=False),
                 "etf_list": json.dumps(company.get("etfList"), ensure_ascii=False),
                 "ceo_nm": info.get("ceo_nm"),
