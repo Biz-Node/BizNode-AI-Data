@@ -103,9 +103,9 @@ Evidence grounding ──── 🟡 진행 중      2026-08-26. ⑥.5 신설 ·
 | 낱말 겹침 (문장용 토크나이저·날짜 정규화) | ✅ | `pipeline/token_overlap.py` | 20 |
 | claim 분포 수집 배치 | ✅ | `batch/audit/claim_grounding.py` | — |
 | **Query Understanding 계층** | ✅ | `app/services/query_understanding.py` | 14 |
-| ★**`anchor_source` 3분법 판정** (`query`/`workspace`/`unresolved`) | ✅ **2026-08-26** | `query_understanding.decide_anchor()` | 14 |
+| ★**`anchor_source` 4분법 판정** (`query`/`context`/`anchorless`/`unresolved`) | ✅ **2026-09-01** | `query_understanding.decide_anchor()` | 14 |
 | ★**`unresolved` 처리** (LLM 미호출 · 200 · 재료 없음) | ✅ **2026-08-26** | `answer_service` · `retrieve_service.retrieve_for_ask()` | 17 |
-| ★**빈 `workspace_keys` 거부** (설계서 §16-2) | ✅ **2026-08-26** | `answer_service.ask()` | 포함 |
+| ~~빈 `workspace_keys` 거부 (설계서 §16-2)~~ | ❌ **폐기 2026-09-01** — 워크스페이스는 검색 경계가 아니다(최종 설계 §17-1). 비어 있어도 Global Search 로 답한다 | — | §8-22 |
 | ★**key ↔ name 해소** (`corp_code` → `norm_name`) | ✅ **2026-08-26** | `company_service.find_by_names()` · `workspace_service.names_of()` | 14 |
 | ★**답변 형태 분기 · 워크스페이스 소속 표기** (C-3·§12) | ✅ **2026-08-26** | `answer_service` 프롬프트 | 15 |
 | ★**파급 사건별 공평 분배 · `stated` 우선 · 파급 소속 표기** (§5-20·§5-21) | ✅ **2026-08-26** | `answer_service._select_propagation()` · `_propagation_membership()` | 7 |
@@ -222,8 +222,8 @@ POST /ask                            # 답변 문장 + 검증된 근거   worksp
 |---|---|
 | **`X-Stub: true` 가 사라졌습니다** | 헤더로 분기 중이면 확인 필요. 계약(`RetrieveResponse`)은 안 바뀌었습니다 |
 | **`question` 이 비면 422** | 전에는 검증이 없어 빈 문자열이 통과했습니다 |
-| **워크스페이스는 필터가 아닙니다** | **순서만** 정합니다. 워크스페이스 밖 기업도, 사건·인물·기관·제품도 그대로 나옵니다. ★단 **`/ask` 에서는 `workspace_keys` 가 필수**이고(2026-08-25 확정), **비어 있으면 답하지 않습니다**([설계서 §16-2](BizNode_Search_Layer_설계.md#16-2-workspace_keys-가-비어-있을-때)). ★**2026-08-26 구현 완료** — `answer_service` 가 **검색 전에** 거부합니다. 다만 **스키마(422) 강제는 아직 아닙니다** — 빈 배열은 통과하고 서비스가 막습니다 |
-| ★**`anchor_source` 가 「무엇을 대상으로 답했나」를 말합니다** | `query`(질문이 지정한 대상) / `workspace`(워크스페이스 기업을 대상 문맥으로 해석) / `unresolved`(대상을 못 찾음). **`match_type`(어떻게 찾았나)과 별개 축**이고, `AskResponse` 에 `match_type` 은 싣지 않습니다 |
+| **워크스페이스는 필터가 아닙니다** | **순서만** 정합니다. 워크스페이스 밖 기업도, 사건·인물·기관·제품도 그대로 나옵니다. ★**`/ask` 에서도 `workspace_keys` 는 선택입니다**(2026-09-01 개정 · 최종 설계 §6-1·§17-1) — 비어 있으면 Global Search + Global Ranking 으로 답합니다. 전에는 「비면 거부」였습니다(§8-22 에 폐기 경위) |
+| ★**`anchor_source` 가 「무엇을 대상으로 답했나」를 말합니다** | `query`(질문이 지정) / `context`(지금 보고 있는 기업) / `anchorless`(지정하지 않음 — **정상**) / `unresolved`(지정했는데 못 찾음). ★`workspace` 는 **없어졌습니다**(2026-09-01) — 워크스페이스를 앵커로 승격하지 않습니다. **`match_type`(어떻게 찾았나)과 별개 축**이고, `AskResponse` 에 `match_type` 은 싣지 않습니다 |
 | ★**`unresolved` 는 실패가 아닙니다** | `failed=false` · `sources=[]` · HTTP 200 입니다. 대상을 못 찾았을 때 **워크스페이스로 갈아타 답하지 않습니다** — 그게 조용한 오답이기 때문입니다([설계서 §14-4](BizNode_Search_Layer_설계.md#14-4-해소-실패의-처리--200--재료-없음-2026-08-25-확정)) |
 | ★**`RetrieveResponse.anchors[]` 가 앵커를 따로 싣습니다** | `companies[]` 의 뜻은 「질문에서 찾아낸 기업」이 아니라 **「재료가 된 기업」**입니다 — 스키마 설명을 사실에 맞추고, 앵커는 `anchors[]` 로 분리합니다([§5-7](#5-7-retrieveresponsecompanies-의-뜻이-스키마-설명과-다르다-todo)) |
 | **`evidence[].missing=true` 는 인용 금지** | 원문을 못 찾은 것. **응답에서 지우지는 않습니다** — 지우면 「근거가 없는 관계」로 읽힙니다 |
@@ -1584,7 +1584,7 @@ except Exception:  # noqa: BLE001 — 임베딩이 죽어도 답변은 나가야
 
 | 새 파일 | 무엇을 보나 |
 |---|---|
-| `tests/graph/test_conditional_edges.py` | 조건부 엣지 둘. **「무엇을 하지 않는가」** — 빈 워크스페이스는 검색조차 안 하고, `UNRESOLVED` 는 검색만 하고 조립을 안 돈다 |
+| `tests/graph/test_conditional_edges.py` | 조건부 엣지. **「무엇을 하지 않는가」** — `UNRESOLVED` 는 검색만 하고 조립을 안 돈다. ★2026-09-01 이후 **빈 워크스페이스도 검색하고 답한다**(`test_empty_workspace_still_searches_and_answers`) |
 | `tests/graph/test_plan_material.py` | `anchor_names`·`intent` 확정, `companies` key 무변환·출처(히트냐 앵커냐), 백스톱 |
 | `tests/graph/test_state_flow.py` | 노드 간 State 전달. `AskState` 의 모든 키가 실제로 채워지는지 |
 | `tests/tools/test_graph_tools.py` | 도구 4원칙 — 범위 거부·표기·`limit` 비인자·실패 구별 |

@@ -5,8 +5,10 @@
   나가 있어서, 여기서 모양을 바꾸면 그래프가 「같은 값을 다르게 부르는 두 번째
   진실」이 된다.
 
-★`app/tools/dto.py` 는 **쓰지 않는다.** 저건 표기(`source_note`·`caution` 등)를
-  붙이는 계층이라, 넣는 순간 프롬프트가 바뀌고 출력 대조가 깨진다. Phase 1.5 다.
+★`app/tools/dto.py` 는 **재료 세 축에만** 쓴다(1.5차에 들어왔다). 표기
+  (`source_note`·`caution` 등)가 프롬프트에 실려야 해서다 — 근거는 아래
+  `events`·`propagation`·`relations` 주석에 있다. `evidence` 는 `claim_check` 가
+  읽는 모양이라 API 스키마 그대로 둔다.
 
 ★상한 상수(`_MAX_*`)를 State 에 올리지 않는다. State 는 **이번 요청에서 흐르는
   값**만 담는다. 상한은 모듈 상수라 요청마다 달라질 이유가 없고, State 에 두면
