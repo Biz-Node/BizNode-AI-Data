@@ -31,10 +31,9 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from app.core.trace import trace_logger
-from app.services import company_service
-from app.tools import scope
+from app.tools import keys as keys_module
 from app.tools.dto import SOURCE_NOTE, EvidenceHitDTO
-from app.tools.errors import KeyNotResolved, ToolError
+from app.tools.errors import ToolError
 
 log = trace_logger(__name__)
 
@@ -68,15 +67,11 @@ def _key_forms(keys: Sequence[str]) -> list[str]:
     ★청크 메타의 `source_corp`·`target_corp` 는 **그래프 노드 키 그대로**라
       `corp_code`(`00161383`) 와 `norm_name`(`c.o.k`) 이 섞여 있다(실측
       2026-08-28). 한 형태로만 거르면 그 기업의 근거 절반이 조용히 사라진다.
+
+    ★범위 검사와 해소는 `app/tools/keys.py` 가 한다 — 실패 문구를 두 벌 두지
+      않는다(원칙 ④: 빈 결과와 실패를 구별한다).
     """
-    wanted = scope.check(keys)              # ① 범위 밖이면 `OutOfScopeKey`
-    if not wanted:
-        return []
-    found = company_service.norm_names_by_keys(wanted)
-    missing = [k for k in wanted if k not in found]
-    if missing:
-        # ★0건으로 넘어가지 않는다 — 「근거가 없는 기업」으로 읽힌다(원칙 ④)
-        raise KeyNotResolved(f"그래프에서 Company 를 못 찾은 key: {missing}")
+    wanted, found = keys_module.resolved(keys)
 
     forms: list[str] = []
     for key in wanted:

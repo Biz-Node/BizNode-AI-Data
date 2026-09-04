@@ -24,11 +24,8 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
-import openai
-
-from app.core.config import OPENAI_API_KEY
+from pipeline.llm import get_client
 
 _MODEL = "gpt-4o"          # 관계 추출이라 뉴스와 같은 등급을 쓴다
 
@@ -88,15 +85,6 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_client: Optional[openai.OpenAI] = None
-
-
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
 
 def extract_customers(corp_name: str, section_text: str) -> list[dict]:
     """「매출 및 수주상황」 본문 → 거래처 목록. 실패하면 빈 리스트.
@@ -108,7 +96,7 @@ def extract_customers(corp_name: str, section_text: str) -> list[dict]:
     if not section_text.strip():
         return []
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_MODEL, temperature=0,
             messages=[
                 {"role": "system", "content": _SYSTEM},

@@ -12,9 +12,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import openai
+from pipeline.llm import get_client
 
-from app.core.config import OPENAI_API_KEY
 from pipeline.normalizer.generic_names import is_generic_name
 
 _MODEL = "gpt-4o-mini"
@@ -125,7 +124,6 @@ _PARTNERSHIP_MARKERS = (
     "공동", "합작", "jv", "조인트",
     "기술이전", "기술제공", "기술도입", "기술공여", "mou", "양해각서",
 )
-_client: openai.OpenAI | None = None
 
 
 # 실명이 아닌 일반명사·설명형 counterparty (LLM이 종종 뱉음) — 노드로 만들지 않는다
@@ -151,13 +149,6 @@ def _is_excluded(rel: dict[str, Any]) -> bool:
     return _is_generic(rel.get("counterparty") or "")
 
 
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
-
 def extract_contract_relations(section_text: str, company_name: str) -> list[dict[str, Any]]:
     """II-6 텍스트 → [{edge_type, counterparty, subtype}]. 실패 시 빈 리스트."""
     if not section_text or len(section_text) < 40:
@@ -165,7 +156,7 @@ def extract_contract_relations(section_text: str, company_name: str) -> list[dic
     if "해당사항" in section_text[:120] and "없" in section_text[:120]:
         return []  # "경영상 주요계약: 해당사항 없음"
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_MODEL,
             temperature=0,
             messages=[

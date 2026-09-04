@@ -309,6 +309,7 @@ DART API   ──┐
 | `company_tools.py` | 기업 사실 (개요·공시·시세) |
 | `search_tools.py` | 근거 검색 — 뉴스와 공시를 갈라서 |
 | `scope.py` | ★도구가 만질 수 있는 key 범위 — **서버가 정하고 도구가 강제한다** |
+| `keys.py` | key → `norm_name` 해소 — ★**조용한 0건을 실패로 바꾼다**(도구 셋이 공유) |
 | `citation.py` | 도구 결과 중 **무엇을 인용할 수 있나** |
 | `errors.py` | 도구 실패를 **빈 결과와 구별한다** |
 

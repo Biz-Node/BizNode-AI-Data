@@ -9,9 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import openai
-
-from app.core.config import OPENAI_API_KEY
+from pipeline.llm import get_client
 
 _MODEL = "gpt-4o-mini"  # 추출 태스크에 충분·저렴
 
@@ -51,22 +49,13 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_client: openai.OpenAI | None = None
-
-
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
 
 def extract_products(section_text: str, company_name: str) -> list[dict[str, Any]]:
     """II-2 섹션 텍스트 → [{name, category}]. 실패 시 빈 리스트."""
     if not section_text or len(section_text) < 30:
         return []
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_MODEL,
             temperature=0,
             messages=[

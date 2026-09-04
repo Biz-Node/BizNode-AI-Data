@@ -33,12 +33,11 @@ from app.services import (company_service, evidence_selector, relation_selector,
                           relation_service)
 from app.services.company_service import _HIDE
 from app.services.retrieve_service import _ring_of
-from app.tools import scope
+from app.tools import keys as keys_module, scope
 from app.tools.dto import (CAUTION_NEWS_DEVELOPS, DIRECTION_NOTE, FRESHNESS_WEIGHT,
                            ROLE_NOTE, SOURCE_NOTE, STATED_NOTE,
                            SYMMETRIC_EDGE_TYPES, EventCompanyDTO, EventDTO,
                            EventPhaseDTO, PropagationDTO, RelationDTO)
-from app.tools.errors import KeyNotResolved
 
 log = trace_logger(__name__)
 
@@ -55,28 +54,8 @@ from app.services.retrieve_service import (  # noqa: E402  (상한 출처를 붙
 
 
 def _resolve(keys: Sequence[str]) -> list[str]:
-    """입력 key → **그래프가 아는 `norm_name`.** 못 찾으면 `KeyNotResolved`.
-
-    ★왜 필요한가 — `company_service.events_of()` 는 `corp_code` 든 `norm_name`
-      이든 받지만(`WHERE c.corp_code = $k OR c.norm_name = $k`), **틀린 값을
-      주면 예외가 아니라 조용히 0건**이다. 그러면 「이 기업에 사건이 없다」와
-      구별이 안 된다. 여기서 한 번 확인하고 넘긴다.
-
-    ★`norm_name` 으로 바꿔 넘겨도 **재료가 안 바뀐다**(실측 2026-08-28):
-      Company 3,432곳의 `norm_name` 은 **전부 유일**하고(겹치는 이름 0종),
-      `corp_code` 와 같은 문자열인 `norm_name` 도 0건이다. 표본 400곳에서
-      `corp_code` 로 부를 때와 `norm_name` 으로 부를 때 매칭 노드 수가 갈리는
-      기업이 0곳이었다. 겹치는 이름이 생기면 이 전제가 깨지므로
-      `tests/tools/test_graph_tools.py` 가 그 불변식을 묶어 둔다.
-    """
-    wanted = scope.check(keys)          # ① 범위 밖이면 여기서 `OutOfScopeKey`
-    if not wanted:
-        return []
-    found = company_service.norm_names_by_keys(wanted)
-    missing = [k for k in wanted if k not in found]
-    if missing:
-        # ★0건으로 넘어가지 않는다. 「해소됐다 ≠ 그래프에 있다」다.
-        raise KeyNotResolved(f"그래프에서 Company 를 못 찾은 key: {missing}")
+    """입력 key → **그래프가 아는 `norm_name`.** 판정은 `app/tools/keys.py` 가 한다."""
+    wanted, found = keys_module.resolved(keys)
     return [found[k] for k in wanted]
 
 

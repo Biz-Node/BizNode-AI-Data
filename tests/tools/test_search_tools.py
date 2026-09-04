@@ -11,6 +11,7 @@ import inspect
 
 import pytest
 
+from app.services import company_service
 from app.tools import scope
 from app.tools import search_tools as st
 from app.tools.dto import SOURCE_NOTE, EvidenceHitDTO
@@ -47,7 +48,8 @@ def repo(monkeypatch):
     def _install(*, resolves=True, norm="삼성전자", hits=None):
         fake = FakeRepo(hits)
         monkeypatch.setattr(st, "_repo", lambda: fake)
-        monkeypatch.setattr(st.company_service, "norm_names_by_keys",
+        # ★key 해소는 `app/tools/keys.py` 가 한다 — 서비스 모듈을 직접 갈아끼운다.
+        monkeypatch.setattr(company_service, "norm_names_by_keys",
                             lambda keys: {k: norm for k in keys} if resolves else {})
         return fake
     return _install
