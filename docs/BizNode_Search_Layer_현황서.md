@@ -29,7 +29,7 @@
 
 ```text
 데이터 수집 ─────────── 완료
-그래프 · 연동 API ────── 21개 라우트 중 20개 실동작 (스텁 1개: /news)
+그래프 · 연동 API ────── 21개 라우트 전부 실동작 (스텁 없음 · 2026-08-23)
 검색 엔진 ───────────── 완료
 챗봇 재료 (/retrieve) ── 완료          2026-08-20 스텁 해제
 LLM 답변 (/ask) ─────── 동작함          2026-08-22 신설
@@ -40,6 +40,7 @@ Global Event Search ─── 완료          2026-09-02 신설. §8-24
    └ 앵커 없는 질문 ──── 완료          「최근 주요 투자 이벤트가 뭐야?」가 사건을 근거로 답한다
    └ 키워드 형태소 경계 ─ 완료          「사고팔다」→사고재해 오탐 차단. §8-23
    └ ★못 타는 질문 있음 🔴 결함        「요즘」이 실제 사명이라 앵커가 잡혀 전역 경로를 막는다
+코드 정리 ───────────── 완료          2026-09-04. 1차 답변 경로 폐기 · 죽은 코드 · 문서 정합
 아키텍처 재정의 ──────── 완료(문서)     2026-08-23. 구현은 §6 부터
 정책 개정 ───────────── 완료(문서)     2026-08-25. anchor_source · 링 수집 · 앵커 3분법
    └ B-2 · C-3 · E ── 구현 완료      2026-08-26. 앵커 3분법 · unresolved · 답변 형태
@@ -50,7 +51,8 @@ Evidence grounding ──── 🟡 진행 중      2026-08-26. ⑥.5 신설 ·
 ```
 
 **한 줄** — **질문을 받아 답까지 돌려주는 것은 됩니다.** 백엔드는 `POST /ask` 를 부르면
-되고, 추론 담당은 `app.services.answer_service` 를 직접 import 하면 됩니다.
+되고, 추론 담당은 `app.graph.ask_graph.run_ask()` 를 직접 부르면 됩니다
+(재료만 필요하면 `app.services.retrieve_service.RetrieveService`).
 
 **다만 「답이 나온다」와 「답이 좋다」는 다릅니다.** 지금 검증된 것은 **구조적 안전성**
 (지어낸 근거를 못 싣는다 · 인젝션이 안 통한다 · 실패를 성공으로 안 판다)뿐이고,
@@ -97,32 +99,32 @@ Evidence grounding ──── 🟡 진행 중      2026-08-26. ⑥.5 신설 ·
 
 | 컴포넌트 | 상태 | 코드 | 테스트 |
 |---|---|---|---|
-| AnswerService · `POST /ask` | ✅ | `app/services/answer_service.py` | 24 |
-| `match_type`(EXACT/SEMANTIC) 노출 + 헤징 | ✅ | `retrieve_service` · `answer_service` | 포함 |
+| `POST /ask` 실행 그래프 | ✅ | `app/graph/` (노드·State·예산) | 210 |
+| `match_type`(EXACT/SEMANTIC) 노출 + 헤징 | ✅ | `retrieve_service` · `app/llm/prompt.py` | 포함 |
 | claim 관측 (`claims[]` · 판정 없음) | ✅ | `app/services/claim_check.py` | 12 |
 | 낱말 겹침 (문장용 토크나이저·날짜 정규화) | ✅ | `pipeline/token_overlap.py` | 20 |
 | claim 분포 수집 배치 | ✅ | `batch/audit/claim_grounding.py` | — |
 | **Query Understanding 계층** | ✅ | `app/services/query_understanding.py` | 14 |
 | ★**`anchor_source` 4분법 판정** (`query`/`context`/`anchorless`/`unresolved`) | ✅ **2026-09-01** | `query_understanding.decide_anchor()` | 14 |
-| ★**`unresolved` 처리** (LLM 미호출 · 200 · 재료 없음) | ✅ **2026-08-26** | `answer_service` · `retrieve_service.retrieve_for_ask()` | 17 |
+| ★**`unresolved` 처리** (LLM 미호출 · 200 · 재료 없음) | ✅ **2026-08-26** | `app/graph/nodes/answer.py::halt_no_material` | 17 |
 | ~~빈 `workspace_keys` 거부 (설계서 §16-2)~~ | ❌ **폐기 2026-09-01** — 워크스페이스는 검색 경계가 아니다(최종 설계 §17-1). 비어 있어도 Global Search 로 답한다 | — | §8-22 |
 | ★**key ↔ name 해소** (`corp_code` → `norm_name`) | ✅ **2026-08-26** | `company_service.find_by_names()` · `workspace_service.names_of()` | 14 |
-| ★**답변 형태 분기 · 워크스페이스 소속 표기** (C-3·§12) | ✅ **2026-08-26** | `answer_service` 프롬프트 | 15 |
-| ★**파급 사건별 공평 분배 · `stated` 우선 · 파급 소속 표기** (§5-20·§5-21) | ✅ **2026-08-26** | `answer_service._select_propagation()` · `_propagation_membership()` | 7 |
-| ★**근거 주체 귀속 표기 `about` + 오귀속 관측** (§5-22) | ✅ **2026-08-26** | `answer_service._evidence_about()` · 규칙 19 · `claim_check._attribution()` | 11 |
+| ★**답변 형태 분기 · 워크스페이스 소속 표기** (C-3·§12) | ✅ **2026-08-26** | `app/llm/prompt.py` 시스템 프롬프트 | 15 |
+| ★**파급 사건별 공평 분배 · `stated` 우선 · 파급 소속 표기** (§5-20·§5-21) | ✅ **2026-08-26** | `app/llm/prompt.py::select_propagation()` · `membership()` | 7 |
+| ★**근거 주체 귀속 표기 `about` + 오귀속 관측** (§5-22) | ✅ **2026-08-26** | `app/llm/prompt.py::evidence_about()` · 규칙 19 · `claim_check._attribution()` | 11 |
 | ★**workspace 앵커 `anchor_names` 복구** (§5-23) | ✅ **2026-08-26** | `retrieve_service._events_of()` · `evidence_selector` 키워드 | 1 |
 | ★**claim 의미 유사도 · 연결성 관측** (§5-25) | ✅ **2026-08-26** | `claim_check._semantic_scores()` · `_intent_linked()` · `unlinked()` | 11 |
-| ☐ **연결성 없는 claim 차단** (§5-25) | ⏸ **꺼 둠** — 오탐 25% 실측 | `answer_service._STRIP_UNLINKED_CLAIMS` | 포함 |
+| ☐ **연결성 없는 claim 차단** (§5-25) | ⏸ **꺼 둠** — 오탐 25% 실측 | `app/llm/prompt.py::STRIP_UNLINKED_CLAIMS` | 포함 |
 | ★**A-3 앵커 기준 재료 수집 · 링(ring) 정렬** | 🟡 **진행 중** | `retrieve_service.anchor_companies()`·`ring_of()` | 12 |
 | └ 앵커 기준 재료 수집 · Ring 0→1→2 정렬 | ✅ **2026-08-26** | 41건 전수 검증 → [§8-7](#8-7-앵커가-재료를-정하는가--41건-전수-2026-08-26) | 12 |
 | └ `companies=[]` 앵커 백스톱 | ✅ **2026-08-26** | `with_anchor_backstop()` → [§5-16](#5-16-비-company-엣지-질의는-재료가-0-이-된다--해소-2026-08-26) | 11 |
 | └ 링 확장 임계값 · 앵커 기업 수 상한 | 🔴 `[DECIDE]` | 정렬 방식이라 임계값 없이 도는 중 → [§7-4](#7-4-2026-08-25-개정이-새로-연-decide-2건) | — |
 | └ 비-Company 관계가 Ring 2 로 밀려 잘린다 | 🔴 `[TODO]` | [§5-17](#5-17-비-company-관계가-ring-2-로-밀려-상한에서-잘린다-todo) | — |
-| ★**`symmetric`·`role`·`press` 프롬프트 노출** (§5-5) | ✅ **2026-08-26** | `answer_service._fact_lines()`·`_evidence_block()` | 5 |
+| ★**`symmetric`·`role`·`press` 프롬프트 노출** (§5-5) | ✅ **2026-08-26** | `app/graph/prompt.py::fact_lines()` · `app/llm/prompt.py::evidence_block()` | 5 |
 | ★**`relation_selector`** (관계 의도 선택 · ④a) | ✅ **2026-08-26** | `app/services/relation_selector.py` | 12 |
 | ★**⑥.5 Material Consistency** — 극성 대조 | ✅ **2026-08-26** | `material_consistency.check_polarity()` | 8 |
 | ★**⑥.5 Material Consistency** — 시간 맥락 대조 | ✅ **2026-08-26** | `material_consistency.check_temporal()` | 10 |
-| ★**⑦ flag 격리** (`[확인된 사실]` 안에서만) | ✅ **2026-08-26** | `answer_service._fact_lines()` | 8 |
+| ★**⑦ flag 격리** (`[확인된 사실]` 안에서만) | ✅ **2026-08-26** | `app/graph/prompt.py::fact_lines()` | 8 |
 | ★**claim 6번째 유형** (자유결합 Insight · 관측만) | ✅ **2026-08-26** | `claim_check._classify()` | 9 |
 | ★**실패 사례 회귀 fixture 승격** | ✅ **2026-08-26** | `tests/services/test_ask_grounding_regression.py` | 10 |
 | **claim type 분류 · 타입별 대조** (①~⑤ 전체) | 🟡 부분 | ⑥ 만 있다. ①~⑤ 는 ⑤ 단계 | — |
@@ -1876,10 +1878,10 @@ similarities 1,070ms  ├ 캐시 조회 1,531ms(862라벨)   97%
 |---|---|---|
 | `app/services/retrieve_service.py` | 검색 호출 + 재료 조립 (flow ②③④⑤⑥) | ⚠ **책임 과다 경로.** 지금 296줄로 관리 가능하지만 ①a·①b·④a 가 들어오면 넘친다. **선택을 밖으로 빼는 방향**이 맞다 |
 | `app/services/evidence_selector.py` | 사건 의도 선택 (④b) | ✅ **적절.** 다만 **이름이 하는 일과 다르다** — evidence 가 아니라 **event** 를 고른다. `event_selector` 가 정확하다(순수 리네임이라 언제든 싸다) |
-| `app/services/answer_service.py` | 프롬프트 조립(⑦) + LLM 호출(⑧) + 화이트리스트 + claim 관측 | ⚠ **⑦을 분리하는 것이 맞다.** 블록 분할이 들어오면 `_fact_lines()` 가 세 갈래로 늘어난다 |
+| `app/graph/nodes/answer.py` + `app/llm/prompt.py` | 프롬프트 조립(⑦) + LLM 호출(⑧) + 화이트리스트 + claim 관측 | ✅ **2026-09-04 분리됨.** 조립은 `app/llm`·`app/graph/prompt`, 배선은 노드가 갖는다 |
 | `app/services/claim_check.py` | claim → (상태, 겹침 점수) | ✅ **위치 적절.** 「판정하지 않는다」를 명시한 것이 특히 옳았다 |
 | `pipeline/token_overlap.py` | 낱말 겹침 계산 | ✅ **적절.** `app`·`batch` 양쪽이 쓰므로 `pipeline` 이 맞는 자리다 |
-| `batch/audit/claim_grounding.py` | 20개 질문 분포 수집 | ✅ **적절.** `AnswerService.ask()` 를 안 쓰고 같은 프롬프트를 직접 부르는 구조도 옳다(외부 계약 무변경 유지) |
+| `batch/audit/claim_grounding.py` | 20개 질문 분포 수집 | ✅ **적절.** 2026-09-04 부터 **운영 그래프를 그대로 돌리고** 최종 State 에서 claims 를 꺼낸다 |
 | `app/services/company_service.py`·`relation_service.py`·`graph_service.py` | 그래프 읽기·파급·근거 조립 | ✅ **적절 · 무수정.** 화면(`/companies`·`/relations`)과 공유하므로 `/ask` 사정으로 바꾸면 안 된다 |
 | `search/` 전체 | ② | ✅ **무수정 유지.** 이 문서의 어떤 제안도 `search/` 수정을 요구하지 않는다 |
 
@@ -3534,6 +3536,10 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-09-04 | **계층을 넘어 공유되는 이름에서 밑줄을 뗐다** | `material.py` 가 `retrieve_service` 의 private 여덟 개를, `graph_tools` 가 `ring_of` 와 상한 상수 셋을 가져다 쓰고 있었다 — 내부 구현이 그래프 노드의 공개 의존성이 되어 `retrieve_service` 리팩토링이 봉쇄돼 있었다. 열두 심볼과 `company_service.relation_row` 를 공개 이름으로 바꿨다. **app 계층의 모듈 간 private import 0건.** ★`company_service.py`(1,241줄) 분할은 **하지 않았다** — `company_detail()` 이 공개 API 다섯을 포함해 열한 함수를 조립하고 `company_summary()` 가 다시 그것을 부른다. 절 경계로 자르면 서로를 import 하는 패키지가 되고 테스트가 잡은 `company_service.events_of` 이음매가 끊긴다 — 줄 수는 크지만 **응집도가 높은 단일 읽기 모델**이다 |
+| 2026-09-04 | **LLM 클라이언트와 key 해소를 각각 한 곳으로** | `pipeline/llm.get_client()` 가 있는데도 같은 4줄 사본이 **일곱 벌** 있었다(코드 지도의 「LLM 호출 한 곳」이 사실이 아니었다). 여섯을 공용 게터로 돌리고, 키 없음을 먼저 알리던 배치 하나는 가드를 남긴 채 위임한다. 도구 셋이 나눠 갖던 key 해소와 **실패 문구**를 `app/tools/keys.py` 로 모았다 — 그 문구는 Agent 가 읽고 다음 호출을 정하는 값이라 두 벌이면 갈린다. ★LLM JSON 스키마 보일러플레이트 통합은 **철회했다** — 텍스트로는 31곳이 잡혔지만 값으로 보면 같은 꼴이 **6개뿐**이고, LLM 계약인 스키마에 그만큼을 위해 추상화를 넣는 것은 이득보다 위험이 크다 |
+| 2026-09-04 | **호출되지 않는 코드와 무력화된 스텁 장치 제거** | 도입 커밋 이후 **한 번도 불린 적 없는** 함수 11개, 미사용 import 32개, 읽히지 않는 지역변수 8개를 지웠다. `_STUB` 이 빈 튜플인 채로 `X-Stub` 미들웨어가 모든 요청을 지나고 있어 함께 지웠다 — 헤더는 2026-08-23 이후 이미 안 나가고 있었으므로 `/preview` 표시도 백엔드가 보는 값도 **변하지 않는다**. `/health` 의 `stub` 키는 값 `false` 로 남긴다 |
+| 2026-09-04 | **구현과 어긋난 주석·문서 정정** | 코드가 하는 일과 **반대를 말하는** 주석 4건을 고쳤다(State 가 도구 DTO 를 「안 쓴다」·도구 계약이 「구현 없다」·`examples.py` 가 「스텁 응답」·수동 시험 도움말의 워크스페이스 검색 게이트). 코드 지도가 2026-08-15 에 멈춰 `app/` 42개 중 39개와 `search/` 15개 **전부**를 안 싣고 `app/api/` 를 「미구현」이라 적고 있었다 — 조회·검색·챗봇 계층을 채우고 누락 배치 23개를 반영했다 |
 | 2026-09-04 | ★**1차 답변 경로(`AnswerService`) 폐기 — 대조 기준선이 이미 빨간불이었다** | 운영은 2026-08-27 에 LangGraph 로 넘어갔고 1차는 `ask_graph_parity` 의 기준선으로만 남아 있었다. ★**폐기 전에 마지막으로 쟀다** — 재료 대조 20건 중 **완전 일치 1 · 예상 밖 차이 19**, 전제가 깨진 질문 2건은 무효. 1.5차 표기 추가(2026-08-26 관계 의도 필터)와 앵커리스 개정(2026-09-01) 이후 스크립트가 갱신되지 않아 **「그래프가 예전과 같은 답을 내는가」를 이미 증명하지 못하는 상태**였다 — 빨간불인 기준선은 없는 것보다 나쁘다. ★공유 자산을 `app/llm/` 로 옮겼다: 시스템 프롬프트·`SAFE_MESSAGE`·`STRIP_UNLINKED_CLAIMS` → `prompt.py`, `ANSWER_SCHEMA`·`SAFE_FALLBACK` → `schemas.py`. 옮긴 값 7종을 **해시로 대조**해 바이트 동일을 확인했다. ★`claim_grounding` 을 **운영 경로로 옮겼다** — 1차 프롬프트로 재고 있어서 **나가지 않는 프롬프트의 분포**를 재던 자리다. 판정 인자는 `check_state_claims()` 한 곳에서 조립해 배치와 운영이 같은 것을 잰다. ★**커버리지로 검증했다** — 남은 파일 중 **떨어진 것 0건**, `pipeline/llm.py` 88.2%→100% · `app/graph/prompt.py` 92.6%→98.5%. 실패 표시 규약(`ask_json`)은 폐기 모듈의 테스트가 우연히 밟고 있어서 직접 단위 테스트를 신설했다. 로그 위생 6건은 `tests/graph/test_log_hygiene.py` 로, 회귀 고정 10건은 운영 렌더러로 이관 — 격리 장치(⑥.5) 적용 검증이 `tests/graph/` 에 **0건이던 구멍**이 이번에 메워졌다. **1063 passed · 38 deselected · 2 xfailed** · OpenAPI 스키마 무변경 · `/ask` 실호출 정상 |
 | 2026-09-02 | ★**Global Event Search — 앵커 없는 질문이 처음으로 사건을 근거로 답한다** (§8-24) | 최종 설계 §5 시나리오 3 · §17-2. 「최근 주요 투자 이벤트가 뭐야?」가 **Event 노드를 한 번도 안 건드리고** 있었다(F1) — 「투자」가 사건이 아니라 지분관계(`OWNS_STAKE_IN`)로 읽혀 관계 freshness 순으로 기업 5곳을 채웠고, 그 결과가 (주)DB Inc.·IMANTOAG·유진로봇이었다. 히트에 Event 노드가 실려 오긴 했는데 `companies_from()` 이 통째로 버려 **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4). ★**새 DB·새 Vector DB·새 Collection 전부 안 만들었다** — 임베딩할 텍스트(`event_label()`)가 글자까지 같아 `embedding_cache` 가 이미 그 벡터를 들고 있고, 랭킹은 `evidence_selector.select()` 를 **그대로** 부른다. 전역 후보 **933행 · 고유 사건 867 · 기업 234**(Cypher 411ms). ★날짜 비교는 **문자열**이다 — `h.occurred_at` 이 STRING 이라 `date()` 캐스팅은 예외 없이 0건이 된다(F3 에서 실제로 밟았다). 애초에 날짜로 안 거른다 — 「최근」은 티어이지 필터가 아니다. **★사건을 먼저 자르고 기업은 역산한다**(설계 Q3) — 실측으로 상위 10건이 **6~10개 기업**에 걸쳐 `_MAX_COMPANIES=5` 로 자르면 5개 질의 **전부** 나머지 기업이 범위 밖이 되어 도구가 거부한다. 상한은 사건 쪽(`_MAX_GLOBAL_EVENTS=10`)에 있고 기업 수는 그걸 못 넘는다. **★두 입구가 갈릴 뻔한 자리** — `/ask` 는 `plan_material` → `companies` → `scope.allowed` → Agent 의 `get_events(keys=…)` 구조인데, 앵커 없는 경로의 `companies` 는 **이미 선택된 사건에서 역산된 것**이라 그 기업들로 기업별 조회를 다시 돌리면 최대 100건이 나와 `/retrieve` 의 전역 10건과 갈린다. 그래서 `plan_material` 이 고른 `(event_id, company_key)` **쌍**을 `scope.event_pairs` 로 실어 보내고 `get_events` 는 **고르지 않고 조회만** 한다 — 선택 1회, 도구는 랭킹 모듈을 모르고, Agent 가 `keys` 로 범위를 넓히지도 좁히지도 못한다. ❌기각 ⓐ도구가 전역 함수를 다시 부른다(「같음」이 구조가 아니라 우연에 기댄다) ⓑ재료 차이를 허용한다(`ask_graph_parity` 가 잡는 그 차이). **파리티 5/5 일치**(앵커 대조군 포함 · 사건도 company 도). ★`Event.company`·`EventDTO.company` **선택 필드 신설** — 앵커 없는 질문은 사건마다 기업이 달라, 안 실으면 「누구에게 난 일인지 모르는 사건」이 재료로 나간다. 앵커 경로에서는 `None` 이라 **비파괴**다. `event_id` dedup 은 앵커 없는 경로에서만 끈다(설계 Q2) — 사건 하나에 기업이 둘 이상 붙은 것이 5.7%이고 그때 `role`·`occurred_at`·`evidence_ids` 가 기업마다 다르다. ★**`match_type` 이 `EXACT` 로 나가던 것을 고쳤다**(F1) — 앵커를 하나도 못 잡았는데 「정확 일치」였다. `SearchMode.RELATIONSHIP`→`EXACT` 매핑이 **앵커를 잡은 관계 검색**을 전제한 것이었다. 새 enum 값을 만들지 않고 `SEMANTIC` 으로 보낸다 — 추론 계층이 읽는 것은 이분법 하나뿐이다(§11). 값이 `decision` 에 달렸으므로 계산 자리를 `search` → `resolve_anchor` 노드로 옮겼다(「값을 만드는 노드와 값이 정해지는 시점을 맞춘다」는 원칙 그대로). ★**관계가 두 배로 불어 되돌렸다** — `companies` 가 5→10곳이 되며 `MAX_RELATIONS_PER_COMPANY × len(companies)` 가 같이 늘어 관계 90~100건 · 재료 **94,921자**(앵커 경로 48,719자의 두 배)가 됐다. 기업 수에 천장을 씌워 50건 · **58,635자**로 되돌렸다 — 도구 범위와 사건을 위한 변경이지 관계를 늘리려던 것이 아니다. ★**질의 로깅 신설**(`app/core/querylog.py`) — Phase 6 의 재료 조달. 질의가 **파일로 안 남고 있었다**(`trace.py` 가 `basicConfig` 만, `FileHandler` 없음). 질문·intent·matched·고른 사건 type 넷만 남기면 **라벨 없이** 정답/누락/오탐이 갈린다. 배치와 실사용은 `trace_id` 로 가른다(요청 경계에서만 발급되므로 기준선 도구·테스트는 `"-"`). 근거 본문과 워크스페이스 key 는 안 남긴다. 실패해도 **요청을 죽이지 않는다.** ★**앵커 없는 기준선 신설** — 기존 `ranking_baseline.py` 는 `scope.anchor_scope([key])` 라 기업 key 가 필수여서 이 경로를 **못 쟀다.** 전역 후보 지문(933행 `aefdd05eb7ae`)과 질의 4건을 추가했고, 「새 항목」과 「지문 바뀜」을 가르게 고쳤다(안 가르면 다음 대조에서 「코드에 귀속할 수 없다」가 떠서 정작 회귀를 볼 때 그 문장을 안 믿게 된다). ★「최근 리스크 뭐가 있어?」가 `matched=∅` 인데 **risk 10/10 · recent 10/10** 이다 — 규칙 티어 없이 위험·시간 축만으로 제대로 선다. ★**「최초 임베딩 10초」는 전제가 틀렸다** — 실측: Cypher 411ms + ChromaStore 초기화 1,298ms(프로세스당 1회 · 앵커 경로도 똑같이 낸다) + similarities 1,070ms. 그리고 similarities 의 **97%가 캐시 조회**(862라벨 1,531ms)이고 코사인은 **3%**(49ms)다. 862개가 이미 전부 캐시에 있는데도 그렇다 — **야간 예열은 이 비용을 안 줄인다**(예열이 미리 하는 것은 「생성」이고 남는 것은 「조회」다). F5 의 「993건 브루트포스 304ms」는 코사인만 잰 값이었다. 후보 선축소도 안 된다(「최근」은 티어이지 필터가 아니다). 실효 대책인 프로세스 내 벡터 메모(≈10MB)는 새 사건이 재기동 전까지 안 보이는 트레이드오프라 Backlog. 종단 지연 전역 **1.5~1.9초** · 앵커 0.6초 — 뒤에 LLM 이 붙는 구조라 병목은 아니다. ★**F2 오탐의 심각도가 올라갔다** — 「요즘 산업재해 사고 있었어?」가 `EXACT · 기업 1 · 사건 0` 이다. `AnchorExtractor` 가 「요즘」을 실제 사명으로 해소한다(대상·미래·오늘·요즘·우리). 전에는 「재료가 부실한 질의」였는데 이제 **정상 동작할 질의를 통째로 막는다.** **★계약 변경 2건 통보 필요** — `Event.company` 추가(선택 · 앵커 없는 질문에서만 참) · 앵커 없는 질문의 `match_type` 이 `EXACT`→`SEMANTIC`. **1155 passed · 38 deselected · 3 xfailed**(1130→1155, 새 테스트 25개). `ranking_baseline --compare` **18 케이스 무변화**(앵커 14 + anchorless 4) — 앵커 경로 회귀 0 |
 | 2026-09-02 | ★**규칙 키워드 형태소 경계 + 어휘 3낱말 — 오탐을 끄고 누락을 메웠다** (§8-23) | `_EVENT_TYPE_KEYWORDS` 12개 패턴에 **경계 검사가 한 곳도 없었다** — 전부 맨 부분일치라 낱말 중간에 걸렸다(「회사를 **사고**판」→사고재해 · 「**투자**증권」→사업확장 · 「**기술**보증기금」→제품기술). probe 12건을 만들어 재니 **12건 전부** 오검출. ★**오탐은 누락보다 훨씬 나쁘다** — 규칙 티어는 `select()` 의 **최상위 정렬 키**라 틀린 type 이 켜지면 그 티어가 상한 10 을 다 먹고 정답이 통째로 밀려나며 임베딩이 그 아래에 깔려 **구제하지 못한다**(실측: 「공장에서 인명 피해 난 곳 있어?」 적중 **0/10**). 같은 값을 `claim_check._intent_linked` 도 읽는다. ★**먼저 기준선을 ① 상태로 고정**했다(`55a5fbd`) — 경계와 어휘를 같은 구간에 넣으면 baseline diff 에서 둘을 못 가른다. **① 경계**(`954700f`) — `pat.search` → `finditer` + **뒤 경계만** 검사. `_ok_tail()` 이 매치 뒤가 비한글이거나 조사·어미(`_JOSA`)로 시작할 때만 통과시킨다. ★**앞은 보지 않는다** — 한국어 복합명사는 **뒤가 머리**라 앞을 막으면 「설비**투자**」가 죽는다(실측 정답 18→17). ❌**Kiwi 는 버렸다** — 사전 등재 복합명사(「안전사고」=단일 NNG)를 못 뚫어 기준선 **2건 퇴행** · 정답 12 잃고 오탐 2 끔 = 순손실. ❌**2음절 일괄도 버렸다** — 「적자**전환**」류 10건이 죽는다. 경계를 거는 `_GUARDED` 는 손으로 고르지 않고 **규칙으로 유도**한다(per-keyword 정밀도 <90% **or** probe 로 형태소 충돌 실측). **② 어휘**(이번) — 남은 누락 둘을 **세 낱말**로 메웠다: `사고재해` += `인명피해|인명`(인명은 가드) · `분쟁소송` += `다툼`. ★**원안 7낱말 중 넷을 뺐다** — `법적` 은 「합**법적**」·「불**법적**」에 걸리는데 그건 **앞** 충돌이라 뒤 경계로 못 막고, `추락` 은 「주가 추락」이 실적이라 **의미** 충돌이며, `피해` 는 「해킹 피해」가 정보유출이다(사건명 4건 중 2건이 정보유출). `중상` 은 「중상모략」에 걸리면서 기여가 **0**. 셋이 고치려던 질의는 `인명`·`다툼` 이 **이미 고친다**(V6·V7·V8 전 지표 동점 → 최소안 채택). ★**`인명피해` 가 `인명` 앞에 와야 한다** — 교대는 왼쪽부터 시도하고 `인명` 은 가드 대상이라, 순서가 뒤집히면 붙여 쓴 「인명피해」가 뒤 경계에 막혀 통째로 꺼진다. ★**「죽은 키워드」 정리는 철회했다** — `제소`·`출자`·`조달`·`불량` 은 **사건명에 0건**이지만 이 표는 **질의에도 걸린다**. 지워 보니 「제소당한 기업」 등 8건이 전부 `∅` 가 되고 그 대가로 얻는 것이 리콜·오탐률·정방향 **어디에도 없었다**. 「죽었다」는 판정은 방향 하나(사건명)만 보고 내린 것이었다. ★**결과**(전부 ① 위에서 실측) — 정방향 33건 정상 30→**31** · 누락 2→**0** · 리콜 53.4%→53.5% · 오탐률 **9.5% 유지** · morph probe 발화 4/12 **불변**(그중 셋은 의도된 발화, 실제 경계 실패는 「주식 사고 싶은데」 하나). 동치 대조 **1,135건 전건 일치**(사건명 1,074 + 질의 33 + probe 12 + 추가 16). `ranking_baseline --compare` **14/14 무변화** — 그래프 지문 그대로라 변화는 코드에 귀속된다. **1130 passed · 36 deselected · 3 xfailed**(1124→1130, 새 테스트 6개만큼). 되돌리기 방지 그물은 **양방향**이다 — 틀린 변형 8종(되돌림 · 교대순서 뒤집기 · 가드에서 인명 제거 · `법적`/`추락`/`피해`/`중상` 추가 · 죽은키워드 제거)을 **실제로 돌려** 전부 최소 하나씩 깨지는 것을 확인했다. ★**남은 구멍 둘은 숨기지 않는다** — 「주식 사고 싶은데」(띄어쓴 용언 활용은 뒤 경계로 못 막는다) · 「말다툼」(앞 충돌). **둘 다 오탐이 아니라 누락/희귀**이고, 누락은 임베딩이 부분적으로 구제한다 |
