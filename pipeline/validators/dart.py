@@ -18,6 +18,7 @@ from pipeline.validators.base import (
     is_iso_date,
     is_non_negative,
     is_numeric_or_none,
+    is_plausible_birth_year_month,
 )
 
 
