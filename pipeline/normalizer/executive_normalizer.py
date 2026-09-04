@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from schemas.dart_schemas import (
     EntityDTO,

@@ -10,7 +10,8 @@
       3단계  하나씩 진짜로     app/services/       ← 라우트는 그대로, 속만 간다
 
   **3단계가 끝났다. 공개 라우트 21개가 전부 실제 DB 를 읽는다**(2026-08-23).
-  스텁이 없으므로 `X-Stub` 헤더도 더는 나가지 않는다.
+  스텁이 없으므로 `X-Stub` 표시 장치도 지웠다 — 붙일 라우트가 0개인 채로
+  모든 요청이 미들웨어를 지나고 있었다.
 
 경계 — 이 API 는 사용자를 모른다
 
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
@@ -56,7 +57,7 @@ from app.api.schemas import (
     AskRequest, AskResponse, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
     Filing, GraphResponse, InsightCard, MarketResponse, NewsFeedResponse, NewsItem,
     OwnershipResponse, ProductItem, Propagation, Relation, RelationDetail,
-    RetrieveResponse, RiskEvent, SearchResponse, Suggestion, TrendingItem,
+    RetrieveResponse, SearchResponse, Suggestion,
     WorkspaceChangesRequest, WorkspaceChangesResponse, WorkspaceGraphRequest,
     WorkspaceInsightRequest, WorkspaceSuggestRequest, WorkspaceSuggestResponse,
     WorkspaceSummaryRequest,
@@ -124,26 +125,6 @@ app.add_middleware(
     allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_methods=["*"], allow_headers=["*"],
 )
-
-
-# 아직 고정값인 라우트를 **경로 그대로** 적는다. 접두사로 판정하던 때는 같은
-# 접두사 안에 진짜와 가짜가 섞여 두 개를 거꾸로 표시했다.
-#
-# ★비어 있는 것이 정상이다 — 지금은 전부 실물이다. 라우트가 실물이 될 때 여기서
-#   빼는 것을 잊으면 **멀쩡한 응답이 가짜로 나간다.** `/news` 가 실물이 된 뒤에도
-#   남아 있어, 12,250건을 돌려주면서 `X-Stub: true` 를 달고 나갔다(2026-08-23).
-#   헤더가 아니라 **본문이 무엇을 부르는지**로 판단해야 한다.
-_STUB: tuple[str, ...] = ()
-
-
-@app.middleware("http")
-async def _mark_stub(request, call_next):
-    """`_STUB` 에 적힌 라우트에만 `X-Stub: true`."""
-    resp: Response = await call_next(request)
-    path = request.url.path
-    if any(path == s or path.startswith(s + "/") for s in _STUB):
-        resp.headers["X-Stub"] = "true"
-    return resp
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -561,9 +542,10 @@ async def ask(body: AskRequest) -> AskResponse:
 
 @app.get("/health", tags=["운영"], summary="상태 확인")
 def health() -> dict:
-    # ★`stub` 이 상수 True 라 **모든 라우트가 실물이 된 뒤에도** True 였다.
-    #   배포 점검이 늘 「미완성」이라 답하는 셈이었다.
-    return {"status": "ok", "stub": bool(_STUB), "version": app.version}
+    # ★`stub` 키를 **남긴다.** 값은 언제나 `false` 다(전부 실물이라 고정값 라우트가
+    #   없다). 백엔드가 이미 읽고 있을 수 있어 키를 빼지 않는다 — 실물 여부는
+    #   이 값이 아니라 **본문이 무엇을 부르는지**로 판단한다.
+    return {"status": "ok", "stub": False, "version": app.version}
 
 
 # ══════════════════════════════════════════════════════════════════

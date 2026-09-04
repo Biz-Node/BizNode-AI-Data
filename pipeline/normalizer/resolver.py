@@ -224,11 +224,6 @@ def resolve(name: Optional[str]) -> Optional[Resolution]:
     return _fuzzy(norm)
 
 
-def is_ambiguous(name: Optional[str]) -> bool:
-    """후보는 여럿인데 근거로 좁히지 못하는 이름인가."""
-    return resolve(name) is None and len(candidates(name)) > 1
-
-
 def close() -> None:
     """배치 종료 시 퍼지용 연결 정리."""
     global _conn

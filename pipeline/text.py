@@ -60,6 +60,3 @@ def i_ga(word: str) -> str:
 def eul_reul(word: str) -> str:
     return josa(word, "을", "를")
 
-
-def wa_gwa(word: str) -> str:
-    return josa(word, "과", "와")

@@ -14,8 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Evidence, MatchType,
-                             Propagation, Relation, RetrieveResponse, Source)
+from app.api.schemas import (AnchorSource, AskRequest, AskResponse, Propagation, Relation, RetrieveResponse, Source)
 from app.core.trace import trace_logger
 from app.services import claim_check, evidence_selector, material_consistency
 from app.services.query_understanding import AnchorDecision
@@ -610,10 +609,6 @@ def _build_user_prompt(question: str, retrieved: RetrieveResponse,
 
 
 _edge_id_for = shared._edge_id_for
-
-
-def _source_from_evidence(evidence: Evidence, relations: list[Relation]) -> Source:
-    return shared.source_of(evidence, _relation_refs(relations))
 
 
 def _sources_from(evidence_ids: list[str], retrieved: RetrieveResponse) -> list[Source]:

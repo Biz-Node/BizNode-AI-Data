@@ -12,20 +12,18 @@ from typing import Optional
 from schemas.dart_schemas import (
     CompanyDTO,
     EntityDTO,
-    OrganizationDTO,
     PersonDTO,
     make_entity_ref,
     make_person_key,
 )
 from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.common import is_investment_vehicle
-from pipeline.normalizer.legal_forms import looks_like_company as _by_notation
-from pipeline.normalizer.resolver import candidates, resolve
-
 # 법인격·기관 표기는 `legal_forms.py` 한 곳에서만 정한다(2026-08-13).
 # 전에는 이 파일이 자기 목록을 들고 있어 **노조를 기관으로 못 잡았다**
-# (「전국금속노동조합」 → Company). 합친 목록이 그 빈칸을 메운다.
-from pipeline.normalizer.legal_forms import looks_like_organization
+# (「전국금속노동조합」 → Company). 합친 목록이 그 빈칸을 메운다 —
+# `looks_like_company` 안에서 기관 표기까지 함께 본다.
+from pipeline.normalizer.legal_forms import looks_like_company as _by_notation
+from pipeline.normalizer.resolver import candidates, resolve
 
 
 def looks_like_company(name: str) -> bool:

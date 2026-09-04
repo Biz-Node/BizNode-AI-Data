@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Optional
 
 from app.core.database import neo4j_session
 

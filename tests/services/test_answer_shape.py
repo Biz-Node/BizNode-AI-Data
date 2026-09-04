@@ -21,9 +21,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
-from app.api.schemas import (Anchor, AnchorSource, AskRequest, Event, MatchType,
+from app.api.schemas import (Anchor, AnchorSource, AskRequest, MatchType,
                              Relation, RelationEndpoint, RetrieveResponse)
 from app.services import answer_service as as_module
 from app.services.query_understanding import AnchorDecision

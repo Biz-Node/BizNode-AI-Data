@@ -29,7 +29,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
 
 from app.core.database import neo4j_session
 from app.core.trace import trace_logger

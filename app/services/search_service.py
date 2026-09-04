@@ -126,7 +126,6 @@ def search(q: str, limit: int = 20, *, include_registry: bool = True) -> dict[st
     # ★`partial` 을 가르려면 **재무·시세 보유 여부**를 봐야 한다.
     #   전에는 `company_attributes`(대표·설립일)를 읽고 있었는데, 그건
     #   「이름 말고 뭐라도 있나」지 「숫자가 있나」가 아니다.
-    keys = [r["corp_code"] or r["norm_name"] for r in rows]
     corps = [r["corp_code"] for r in rows if r["corp_code"]]
     has_num: set[str] = set()
     if corps:

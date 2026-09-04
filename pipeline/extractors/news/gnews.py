@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 from urllib.parse import quote
 
 import requests
@@ -180,14 +180,6 @@ def _ckpt_path(name: str, years: int, month_split: bool) -> Path:
     return _CKPT_DIR / f"{key}__{years}y_{'m' if month_split else 'q'}.json"
 
 
-def ckpt_is_complete(path: Path) -> bool:
-    """수집은 끝났는데 아직 소비되지 않은 중간본인가."""
-    try:
-        return bool(json.loads(path.read_text(encoding="utf-8")).get("collected_all"))
-    except Exception:
-        return False
-
-
 def _ckpt_load(path: Path) -> tuple[set[str], list[Article], int]:
     """(본 제목해시, 모은 기사, 끝낸 기간 수). 없으면 빈 상태."""
     if not path.exists():
@@ -228,20 +220,6 @@ def clear_checkpoint(name: str, years: int, month_split: bool) -> None:
     p = _ckpt_path(name, years, month_split)
     if p.exists():
         p.unlink()
-
-
-def _months_in(lo: str, hi: str) -> list[tuple[str, str]]:
-    """분기 구간 [lo, hi) 를 월 구간들로 쪼갠다. 적응형 분할에서 쓴다."""
-    y, m = int(lo[:4]), int(lo[5:7])
-    out: list[tuple[str, str]] = []
-    while True:
-        cur = f"{y:04d}-{m:02d}-01"
-        if cur >= hi:
-            break
-        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
-        out.append((cur, min(f"{ny:04d}-{nm:02d}-01", hi)))
-        y, m = ny, nm
-    return out
 
 
 # 구글 `/sorry` 페이지의 표지. 응답이 RSS(XML)가 아니라 HTML로 오고, 본문에

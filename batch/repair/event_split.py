@@ -36,7 +36,6 @@ import argparse
 import hashlib
 import json
 import sys
-from collections import defaultdict
 
 from app.core.database import neo4j_session, postgres_connection
 

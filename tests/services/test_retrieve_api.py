@@ -45,24 +45,16 @@ def test_returns_200_with_real_material(client):
 
 
 def test_stub_header_is_gone(client):
-    """★`X-Stub: true` 가 사라지는 것이 실물화의 완료 신호다."""
+    """★`X-Stub: true` 가 사라지는 것이 실물화의 완료 신호다.
+
+    표시 장치 자체를 지웠으므로(붙일 라우트가 0개였다) 어느 라우트에서도
+    나오지 않는다. `/news` 도 함께 본다 — 실물이 된 뒤에도 목록에 남아
+    **12,250건을 돌려주면서 헤더를 달고 나간** 전례가 그쪽이다(2026-08-23).
+    """
     resp = client.post(_PATH, json={"question": "삼성전자에 납품하는 기업"})
 
     assert "X-Stub" not in resp.headers
-
-
-def test_stub_header_marks_only_listed_routes(monkeypatch, client):
-    """스텁 표시 장치는 살아 있다 — `_STUB` 에 적힌 것만 표시한다.
-
-    전에는 이 테스트가 `/news` 를 고정값이라 단정했다. 그런데 `/news` 는
-    실물이 된 뒤에도 `_STUB` 에 남아 있어 **PostgreSQL 에서 12,250건을
-    돌려주면서 `X-Stub: true` 를 달고 나갔다**(2026-08-23). 테스트가 그
-    버그를 지키고 있었던 셈이라, 특정 경로 대신 장치를 검증한다.
-    """
-    assert client.get("/news").headers.get("X-Stub") is None
-
-    monkeypatch.setattr(main_module, "_STUB", ("/news",))
-    assert client.get("/news").headers.get("X-Stub") == "true"
+    assert "X-Stub" not in client.get("/news").headers
 
 
 def test_missing_question_is_422(client):

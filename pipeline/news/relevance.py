@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache

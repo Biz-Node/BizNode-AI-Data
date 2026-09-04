@@ -18,7 +18,6 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock
 
-import pytest
 
 from pipeline.normalizer.resolver import Resolution
 from search.dto.search_hit import SearchHit

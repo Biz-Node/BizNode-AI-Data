@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from app.services.graph_service import Relation
 from pipeline.freshness import Freshness

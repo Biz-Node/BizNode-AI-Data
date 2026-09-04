@@ -103,10 +103,3 @@ def skeleton(text: str) -> str:
     s = re.sub(r"(.)\1+", r"\1", s)          # 겹친 글자
     return re.sub(r"[aeiou]", "", s)
 
-
-def is_candidate(a: str, b: str) -> bool:
-    """같은 회사일 **가능성**이 있는가. 확정이 아니다 — 모델이 판정해야 한다."""
-    ka, kb = skeleton(a), skeleton(b)
-    if len(ka) < MIN_SKELETON or len(kb) < MIN_SKELETON:
-        return False
-    return ka == kb

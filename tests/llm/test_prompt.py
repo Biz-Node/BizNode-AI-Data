@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.api.schemas import AnchorSource, Evidence, MatchType, Source
+from app.api.schemas import AnchorSource, Evidence, MatchType
 from app.core import clock
 from app.llm import prompt as sut
 from app.llm.prompt import EventRef, RelationRef

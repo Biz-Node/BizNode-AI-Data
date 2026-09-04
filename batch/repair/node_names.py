@@ -21,7 +21,6 @@ from __future__ import annotations
 import sys
 
 from app.core.database import neo4j_session, postgres_connection
-from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.generic_names import (
     CERTAIN_REASONS,
     generic_reason,

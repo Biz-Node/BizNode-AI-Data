@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
 from app.core.trace import trace_logger
 from app.services import company_service

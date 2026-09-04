@@ -192,23 +192,6 @@ def relations_of(
     out.sort(key=lambda r: -r.score)
     return out[:limit] if limit else out
 
-
-def summarize_freshness(rels: list[Relation]) -> str:
-    """결과의 신선도 구성을 한 줄로. 답변에 붙여 **불확실성을 드러낸다**."""
-    if not rels:
-        return "관계 없음"
-    tally: dict[str, int] = {}
-    for r in rels:
-        tally[r.freshness.status] = tally.get(r.freshness.status, 0) + 1
-    parts = [f"{MARK.get(k, '?')}{k} {v}" for k, v in
-             sorted(tally.items(), key=lambda x: -x[1])]
-    stale = tally.get("stale", 0)
-    note = ""
-    if stale and stale / len(rels) >= 0.3:
-        note = f"  ⚠ {stale/len(rels)*100:.0f}%가 갱신주기를 넘겨 재확인 필요"
-    return " · ".join(parts) + note
-
-
 # ══════════════════════════════════════════════════════════════════
 #  리스크 파급 — **저장하지 않고 질의 시 계산한다**
 # ══════════════════════════════════════════════════════════════════
@@ -347,7 +330,6 @@ def propagate_risk(event_name: str, *, today: Optional[date] = None,
         f1 = assess(r["i_props"] or {}, today=today)
         base = float((r["i_props"] or {}).get("confidence") or 0.7)
         s1 = base * f1.confidence_factor
-        neg = (r["sign"] or "") == "negative"
         # ★모회사로 올린 것이면 **어느 공장인지**를 경로에 남긴다. 「삼성전자가
         #   위험」이 아니라 「삼성전자 인도 공장이 멈춰서 삼성전자가 위험」이어야
         #   사용자가 근거를 되짚을 수 있다.

@@ -26,7 +26,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 from app.core.database import neo4j_session, postgres_connection
 from pipeline.freshness import assess
@@ -833,7 +833,7 @@ def company_detail(key: str) -> Optional[dict]:
     counts["executives"] = len(executives)
     counts["owns"] = len(owns)
     counts["owned_by"] = len(owned_by)
-    products_all, executives_all = products, executives
+    products_all = products
     owns_all, owned_by_all = owns, owned_by
     products = products[:_BLOCK_LIMIT]
     executives = executives[:_BLOCK_LIMIT]

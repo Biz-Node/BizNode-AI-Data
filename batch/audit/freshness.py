@@ -27,14 +27,11 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 
 
-from app.core.database import neo4j_session, postgres_connection
+from app.core.database import neo4j_session
 from pipeline.llm import ask_json
 from pipeline.importer.evidence import fetch_texts
 

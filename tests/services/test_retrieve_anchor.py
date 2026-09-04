@@ -117,7 +117,6 @@ def test_retrieve_for_ask_searches_before_judging(wired, monkeypatch):
     산출물이라 그 전에는 판정할 수 없다."""
     order = []
     orchestrator = _orchestrator()
-    original = orchestrator.search.side_effect
 
     def _search(req):
         order.append("search")
