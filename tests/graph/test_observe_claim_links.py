@@ -1,4 +1,4 @@
-"""주장 연결성을 **버킷이 받는가** — `_STRIP_UNLINKED_CLAIMS` 를 켜기 위한 계측.
+"""주장 연결성을 **버킷이 받는가** — `STRIP_UNLINKED_CLAIMS` 를 켜기 위한 계측.
 
 ★이 계측이 필요한 이유(2026-08-29). `claim_check.unlinked()` 도 `_strip_claims()`
   도 이미 완성돼 있고 플래그만 `False` 다. 켜려면 **오탐률**을 알아야 하는데 —
@@ -127,7 +127,7 @@ def test_check_claims_node_records_into_the_bucket(monkeypatch, wired, fake_llm,
                                                    request_):
     """★노드가 **실제로 부르는가** — 함수만 있고 배선이 없으면 평가셋은 늘 0 이다.
 
-    `check_claims` 는 여전히 State 를 안 바꾼다(`_STRIP_UNLINKED_CLAIMS` 는
+    `check_claims` 는 여전히 State 를 안 바꾼다(`STRIP_UNLINKED_CLAIMS` 는
     `False`). 늘어난 것은 관측뿐이다.
     """
     from app.graph.nodes import answer

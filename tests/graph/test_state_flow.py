@@ -65,7 +65,7 @@ def test_node_fills_the_keys_the_next_node_reads(wired, fake_llm, request_, node
 
 
 def test_check_claims_changes_nothing(monkeypatch, wired, fake_llm, request_):
-    """★`check_claims` 는 **State 를 바꾸지 않는다.** `_STRIP_UNLINKED_CLAIMS` 가
+    """★`check_claims` 는 **State 를 바꾸지 않는다.** `STRIP_UNLINKED_CLAIMS` 가
     `False` 라 답변을 건드리면 안 된다 — 관측만 한다."""
     from app.graph.nodes import answer
 

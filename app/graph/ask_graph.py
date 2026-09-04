@@ -62,6 +62,7 @@ from functools import lru_cache
 
 from langgraph.graph import END, START, StateGraph
 
+from app.api.schemas import AskResponse
 from app.graph import nodes
 from app.graph.nodes.material import is_resolved
 from app.graph.state import AskState
@@ -125,8 +126,8 @@ def ask_graph():
     return build_ask_graph()
 
 
-def run_ask(request) -> "AskResponse":
-    """질문 하나 → `AskResponse`. **`AnswerService.ask()` 를 대신하는 입구다.**
+def run_ask(request) -> AskResponse:
+    """질문 하나 → `AskResponse`. **`/ask` 의 유일한 입구다.**
 
     ★동기다. 노드가 전부 sync 이고 그 안이 Neo4j·PostgreSQL·OpenAI 왕복이라
       이벤트루프에서 직접 부르면 안 된다 — 라우트가 `run_in_threadpool` 로 감싼다

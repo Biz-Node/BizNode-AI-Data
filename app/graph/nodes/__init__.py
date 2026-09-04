@@ -1,8 +1,8 @@
 """`/ask` 그래프의 노드들.
 
-각 노드는 **sync 함수**이고 `AskState` 조각을 돌려준다. 판단 로직은 전부
-`RetrieveService`·`AnswerService` 에 그대로 있다 — 노드는 위임하는 껍데기다.
-그래야 그래프로 옮기면서 동작이 따라 바뀌지 않는다.
+각 노드는 **sync 함수**이고 `AskState` 조각을 돌려준다. 판단 로직은 노드 밖에
+있다(`RetrieveService`·`app/tools`·`app/llm`) — 노드는 위임하는 껍데기다.
+그래야 배선을 고칠 때 동작이 따라 바뀌지 않는다.
 """
 
 from app.graph.nodes.agent_loop import (agent, evidence_validation, run_tools,

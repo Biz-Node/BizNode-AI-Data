@@ -104,15 +104,9 @@ app = FastAPI(
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
 _retrieve_service = RetrieveService()
-# ★`AnswerService` **인스턴스는 여기 두지 않는다.** `/ask` 는 그래프가 처리하고
-#   이 앱에서 저 인스턴스를 부르는 라우트가 하나도 없었다 — 만들어만 두면 기동
-#   때마다 쓰이지 않는 객체가 하나 선다.
-#
-#   ★**클래스는 지우지 않았다.** 출력 대조의 기준선이 그쪽이라
-#     (`batch/audit/ask_graph_parity.py`) 지우면 「그래프가 예전과 같은 답을
-#     내는가」를 물을 수 없다. 다만 그 스크립트는 자기가 쓸 인스턴스를 직접
-#     만든다(`AnswerService(RetrieveService(embed=embed))`) — 여기 것을 쓰지
-#     않았으므로 대조는 그대로 돈다. 최종 폐기 여부는 별도 결정이다.
+# ★`/ask` 는 이 인스턴스를 **그래프를 통해** 쓴다. 1차 답변 경로는 폐기했다
+#   (2026-09-04) — 대조 기준선이던 그쪽이 1.5차 표기·앵커리스 개정 뒤로 이미
+#   빨간불이라 「예전과 같은 답인가」를 물을 수 없는 상태였다.
 # 그래프는 위 인스턴스를 **그대로** 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
 # 둘이 되어 커넥션·캐시가 갈린다.
 bind_service(_retrieve_service)

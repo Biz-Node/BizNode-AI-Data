@@ -522,13 +522,13 @@ def build(runs: dict[str, CaseRun],
         "바꿀 때 **바꾸기 전 값과 비교**하라고 둔 자리입니다.")
     add()
 
-    # ── 4-1. 주장 연결성 — ★`_STRIP_UNLINKED_CLAIMS` 를 켤지 정하는 자리 ──
+    # ── 4-1. 주장 연결성 — ★`STRIP_UNLINKED_CLAIMS` 를 켤지 정하는 자리 ──
     #
     #   ★**이 절은 오탐률을 재라고 있는 것이지, 오탐률을 말하지 않는다.**
     #     「연결 없음」으로 판정된 주장이 **정말로** 질문과 무관했는지는 문장을
     #     읽어야 정해진다. 그래서 개수만이 아니라 본문을 싣는다 — 사람이 세는
     #     것이 이 절의 용도다.
-    add("### 4-1. 연결성 — `_STRIP_UNLINKED_CLAIMS` 를 켤 수 있나")
+    add("### 4-1. 연결성 — `STRIP_UNLINKED_CLAIMS` 를 켤 수 있나")
     add()
     checked_total = sum(run.observed.claims_total for run in runs.values())
     unlinked_total = sum(run.observed.claims_unlinked for run in runs.values())

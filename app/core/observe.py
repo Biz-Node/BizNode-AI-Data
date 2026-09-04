@@ -130,7 +130,7 @@ class Observation:
 
     # ── 주장(claim) — ★관측만 한다 ────────────────────────────
     # `check_claims` 가 이미 계산해 **로그로만** 남기던 값이다. 「uncited 비율」을
-    # 모델 교체 전후로 비교하려면, 그리고 `_STRIP_UNLINKED_CLAIMS` 를 켤지
+    # 모델 교체 전후로 비교하려면, 그리고 `STRIP_UNLINKED_CLAIMS` 를 켤지
     # 정하려면 **구조화된 값**이 있어야 한다 — 로그는 사람이 긁어야 한다.
     #
     # ★`claims_checked` 를 따로 둔다 — 「주장이 0건」과 「그 노드를 안 지났다」가
@@ -283,7 +283,7 @@ def record_embed(*, texts: int, hits: int, misses: int) -> None:
 def record_claim_links(checked: Sequence, unlinked: Sequence) -> None:
     """주장 연결성 판정의 결과. **재기만 한다 — 아무것도 안 지운다.**
 
-    ★`_STRIP_UNLINKED_CLAIMS` 를 켤지 정하려면 **오탐률**이 필요하고, 오탐률은
+    ★`STRIP_UNLINKED_CLAIMS` 를 켤지 정하려면 **오탐률**이 필요하고, 오탐률은
       개수가 아니라 **문장**을 봐야 정해진다. 그래서 본문과 근거 id 를 담는다.
 
     ★`checked` 는 `claim_check.check()` 의 결과 전부, `unlinked` 는 그중
