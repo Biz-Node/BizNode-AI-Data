@@ -416,8 +416,8 @@ Phase 1 실측(2026-08-27): `search` 노드가 `new_trace_id()` 를 발급했더
 
 | 도구 | 목적 | Agent 가 정하는 인자 | 서버가 `ToolContext` 로 주는 값 | 내부 호출 | 내부 상한 |
 |---|---|---|---|---|---|
-| `get_relations` | 관계 (공급·협력·경쟁·소송·지분) | `keys` | `edge_types` `direction` `workspace_keys` `anchor_keys` | `graph_tools.get_relations` → `company_service.relations_of` | `_MAX_RELATIONS_PER_COMPANY`(10) × 기업 수 |
-| `get_events` | 사건 (규제수사·분쟁소송·사고) | `keys` | `intent` `anchor_names` | `graph_tools.get_events` → `company_service.events_of` | `_MAX_EVENTS_PER_COMPANY`(10) **기업마다 따로** |
+| `get_relations` | 관계 (공급·협력·경쟁·소송·지분) | `keys` | `edge_types` `direction` `workspace_keys` `anchor_keys` | `graph_tools.get_relations` → `company_service.relations_of` | `MAX_RELATIONS_PER_COMPANY`(10) × 기업 수 |
+| `get_events` | 사건 (규제수사·분쟁소송·사고) | `keys` | `intent` `anchor_names` | `graph_tools.get_events` → `company_service.events_of` | `MAX_EVENTS_PER_COMPANY`(10) **기업마다 따로** |
 | `search_news` | 보도 근거 의미검색 | `query` `keys` | — | `search_tools.search_news` → Chroma | `_MAX_HITS`(10) |
 | `search_dart` | 공시 근거 의미검색 | `query` `keys` | — | `search_tools.search_dart` → Chroma | `_MAX_HITS`(10) |
 | `get_business_overview` | 사업보고서 「사업의 내용」 원문 | `key` | — (연도는 최신 고정) | `company_tools` → PostgreSQL | 1건 |
@@ -660,7 +660,7 @@ SK하이닉스를 제소한 기업        SUES · incoming
 ```text
 get_propagation   ★내부 primitive — "주어진 Event 의 파급을 계산"
                   fetch_propagation 노드가 Agent 뒤에서 결정론으로 호출
-                  is_risk 사건만 · 최대 3건(_MAX_RISK_EVENTS_FOR_PROPAGATION)
+                  is_risk 사건만 · 최대 3건(MAX_RISK_EVENTS_FOR_PROPAGATION)
 
 explore_impact    ★미구현 — Phase 2-B 로 미룸
                   "그래프를 걸어 다니며 탐색"하는 도구가 될 예정
@@ -848,8 +848,8 @@ except ToolError as exc:
 | 카운터 | 상한 | 근거 | 어디서 가산 |
 |---|---:|---|---|
 | `tool_calls_used` | 12 | 도구 7종이라 한 바퀴 7번 → 「한 바퀴 돌고 한 번 더」 | `run_tools` — `len(calls)` |
-| `events_used` | 40 | `_MAX_EVENTS_PER_COMPANY`(10) × 4 (워크스페이스 4곳 관찰) | `run_tools` — `get_events` 결과 수 |
-| `propagations_used` | 12 | `_MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` — `len(risky)`(**사건 수**, 2026-08-29 정정) |
+| `events_used` | 40 | `MAX_EVENTS_PER_COMPANY`(10) × 4 (워크스페이스 4곳 관찰) | `run_tools` — `get_events` 결과 수 |
+| `propagations_used` | 12 | `MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` — `len(risky)`(**사건 수**, 2026-08-29 정정) |
 | `hops_used` | 6 | — | ★**아무도 안 가산** (`explore_impact` 미구현) |
 
 ★**값 4개는 원래 실측 근거가 없는 잠정치였습니다.** Phase 8 평가셋이 그 근거를 처음 만들었습니다(평가 문서 §8).
@@ -888,7 +888,7 @@ return {..., **budget.spend(state, propagations_used=len(propagation))}
 | 상한에 닿은 케이스 | 20 중 **9** | 위험 사건 12건 이상일 때만 |
 | 「막는다」가 성립하나 | ✕ | ○ |
 
-**고친 방법 — `propagations_used=len(risky)`.** 상한값 12 의 주석이 「`_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것이 보여주듯 **세려던 단위는 처음부터 사건 수**였습니다. 즉 틀린 쪽은 상한이 아니라 세는 단위였습니다.
+**고친 방법 — `propagations_used=len(risky)`.** 상한값 12 의 주석이 「`MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것이 보여주듯 **세려던 단위는 처음부터 사건 수**였습니다. 즉 틀린 쪽은 상한이 아니라 세는 단위였습니다.
 
 ★**기존 관례와 같습니다** — `run_tools` 도 `tool_calls_used=len(calls)` 로 「요청한 것」을 셉니다(도구가 거부해도 셉니다). 예산은 **입력을 막는 장치**이므로 자른 값과 같은 값을 세는 것이 계약에 맞습니다.
 
@@ -902,7 +902,7 @@ return {..., **budget.spend(state, propagations_used=len(propagation))}
 
 ```python
 # graph_tools.get_propagation:379
-for event_id in list(event_ids)[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
+for event_id in list(event_ids)[:MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
 ```
 
 도구가 **목록 전체**에 자기 상한 3 을 먼저 겁니다(원칙 ③ — 상한은 도구 안에 있다). 예산의 12 는 「기업 4곳 × 3」을 가정했는데 도구는 기업별이 아닙니다.
@@ -956,7 +956,7 @@ for event_id in list(event_ids)[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
 |---|---|---|
 | ① 입구 게이트 | 비면 **검색조차 안 함** | `material.has_workspace` |
 | ② 앵커 판정 | 질문이 대상을 지정 안 하면 **워크스페이스가 앵커** | `query_understanding.decide_anchor` |
-| ③ 링 계산 | 관계가 워크스페이스에서 몇 걸음인지 | `retrieve_service._ring_of` |
+| ③ 링 계산 | 관계가 워크스페이스에서 몇 걸음인지 | `retrieve_service.ring_of` |
 | ④ 랭킹 | Search Layer 의 `ResultRanker` | `search/service/result_ranker.py` |
 
 ### 16-4. ★도구 범위는 `workspace_keys` 가 아닙니다
@@ -987,7 +987,7 @@ def _scope_keys(state):
 
 ## 17. Ring 탐색 / Ranking
 
-### 17-1. Ring 분류 — `retrieve_service._ring_of`
+### 17-1. Ring 분류 — `retrieve_service.ring_of`
 
 | Ring | 뜻 | 상수 |
 |---:|---|---|
@@ -1017,7 +1017,7 @@ flowchart TD
     K["도구 인자 keys"] --> RES["_resolve() → norm_name"]
     RES --> ROW["company_service.relations_of()<br/>원본 dict"]
     ROW --> HIDE["grounding_suspect 제외<br/>(wrong_type 은 남김)"]
-    HIDE --> RING["_ring_of(row, workspace_keys)<br/>Ring 0/1/2/3 으로 분류"]
+    HIDE --> RING["ring_of(row, workspace_keys)<br/>Ring 0/1/2/3 으로 분류"]
     RING --> ORD["relation_selector.order()<br/>★링 안에서만 정렬"]
     TC -->|"edge_types · direction"| ORD
     ORD --> FLAT["ring 순 → 링 내 순서로 평탄화"]

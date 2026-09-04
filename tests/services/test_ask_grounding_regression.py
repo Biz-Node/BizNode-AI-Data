@@ -29,7 +29,7 @@ import pytest
 
 from app.api.schemas import AnchorSource, RetrieveResponse
 from app.graph import prompt as graph_prompt
-from app.tools.dto import ROLE_NOTE, SOURCE_NOTE, EventDTO
+from app.tools.dto import ROLE_NOTE, EventDTO
 from app.services import claim_check, material_consistency
 
 _FIXTURE = (Path(__file__).parent / "fixtures"

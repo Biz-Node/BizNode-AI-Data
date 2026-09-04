@@ -96,7 +96,7 @@ def graph_companies():
 
     ★`company_service.names_by_keys()` 와 **같은 계약**이다 — 못 찾은 key 는
       돌려주지 않는다. 그래야 「해소됐다 ≠ 그래프에 있다」를 가리는
-      `_with_anchor_backstop()` 의 존재 확인이 대역에서도 그대로 돈다.
+      `with_anchor_backstop()` 의 존재 확인이 대역에서도 그대로 돈다.
     """
     return dict(_GRAPH_COMPANIES)
 
@@ -105,7 +105,7 @@ def graph_companies():
 def no_graph_db(request, monkeypatch, graph_companies):
     """★맨 위 선언(**DB 를 쓰지 않는다**)을 **실제로 지키게** 한다.
 
-    `plan_material` 은 `companies` 가 비면 `_with_anchor_backstop()` 을 타고,
+    `plan_material` 은 `companies` 가 비면 `with_anchor_backstop()` 을 타고,
     거기서 `company_service.names_by_keys()` → Neo4j 가 열린다. 대역이 없어
     **DB 가 떠 있는 환경에서만 조용히 통과**하던 자리다 — 재료가 빈 경로는
     드물지 않다(검색 히트가 0 이거나 상대가 Person·Organization·Event 일 때

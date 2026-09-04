@@ -262,7 +262,7 @@
 | **고려 사항** | ① 가져오면 노드가 자기 완결적<br>② 가져오면 **「옮기다가 바뀐 것」과 「원래 그랬던 것」을 못 가름** |
 | **결정** | ★**로직을 옮기지 않는다.** 노드는 `RetrieveService`·`AnswerService` 의 함수를 부르는 껍데기 |
 | **이유** | Phase 1 의 성공 기준이 **「출력이 똑같다」**입니다. 로직을 같이 옮기면 대조가 의미를 잃습니다 |
-| **결과** | `material.py` 가 `retrieve_service` 의 private 함수(`_anchor_companies`·`_companies_from`·`_hits_reflect_the_anchor`·`_with_anchor_backstop`)를 import 합니다. **로그도 같은 순서·같은 문구**로 나옵니다 |
+| **결과** | `material.py` 가 `retrieve_service` 의 private 함수(`anchor_companies`·`companies_from`·`hits_reflect_the_anchor`·`with_anchor_backstop`)를 import 합니다. **로그도 같은 순서·같은 문구**로 나옵니다 |
 | **trade-off** | private 함수 import 는 보기 좋지 않고, `retrieve_service` 가 여전히 큽니다. **그 대가로 대조가 성립**했습니다 |
 
 ---
@@ -277,7 +277,7 @@
 | **원인** | 관계를 **점수순으로 정렬해 상위 N 개만** 잘랐는데, Ring 0 의 점수가 높다는 보장이 없음 |
 | **조사 방법** | 삼성전자 관계 **526건**의 순위에서 Ring 0 이 몇 번째인지 전수 확인 (2026-08-25) |
 | **결과** | ★**Ring 0 은 137 · 225 · 414 번째.** 상위 10건만 받으면 **하나도 안 남습니다** |
-| **해결** | ★**링으로 먼저 줄을 세운 뒤에 자른다.** `_ring_of` 로 0~3 분류 → 링 순 → 링 안에서 정렬 → `ordered[:limit]` |
+| **해결** | ★**링으로 먼저 줄을 세운 뒤에 자른다.** `ring_of` 로 0~3 분류 → 링 순 → 링 안에서 정렬 → `ordered[:limit]` |
 | **검증** | Phase 8 실측 — R0 는 본 것 9건이 **전부 kept**, 최종 인용 1건 |
 
 ★**「hard filter 가 아니다」를 지켰습니다** — Ring 3(워크스페이스와 안 닿음)도 **버리지 않고** 순서만 뒤로 보냅니다.
@@ -290,7 +290,7 @@
 |---|---|
 | **현상** | 없음 — ★**아무 증상이 없었습니다.** 예외도, 경고도, 로그 변화도 없이 정렬이 입력 순서를 그대로 돌려주고 있었습니다 |
 | **원인** | Phase 1.5 의 `fetch_relations` 는 `edge_types`·`direction` 을 **인자로** 넘겼는데, Phase 2 Agent 배선에서 도구 4원칙 ① 을 지키려고 **인자에서 빼고 `ToolContext` 로 옮기지 않았습니다.**<br>`matched = frozenset(edge_types or ())` → 언제나 빈 집합<br>`if not matched: return ordered` → 정렬이 통째로 꺼짐 |
-| **조사 방법** | ★**증상이 아니라 「상속 확인」으로 찾았습니다.** 「1.5차가 옮긴 세 단계(링 분류 · 링 순 줄세우기 · 정렬 뒤 자르기)가 Agent 배선 뒤에도 남아 있나」를 코드로 하나씩 확인했습니다 (현황서 §8-18)<br>① `_ring_of` 를 거치나 → **거친다**<br>② 링 로그가 찍히나 → **찍힌다 (다만 이름이 `tools.relations rings` 로 달라져 `/ask` 로그를 `relations.rings` 로 grep 하면 0건)**<br>③ 자르기가 정렬 뒤인가 → **뒤다**<br>④ `workspace_keys` 가 도구까지 오나 → **온다**<br>→ ★**빠진 것은 링이 아니라 「링 안의 의도 정렬」** |
+| **조사 방법** | ★**증상이 아니라 「상속 확인」으로 찾았습니다.** 「1.5차가 옮긴 세 단계(링 분류 · 링 순 줄세우기 · 정렬 뒤 자르기)가 Agent 배선 뒤에도 남아 있나」를 코드로 하나씩 확인했습니다 (현황서 §8-18)<br>① `ring_of` 를 거치나 → **거친다**<br>② 링 로그가 찍히나 → **찍힌다 (다만 이름이 `tools.relations rings` 로 달라져 `/ask` 로그를 `relations.rings` 로 grep 하면 0건)**<br>③ 자르기가 정렬 뒤인가 → **뒤다**<br>④ `workspace_keys` 가 도구까지 오나 → **온다**<br>→ ★**빠진 것은 링이 아니라 「링 안의 의도 정렬」** |
 | **영향 규모** | `edge_types` 는 `QueryRouter` 의 **결정론적 키워드 규칙**이 채웁니다. Search 평가셋 20질의를 라우터에 먹여 보니 **12건(60%)에서 잡혔습니다** |
 | **해결** | `ToolContext` 에 두 자리 신설 → `_scope_of()` 가 `state["query"]` 에서 실어 보냄 → `agent_tools.get_relations` 가 `ctx` 에서 읽어 넘김.<br>★**바꾼 파일은 셋뿐**이고 `graph_tools.py`·`relation_selector.py` 는 **무수정** — 받는 쪽은 처음부터 멀쩡했고 **비어 있던 건 보내는 쪽**이었습니다.<br>★**Agent 인자는 안 늘렸습니다** — 4원칙 ① 을 안 깹니다 |
 | **검증** | 실 Neo4j · 삼성전자 526관계 · **LLM 미호출** · 라우터가 `edge_types` 를 잡는 고유 질의 11건<br>`1.5차 경로 vs 고친 경로 → 순서까지 11/11 동일` ← ★**개선이 아니라 복구**<br>`1.5차 경로 vs 고치기 전 → 8건에서 순서가 다름` ← 회귀의 크기<br>회귀 테스트 **6건** 신설 (`tests/graph/test_relation_intent_order.py`) |
@@ -323,7 +323,7 @@
 | **현상** | `budget_exhausted` 플래그가 20 케이스 중 **9건**에서 켜지는데, **Agent 루프가 잘린 것은 0건** |
 | **조사 방법** | 평가셋이 카운터별 최대 사용량을 표로 냄 → `propagations_used` 만 상한을 **25배** 초과 |
 | **원인** | `fetch_propagation` 이 **입력(파급을 계산할 사건 수)** 을 잘라 놓고 **출력(파급 행 수)** 을 씁니다:<br>`risky = risky[:room]` → 입력 절단<br>`budget.spend(propagations_used=len(propagation))` → **출력 계수**<br>사건 하나가 수십 행을 내므로 잘라도 카운터는 상한을 넘습니다 |
-| **근거** | 상한값 12 의 주석이 「`_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 **4배**」 → ★**세려던 단위는 사건 수**였습니다 |
+| **근거** | 상한값 12 의 주석이 「`MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 **4배**」 → ★**세려던 단위는 사건 수**였습니다 |
 | **현재 피해** | ★**무해** — 플래그가 루프 **뒤에** 켜지고 그 뒤로 아무도 안 읽습니다 |
 | **진짜 문제** | 「막는다」고 적힌 예산이 **실제로는 못 막고 있습니다** |
 | **해결** | Phase 8 에서는 일부러 안 고쳤습니다(동작을 고정한 채 재는 단계). ★**Phase 10 에서 고쳤습니다**(2026-08-29) — `propagations_used=len(risky)`(사건 수). 자른 값과 센 값이 같아집니다 |

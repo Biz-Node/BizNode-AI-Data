@@ -146,15 +146,15 @@ def test_both_paths_pick_the_same_events(both_paths):
 def test_both_paths_apply_the_same_per_company_limit(both_paths):
     """★상한은 **기업마다 따로** 걸린다 — 한 줄로 세워 자르면 사건 많은 기업이
     다 먹는다. 두 사본이 같은 상한을 같은 방식으로 써야 한다."""
-    from app.services.retrieve_service import _MAX_EVENTS_PER_COMPANY
+    from app.services.retrieve_service import MAX_EVENTS_PER_COMPANY
 
-    n = _MAX_EVENTS_PER_COMPANY + 5
+    n = MAX_EVENTS_PER_COMPANY + 5
     base, tool = both_paths({
         "삼성전자": [_event_row(f"evt_s{i:02d}", [f"ev_s{i:02d}"]) for i in range(n)],
         "SK하이닉스": [_event_row(f"evt_h{i:02d}", [f"ev_h{i:02d}"]) for i in range(n)],
     })
 
-    assert len(base) == len(tool) == _MAX_EVENTS_PER_COMPANY * 2
+    assert len(base) == len(tool) == MAX_EVENTS_PER_COMPANY * 2
     assert {e.event_id for e in base} == {e.event_id for e in tool}
 
 

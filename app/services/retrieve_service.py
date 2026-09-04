@@ -51,13 +51,13 @@ _MAX_LOGGED_EVIDENCE = 10
 # 검색 히트 수만큼 Neo4j 왕복이 생기므로(설계서 §26) 일단 막아 두되, **잘라낸
 # 사실을 로그로 남긴다** — 조용히 자르면 「그게 전부」로 읽힌다.
 _MAX_COMPANIES = 5
-_MAX_RELATIONS_PER_COMPANY = 10
-_MAX_RISK_EVENTS_FOR_PROPAGATION = 3
+MAX_RELATIONS_PER_COMPANY = 10
+MAX_RISK_EVENTS_FOR_PROPAGATION = 3
 # ★사건에는 상한이 **없었다**(Step2, 2026-08-23). 실측으로 「삼성전자와
 #   SK하이닉스의 담합 소송」이 사건 155건 → 근거 205건 → 34,430자를 프롬프트에
 #   실었다. 기업마다 따로 적용한다 — 전체 상한 하나로 두면 사건 많은 기업이
 #   다 먹는다. 역시 실측 근거 없는 잠정치다.
-_MAX_EVENTS_PER_COMPANY = 10
+MAX_EVENTS_PER_COMPANY = 10
 # ★앵커 없는 질문의 사건 상한 — **한 줄로 세운 전체**에 건다(2026-09-02).
 #   기업별 상한과 **일부러 같은 값**이다. 앵커 없는 목록도 「한 화면치 재료」라는
 #   같은 역할이고, 값을 갈라 두려면 그 근거가 먼저다.
@@ -66,7 +66,7 @@ _MAX_EVENTS_PER_COMPANY = 10
 _MAX_GLOBAL_EVENTS = 10
 
 
-def _default_embed(texts: list[str]):
+def default_embed(texts: list[str]):
     """지연 로딩 — 임포트 시점에 OpenAI 클라이언트를 만들지 않는다. 테스트는
     이 이름을 monkeypatch 해서 끈다(`None` 이면 유사도 없이 규칙만 쓴다).
 
@@ -109,7 +109,7 @@ def is_anchorless(decision: AnchorDecision) -> bool:
     return decision.source is AnchorSource.ANCHORLESS
 
 
-def _match_type_of(result: SearchResult,
+def match_type_of(result: SearchResult,
                    decision: Optional[AnchorDecision] = None) -> MatchType:
     """★**앵커가 없으면 `EXACT` 가 아니다**(2026-09-02).
 
@@ -130,7 +130,7 @@ def _match_type_of(result: SearchResult,
     return _MATCH_TYPE_BY_MODE[result.mode]
 
 
-def _companies_from(result: SearchResult) -> list[RelationEndpoint]:
+def companies_from(result: SearchResult) -> list[RelationEndpoint]:
     """검색 히트에서 **Company 만** 추린다(설계서 §9).
 
     ★`entity_id` 가 항상 `corp_code` 라고 가정하지 않는다. GraphSearcher 는
@@ -164,7 +164,7 @@ _RING_OUTSIDE_OTHER = 2    # 워크스페이스 ↔ 비-Company (사건·인물�
 _RING_UNRELATED = 3        # 워크스페이스와 닿지 않음 — ★버리지 않는다
 
 
-def _ring_of(row: dict, workspace_keys: set[str]) -> int:
+def ring_of(row: dict, workspace_keys: set[str]) -> int:
     """이 관계가 워크스페이스에서 몇 링 떨어져 있나. **작을수록 안쪽.**
 
     ★`Relation` 을 만들기 **전에** 원본 dict 로 판정한다 — 삼성전자 관계가 526건이라
@@ -181,7 +181,7 @@ def _ring_of(row: dict, workspace_keys: set[str]) -> int:
             else _RING_OUTSIDE_OTHER)
 
 
-def _anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
+def anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
     """앵커 자신을 재료 기업으로 삼는다(설계서 §3 material anchor).
 
     ★앵커 기업 수 상한은 **기존 `_MAX_COMPANIES` 를 그대로** 쓴다 — 새 숫자를
@@ -194,7 +194,7 @@ def _anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
     return companies[:_MAX_COMPANIES]
 
 
-def _with_anchor_backstop(companies: list[RelationEndpoint],
+def with_anchor_backstop(companies: list[RelationEndpoint],
                           decision: AnchorDecision) -> list[RelationEndpoint]:
     """재료 기업이 **하나도 안 남았을 때** 앵커 기업으로 메운다(현황서 §5-16).
 
@@ -231,7 +231,7 @@ def _with_anchor_backstop(companies: list[RelationEndpoint],
     return kept
 
 
-def _hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
+def hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
     """검색 히트를 재료로 써도 되나.
 
     ★**두 경우다.**
@@ -264,7 +264,7 @@ def _hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bo
     return decision.source is AnchorSource.QUERY and bool(query.resolved_entities)
 
 
-def _anchor_names_for(query: SearchQuery, decision: AnchorDecision,
+def anchor_names_for(query: SearchQuery, decision: AnchorDecision,
                       companies: list[RelationEndpoint]) -> list[str]:
     """사건 랭킹에서 **라벨과 질문 양쪽에서 떼어낼 기업명**(`evidence_selector`).
 
@@ -350,7 +350,7 @@ def select_global_events(question: str, *, embed,
     return kept
 
 
-def _companies_of_events(events: list[Event]) -> list[RelationEndpoint]:
+def companies_of_events(events: list[Event]) -> list[RelationEndpoint]:
     """선택된 사건에서 **기업을 역산한다**(설계 Q3). 순서 보존 · key 중복 제거.
 
     ★**자르지 않는다.** `_MAX_COMPANIES` 를 여기 걸면 안 된다 — 이 목록이 곧
@@ -377,7 +377,7 @@ class RetrieveService:
                  *, embed=None) -> None:
         self._orchestrator = orchestrator or build_orchestrator()
         # 주입용 — 테스트가 OpenAI 없이 돌 수 있어야 한다. None 이면 호출 시점에
-        # 모듈 전역 `_default_embed` 를 쓴다(monkeypatch 가 먹도록 늦게 읽는다).
+        # 모듈 전역 `default_embed` 를 쓴다(monkeypatch 가 먹도록 늦게 읽는다).
         self._embed = embed
 
     # ── ②·①b — 검색하고 앵커를 정한다 ──────────────────────────────────
@@ -436,7 +436,7 @@ class RetrieveService:
             log.info("ask.unresolved named=%r — 재료를 만들지 않는다", decision.named)
             return decision, None
         # ★`/ask` 에서만 앵커가 재료를 정한다(설계서 §14-5) — `/retrieve` 는 무변경.
-        use_hits = _hits_reflect_the_anchor(decision, query)
+        use_hits = hits_reflect_the_anchor(decision, query)
         return decision, self._assemble(request, query, result, decision,
                                         use_hits=use_hits)
 
@@ -449,22 +449,22 @@ class RetrieveService:
             #   전에는 검색 히트에서 Company 만 추려 재료 기업을 정했는데, 앵커
             #   없는 질문에서 그 기업 5곳은 사실상 임의로 정해진 것이었다(F1) —
             #   「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다.
-            #   히트에 실려 오던 Event 노드는 `_companies_from()` 이 통째로 버려
+            #   히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려
             #   **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
-            embed = self._embed if self._embed is not None else _default_embed
+            embed = self._embed if self._embed is not None else default_embed
             events = select_global_events(request.question, embed=embed)
-            companies = _companies_of_events(events)
+            companies = companies_of_events(events)
         else:
             if use_hits:
-                companies = _companies_from(result)
+                companies = companies_from(result)
             else:
                 # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-                companies = _anchor_companies(decision)
+                companies = anchor_companies(decision)
                 log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
                          [c.key for c in companies], len(result.hits))
             # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
             #   이미 앵커가 `companies` 라 무동작이다.
-            companies = _with_anchor_backstop(companies, decision)
+            companies = with_anchor_backstop(companies, decision)
             events = self._events_of(companies, request.question, query, decision)
         propagation = self._propagation_of(events)
         relations = self._relations_of(companies, set(request.workspace_keys),
@@ -479,7 +479,7 @@ class RetrieveService:
 
         return RetrieveResponse(
             question=request.question,
-            match_type=_match_type_of(result, decision),
+            match_type=match_type_of(result, decision),
             anchors=decision.anchors,
             companies=companies,
             events=events,
@@ -507,10 +507,10 @@ class RetrieveService:
           `companies` 에 없으므로 섞이지 않는다.
         """
         # ★**앵커 없는 경로에서 이 목록이 비면 순위가 퇴행한다** (현황서 §5-23).
-        #   왜 셋째 갈래(재료 기업 이름)가 필요한지는 `_anchor_names_for` 에 적었다.
+        #   왜 셋째 갈래(재료 기업 이름)가 필요한지는 `anchor_names_for` 에 적었다.
         #   ★계산식은 **그 함수 한 곳**에만 둔다 — `/ask` 그래프의 `plan_material`
         #     이 같은 함수를 부른다.
-        anchor_names = _anchor_names_for(query, decision, companies)
+        anchor_names = anchor_names_for(query, decision, companies)
         intent = evidence_selector.intent_of(question, anchor_names)
         matched = evidence_selector.matched_event_types(intent)
         # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). 「리스크」에 걸리는
@@ -524,7 +524,7 @@ class RetrieveService:
         by_company = [(c, [Event(**row) for row in company_service.events_of(c.key)])
                       for c in companies]
         # 유사도는 **한 번에** 구한다 — 기업마다 부르면 왕복이 기업 수만큼 는다.
-        embed = self._embed if self._embed is not None else _default_embed
+        embed = self._embed if self._embed is not None else default_embed
         sims = evidence_selector.similarities(
             [e for _, events in by_company for e in events],
             intent=intent, embed=embed, anchor_names=anchor_names)
@@ -534,7 +534,7 @@ class RetrieveService:
         dropped = 0
         for _company, events in by_company:
             kept, cut = evidence_selector.select(
-                events, matched=matched, sims=sims, limit=_MAX_EVENTS_PER_COMPANY,
+                events, matched=matched, sims=sims, limit=MAX_EVENTS_PER_COMPANY,
                 risk_wanted=risk_wanted, recent_since=recent_since)
             dropped += len(cut)
             for event in kept:
@@ -568,11 +568,11 @@ class RetrieveService:
           응답 스키마와 모양이 다르다.
         """
         risky = [e for e in events if e.is_risk]
-        if len(risky) > _MAX_RISK_EVENTS_FOR_PROPAGATION:
+        if len(risky) > MAX_RISK_EVENTS_FOR_PROPAGATION:
             log.info("risk events truncated %d -> %d",
-                     len(risky), _MAX_RISK_EVENTS_FOR_PROPAGATION)
+                     len(risky), MAX_RISK_EVENTS_FOR_PROPAGATION)
         out: list[Propagation] = []
-        for event in risky[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:
+        for event in risky[:MAX_RISK_EVENTS_FOR_PROPAGATION]:
             rows = relation_service.event_impact(event.event_id)
             if rows is None:      # 사건 노드를 못 찾음 — 조용히 0건으로 두지 않는다
                 log.warning("event_impact miss: %s", event.event_id)
@@ -619,7 +619,7 @@ class RetrieveService:
                 if row["edge_id"] in seen:
                     continue
                 seen.add(row["edge_id"])
-                by_ring.setdefault(_ring_of(row, workspace_keys), []).append(row)
+                by_ring.setdefault(ring_of(row, workspace_keys), []).append(row)
 
         # ★질문이 무슨 관계를 물었나 — 지금까지 `SearchQuery` 에 와 있는데도 한
         #   번도 참조되지 않던 신호다(현황서 §5-4).
@@ -637,7 +637,7 @@ class RetrieveService:
         #   범위와 사건을 위한 변경이지 **관계를 늘리려던 것이 아니다.** 씌우지
         #   않았더니 관계 90~100건 · 재료 94,921자로 앵커 경로(48,719자)의 두 배가
         #   됐다(실측). 상한은 예전 그대로 `_MAX_COMPANIES` 곱까지다.
-        limit = _MAX_RELATIONS_PER_COMPANY * max(min(len(companies), _MAX_COMPANIES), 1)
+        limit = MAX_RELATIONS_PER_COMPANY * max(min(len(companies), _MAX_COMPANIES), 1)
         kept, cut = ordered[:limit], ordered[limit:]
 
         log.info("relations.rings %s -> kept=%d cut=%d matched=%s direction=%s",

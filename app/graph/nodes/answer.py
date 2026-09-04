@@ -22,7 +22,7 @@ from app.llm.schemas import SAFE_FALLBACK, AskAnswer
 from app.services import claim_check, evidence_selector
 from app.graph import prompt
 from app.services.query_understanding import AnchorDecision
-from app.services.retrieve_service import _default_embed
+from app.services.retrieve_service import default_embed
 
 log = trace_logger(__name__)
 
@@ -141,7 +141,7 @@ def check_state_claims(state: AskState, claims: Optional[list] = None) -> list:
         # ★오귀속 관측 — 「근거가 어느 기업 얘기인지 확인하지 않고 워크스페이스
         #   기업 중 하나로 귀속시키는」 실패를 센다.
         workspace_names=list(decision.workspace_names.values()),
-        embed=_default_embed, intent=intent,
+        embed=default_embed, intent=intent,
         event_types_by_evidence=prompt.event_types_by_evidence(state["events"]),
         matched_event_types=evidence_selector.matched_event_types(intent))
 

@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from app.core.config import CHROMA_HOST, CHROMA_PORT
 from app.core.database import neo4j_session, postgres_connection
-from app.services.company_service import _relation
+from app.services.company_service import relation_row
 
 # 원문 안에 URL 이 섞여 있다 — 「… 이다.  — 「제목」 https://...」
 _URL = re.compile(r"https?://\S+")
@@ -284,7 +284,7 @@ def relation_detail(edge_id: str) -> Optional[dict]:
     src = {"key": r["akey"], "name": r["aname"], "label": r["alabel"]}
     tgt = {"key": r["bkey"], "name": r["bname"], "label": r["blabel"]}
 
-    rel = _relation(src, tgt, r["t"], props, eid=r["eid"])
+    rel = relation_row(src, tgt, r["t"], props, eid=r["eid"])
     # ★근거 검증에서 걸렸거나 종료된 관계는 **목록에 안 나오니 상세도 없다.**
     #   여기서 통과시키면 화면이 감춘 관계를 열 수 있게 된다.
     if rel is None:

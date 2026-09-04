@@ -29,7 +29,7 @@ def test_anchor_source_has_exactly_four_values():
           _SYSTEM_PROMPT             그 대상일 때의 지시. ★[대상 지정 없음] 절의
                                      범위와 최종검증 12번을 함께 좁혀야 한다
           decide_anchor()            판정 분기와 **순서**
-          _hits_reflect_the_anchor() 그 대상일 때 검색 히트를 재료로 쓰나
+          hits_reflect_the_anchor() 그 대상일 때 검색 히트를 재료로 쓰나
           halt_no_material()         문구 분기
 
     ★**`workspace` 가 `anchorless` 로 바뀌었다**(최종 설계 §17-3). 이름만 바뀐

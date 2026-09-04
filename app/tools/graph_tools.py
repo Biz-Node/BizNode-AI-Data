@@ -32,7 +32,7 @@ from app.core.trace import trace_logger
 from app.services import (company_service, evidence_selector, relation_selector,
                           relation_service)
 from app.services.company_service import _HIDE
-from app.services.retrieve_service import _ring_of
+from app.services.retrieve_service import ring_of
 from app.tools import keys as keys_module, scope
 from app.tools.dto import (CAUTION_NEWS_DEVELOPS, DIRECTION_NOTE, FRESHNESS_WEIGHT,
                            ROLE_NOTE, SOURCE_NOTE, STATED_NOTE,
@@ -44,8 +44,8 @@ log = trace_logger(__name__)
 # ★상한은 **값을 그대로** 가져온다. 새로 쓰면 두 벌이 되어 조용히 갈린다 —
 #   `retrieve_service` 의 그 상수를 그대로 import 한다(같은 객체다).
 from app.services.retrieve_service import (  # noqa: E402  (상한 출처를 붙여 둔다)
-    _MAX_EVENTS_PER_COMPANY, _MAX_RELATIONS_PER_COMPANY,
-    _MAX_RISK_EVENTS_FOR_PROPAGATION)
+    MAX_EVENTS_PER_COMPANY, MAX_RELATIONS_PER_COMPANY,
+    MAX_RISK_EVENTS_FOR_PROPAGATION)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -121,7 +121,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
         원시 `grounding_suspect` 로 거르면 이 58건이 함께 지워진다.
 
       ★실측(2026-08-28): 이 제외로 **추가로 빠지는 관계는 0건**이다.
-        `company_service._relation()` 이 이미 같은 `_HIDE` 를 적용해서
+        `company_service.relation_row()` 이 이미 같은 `_HIDE` 를 적용해서
         suspect 507건 중 449건이 Service 에서 빠지고 `wrong_type` 58건만
         남는다. **그래도 여기서 다시 본다** — 위쪽 규칙이 느슨해지면 이 도구가
         조용히 따라 느슨해지면 안 되기 때문이다.
@@ -144,7 +144,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                 #   0 이 아니면 위쪽 규칙이 바뀐 것이다.
                 suspect_dropped += 1
                 continue
-            by_ring.setdefault(_ring_of(row, set(ctx.workspace_keys)), []).append(row)
+            by_ring.setdefault(ring_of(row, set(ctx.workspace_keys)), []).append(row)
     if suspect_dropped:
         log.info("tools.relations grounding_suspect 제외 %d건 "
                  "(Service 가 이미 빼는 것이 정상 — 0 이 아니면 위쪽 규칙이 바뀐 것)",
@@ -164,7 +164,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                for row in relation_selector.order(
                    by_ring[ring], matched=matched, direction=direction,
                    anchor_keys=set(ctx.anchor_keys))]
-    limit = _MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)   # ③ 인자가 아니다
+    limit = MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)   # ③ 인자가 아니다
     kept, cut = ordered[:limit], ordered[limit:]
     # ★관측만 한다 — **자르는 규칙도 순서도 건드리지 않는다.** 이 줄을 지워도
     #   `kept` 는 한 건도 안 바뀐다. Phase 8 은 ranking 을 고정한 채 재는 단계다.
@@ -286,7 +286,7 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     for _norm, rows in by_company:
         kept, _cut = evidence_selector.select(
             [_Row(r) for r in rows], matched=matched, sims=sims,
-            limit=_MAX_EVENTS_PER_COMPANY,             # ③ 인자가 아니다
+            limit=MAX_EVENTS_PER_COMPANY,             # ③ 인자가 아니다
             risk_wanted=risk_wanted, recent_since=recent_since)
         for wrapped in kept:
             row = wrapped.raw
@@ -365,10 +365,10 @@ class _Row:
 
 def _embed():
     """`retrieve_service` 와 **같은 임베더**를 늦게 읽는다 — 테스트가
-    `_default_embed` 를 monkeypatch 해서 끌 수 있어야 한다."""
+    `default_embed` 를 monkeypatch 해서 끌 수 있어야 한다."""
     from app.services import retrieve_service
 
-    return retrieve_service._default_embed
+    return retrieve_service.default_embed
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -385,7 +385,7 @@ def get_propagation(event_ids: Sequence[str]) -> list[PropagationDTO]:
       던지면 사건 하나가 없다고 나머지 파급이 통째로 사라져 재료가 달라진다.
     """
     out: list[PropagationDTO] = []
-    for event_id in list(event_ids)[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:   # ③
+    for event_id in list(event_ids)[:MAX_RISK_EVENTS_FOR_PROPAGATION]:   # ③
         rows = relation_service.event_impact(event_id)
         if rows is None:
             # 사건 노드를 못 찾음 — 조용히 0건으로 두지 않는다

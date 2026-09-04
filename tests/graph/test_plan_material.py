@@ -76,7 +76,7 @@ def stub_global_events(monkeypatch):
     company = MagicMock()
     company.global_events.return_value = []
     monkeypatch.setattr(rs_module, "company_service", company)
-    monkeypatch.setattr(material_module, "_default_embed", None)
+    monkeypatch.setattr(material_module, "default_embed", None)
     return company
 
 
@@ -123,7 +123,7 @@ def test_anchor_names_fall_back_to_decision_anchors(request_):
 
 def test_anchor_names_fall_back_to_material_companies_when_anchorless(
         request_, stub_global_events):
-    """★**셋째 갈래**(최종 설계 §17-3 이 열었다 · `_anchor_names_for`).
+    """★**셋째 갈래**(최종 설계 §17-3 이 열었다 · `anchor_names_for`).
 
     `anchorless` 는 `resolved_entities` 도 `decision.anchors` 도 비어 있다.
     거기서 멈추면 §5-23 이 고친 퇴행이 그대로 돌아온다 — 라벨에 든 기업명이
@@ -217,7 +217,7 @@ def test_anchorless_takes_its_material_from_global_events(request_, stub_global_
     그걸 폐기한 뒤로는 **검색 히트**가 재료였다. 그런데 앵커 없는 질의의 히트는
     관계 freshness 순으로 채운 것이라 기업이 사실상 임의로 정해졌다 —
     「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다(F1).
-    히트에 실려 오던 Event 노드는 `_companies_from()` 이 통째로 버려, **살아 있는
+    히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려, **살아 있는
     유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
 
     ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3). 그래서 아래 두 가지가
@@ -278,7 +278,7 @@ def test_backstop_fills_companies_when_hits_yield_none(request_):
       막으려던 것이 「앵커는 멀쩡한데 재료가 0」이라, 그게 곧 계약이다.
       `backstop` 플래그가 State 에서 빠져도 이 계약은 그대로 검사된다.
 
-    ★`_with_anchor_backstop()` 을 **대역으로 바꾸지 않는다.** 그러면 백스톱이
+    ★`with_anchor_backstop()` 을 **대역으로 바꾸지 않는다.** 그러면 백스톱이
       실제로 무엇을 넣는지는 아무도 안 보게 된다. 대역은 그 함수가 존재 확인에
       쓰는 DB 한 자리(`company_service.names_by_keys`)뿐이고, 그건 conftest 의
       `graph_companies` 가 세운다.

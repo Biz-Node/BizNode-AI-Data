@@ -114,7 +114,7 @@ def total_embed_misses(passes: Passes) -> Spread:
       크면 위의 변동폭 중 **얼마가 Agent 때문인지 가를 수 없다.**
 
     ★`EMBED_CACHE_STRICT=1` 은 이걸 0 으로 만드는 장치가 **아니다.**
-      `_default_embed` 를 타는 경로만 걸리고, `search_news`·`search_dart` 의
+      `default_embed` 를 타는 경로만 걸리고, `search_news`·`search_dart` 의
       질의는 `ChromaStore.query()` 로 캐시를 우회한다 — 그 질의문은 LLM 이
       매번 새로 쓴다(`docs/BizNode_Agent_Evaluation.md` §10-7).
     """

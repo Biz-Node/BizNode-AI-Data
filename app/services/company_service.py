@@ -200,7 +200,7 @@ def _verdict(p: dict) -> str:
     return p.get("grounding_stage1") or "unfounded"
 
 
-def _relation(src: dict, tgt: dict, etype: str, p: dict,
+def relation_row(src: dict, tgt: dict, etype: str, p: dict,
               today: Optional[date] = None, *, eid: str = "") -> Optional[dict]:
     """엣지 속성 → API 관계. **감출 것은 여기서 감춘다.** 빼야 하면 None."""
     # ★자기 자신을 잇는 엣지는 **그릴 수 없다.** 힘기반 레이아웃이 깨지고
@@ -455,7 +455,7 @@ def relations_of(key: str, *, limit: Optional[int] = None,
         me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
         other = {"key": r["okey"], "name": r["oname"], "label": r["olabel"]}
         src, tgt = (me, other) if r["outgoing"] else (other, me)
-        rel = _relation(src, tgt, r["t"], r["p"] or {}, eid=r["eid"])
+        rel = relation_row(src, tgt, r["t"], r["p"] or {}, eid=r["eid"])
         if rel:
             out.append(rel)
     out.sort(key=lambda x: -x["score"])
@@ -726,7 +726,7 @@ RETURN properties(c) AS p,
 
 # ★자기 자신을 소유할 수 없다. 노드 병합이 만드는 자기 루프를 여기서도 막는다
 #   (2026-08-17 실측: 로보티즈가 자기 자신의 자회사로 들어가 있다).
-#   워크스페이스 그래프는 `_relation()` 이 막지만 **지배구조는 다른 경로**라
+#   워크스페이스 그래프는 `relation_row()` 이 막지만 **지배구조는 다른 경로**라
 #   따로 걸러야 한다 — 방어는 한 곳에만 두면 새는 데가 생긴다.
 _OWN_Q = """
 MATCH (a:Company)-[r:OWNS_STAKE_IN]->(b:Company)
@@ -1003,7 +1003,7 @@ def company_summary(key: str, workspace_keys: list[str]) -> Optional[dict]:
             me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
             other = {"key": r["okey"], "name": r["oname"], "label": "Company"}
             src, tgt = (me, other) if r["outgoing"] else (other, me)
-            rel = _relation(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
+            rel = relation_row(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
             if rel:
                 in_ws.append(rel)
         in_ws.sort(key=lambda x: -x["score"])
@@ -1121,7 +1121,7 @@ def company_graph(key: str, depth: int = 1, max_nodes: int = 60,
     for r in rows:
         other = {"key": r["okey"], "name": r["oname"], "label": r["olabel"]}
         src, tgt = (me, other) if r["outgoing"] else (other, me)
-        rel = _relation(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
+        rel = relation_row(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
         if rel:
             prepared.append((rel, r))
     prepared.sort(key=lambda x: -x[0]["score"])

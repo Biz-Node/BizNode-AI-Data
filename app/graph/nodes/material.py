@@ -26,11 +26,11 @@ from app.services import (evidence_selector, query_understanding,
                           workspace_service)
 from app.tools import graph_tools
 from app.graph import budget
-from app.services.retrieve_service import (RetrieveService, _anchor_companies,
-                                           _anchor_names_for, _companies_from,
-                                           _companies_of_events, _default_embed,
-                                           _hits_reflect_the_anchor,
-                                           _match_type_of, _with_anchor_backstop,
+from app.services.retrieve_service import (RetrieveService, anchor_companies,
+                                           anchor_names_for, companies_from,
+                                           companies_of_events, default_embed,
+                                           hits_reflect_the_anchor,
+                                           match_type_of, with_anchor_backstop,
                                            is_anchorless, select_global_events)
 from search.dto.search_request import SearchRequest
 
@@ -120,7 +120,7 @@ def resolve_anchor(state: AskState) -> AskState:
     #   정해진다 — 앵커가 없으면 `EXACT` 가 아니다(F1). `search` 노드에 있던
     #   것을 판정이 나는 이 자리로 옮겼다.
     return {"decision": decision,
-            "match_type": _match_type_of(state["result"], decision)}
+            "match_type": match_type_of(state["result"], decision)}
 
 
 def is_resolved(state: AskState) -> str:
@@ -153,14 +153,14 @@ def plan_material(state: AskState) -> AskState:
       그걸 읽어도 되는 값으로 오해한다. 두 판정이 실제로 한 일은 `companies`
       한 곳에 전부 드러나므로, 검증도 그쪽을 본다.
 
-    ★`companies` 의 `key` 형태를 **바꾸지 않는다.** `_companies_from()` 이
+    ★`companies` 의 `key` 형태를 **바꾸지 않는다.** `companies_from()` 이
       `hit.entity_id` 를 그대로 싣는데 그게 `corp_code` 일 수도 `norm_name` 일
       수도 있다(실측: 「원익아이피에스」·「램리서치」는 `corp_code` 가 없다).
       `company_service.events_of()` 는 둘 다 받지만 **틀린 값을 주면 예외가
       아니라 조용히 0건**이라, 정규화하거나 변환하면 「사건이 없다」로 잘못
       읽힌다. 넘어온 형태 그대로 State 에 싣는다.
 
-    ★`anchor_names`·`intent` 는 **retrieve 쪽 계산식**이다(`_anchor_names_for`).
+    ★`anchor_names`·`intent` 는 **retrieve 쪽 계산식**이다(`anchor_names_for`).
       두 경로가 같은 함수를 부른다 — 사본을 두면 「무엇으로 골랐나」와 「무엇으로
       검사하나」가 갈린다(`state.py` 의 `anchor_names` 주석).
     """
@@ -173,27 +173,27 @@ def plan_material(state: AskState) -> AskState:
         #   `/retrieve` 와 **같은 함수**를 부르고, 고른 결과를 `event_pairs` 로
         #   실어 도구가 다시 고르지 않게 한다. 전에는 히트에서 Company 만 추려
         #   재료 기업을 정했는데 그 5곳이 사실상 임의였다(F1) — 히트에 실려 오던
-        #   Event 노드는 `_companies_from()` 이 통째로 버렸다(F4).
-        events = select_global_events(request.question, embed=_default_embed)
-        companies = _companies_of_events(events)
+        #   Event 노드는 `companies_from()` 이 통째로 버렸다(F4).
+        events = select_global_events(request.question, embed=default_embed)
+        companies = companies_of_events(events)
         event_pairs = [(e.event_id, e.company.key) for e in events if e.company]
         log.info("material.anchorless events=%d companies=%d",
                  len(event_pairs), len(companies))
     else:
-        use_hits = _hits_reflect_the_anchor(decision, query)
+        use_hits = hits_reflect_the_anchor(decision, query)
         if use_hits:
-            companies = _companies_from(result)
+            companies = companies_from(result)
         else:
             # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-            companies = _anchor_companies(decision)
+            companies = anchor_companies(decision)
             log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
                      [c.key for c in companies], len(result.hits))
 
         # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
         #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이다.
-        companies = _with_anchor_backstop(companies, decision)
+        companies = with_anchor_backstop(companies, decision)
 
-    anchor_names = _anchor_names_for(query, decision, companies)
+    anchor_names = anchor_names_for(query, decision, companies)
     intent = evidence_selector.intent_of(request.question, anchor_names)
 
     # ★탐색 예산을 **여기서 연다.** Agent 가 도구를 부르기 전 마지막 결정론
@@ -222,7 +222,7 @@ def fetch_propagation(state: AskState) -> AskState:
     risky = [e.event_id for e in state["events"] if e.is_risk]
     # ★**backstop 절단이다 — 지금은 한 번도 물지 않는다**(2026-08-29 실측).
     #   `get_propagation` 이 목록 전체에 자기 상한 3 을 먼저 걸어
-    #   (`_MAX_RISK_EVENTS_FOR_PROPAGATION`) 늘 그쪽이 더 빡빡하다. 그래도 남기는
+    #   (`MAX_RISK_EVENTS_FOR_PROPAGATION`) 늘 그쪽이 더 빡빡하다. 그래도 남기는
     #   이유는 도구 상한이 올라가면 이 줄이 그때 무는 자리이기 때문이다.
     #
     # ★`propagations_used` 는 **소진 판정 대상이 아니다**(`budget._CAPS`). 여기는
@@ -240,7 +240,7 @@ def fetch_propagation(state: AskState) -> AskState:
     #   「막는다」고 적힌 예산이 자기 카운터로는 넘긴 셈이라, `budget_exhausted`
     #   가 루프가 잘리지도 않았는데 켜졌다.
     #
-    #   상한 12 의 근거부터 사건 수다 — `_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의
+    #   상한 12 의 근거부터 사건 수다 — `MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의
     #   4배(`budget.py`). 즉 틀린 쪽은 상한이 아니라 **세는 단위**였다.
     #
     # ★출력에서 되짚지 않는 이유 — `len({p.event_id for p in propagation})` 는

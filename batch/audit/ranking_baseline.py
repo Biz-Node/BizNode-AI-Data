@@ -52,8 +52,8 @@ import sys
 from datetime import date
 
 from app.services import company_service, evidence_selector
-from app.services.retrieve_service import (_MAX_EVENTS_PER_COMPANY,
-                                           _MAX_GLOBAL_EVENTS, _default_embed,
+from app.services.retrieve_service import (MAX_EVENTS_PER_COMPANY,
+                                           _MAX_GLOBAL_EVENTS, default_embed,
                                            select_global_events)
 from app.tools import graph_tools, scope
 
@@ -141,9 +141,9 @@ def _measure(key: str, name: str, question: str, recent_since: str) -> dict:
     rows = _candidates(key)
     wrapped = [_Row(r) for r in rows]
     sims = evidence_selector.similarities(
-        wrapped, intent=intent, embed=_default_embed, anchor_names=[name])
+        wrapped, intent=intent, embed=default_embed, anchor_names=[name])
     fallback, _ = evidence_selector.select(
-        wrapped, matched=frozenset(), sims={}, limit=_MAX_EVENTS_PER_COMPANY)
+        wrapped, matched=frozenset(), sims={}, limit=MAX_EVENTS_PER_COMPANY)
     fallback_ids = [e.event_id for e in fallback]
 
     selected = [{
@@ -170,13 +170,13 @@ def _measure_anchorless(question: str, recent_since: str) -> dict:
     ★`/retrieve` 와 `/ask` 가 **같은 이 함수**를 부른다(`plan_material` 경유).
       그래서 한쪽만 재도 두 입구를 다 잰 것이다 — 갈릴 자리가 없는 구조다.
     """
-    kept = select_global_events(question, embed=_default_embed)
+    kept = select_global_events(question, embed=default_embed)
 
     rows = company_service.global_events()
     wrapped = [_Row(r) for r in rows]
     sims = evidence_selector.similarities(
         wrapped, intent=evidence_selector.intent_of(question, []),
-        embed=_default_embed, anchor_names=[])
+        embed=default_embed, anchor_names=[])
     fallback, _ = evidence_selector.select(
         wrapped, matched=frozenset(), sims={}, limit=_MAX_GLOBAL_EVENTS)
     fallback_ids = [e.event_id for e in fallback]

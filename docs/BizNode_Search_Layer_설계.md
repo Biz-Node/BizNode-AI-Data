@@ -451,7 +451,7 @@ hard filter 로 되돌리면 Event·Person·Organization·Product 가 후보 생
 > 「Query 에 Anchor 가 없다고 Workspace Company 를 Query Anchor 로 승격시키지
 > 않는다」로 확정했습니다. `AnchorSource.WORKSPACE` 는 `ANCHORLESS` 로 바뀌었고
 > 앵커가 붙지 않습니다 — 앵커 없는 질의의 재료는 **Global Search 의 히트**입니다
-> (`retrieve_service._hits_reflect_the_anchor`).
+> (`retrieve_service.hits_reflect_the_anchor`).
 >
 > 아래에 적힌 근거(「그것 말고 재료를 모을 다른 출발점이 없다」)는 그때 anchorless
 > 경로의 품질이 낮았기 때문인데, **그 문제는 여전히 남아 있습니다** — 재료를
@@ -503,7 +503,7 @@ Ring 0 이고, 링 확장과 무관하게 [6-1](#6-1-사건은-질문-의도로-
 ★**조용히 자르지 않습니다** — 어느 링까지 갔는지, 각 링에서 몇 건을 잘랐는지 로그에 남깁니다
 ([규칙 2](#1-4-이-문서-전체를-관통하는-규칙-여섯)).
 
-★**구현됨** (2026-08-26) — `retrieve_service._ring_of()`·`_relations_of()`. 링은 **조기
+★**구현됨** (2026-08-26) — `retrieve_service.ring_of()`·`_relations_of()`. 링은 **조기
 종료가 아니라 정렬**로 구현했습니다. 링 번호로 줄을 세우고 순서대로 채우면 「Ring 0 이 몇 건
 미만이면 Ring 1 로 가는가」라는 임계값이 필요 없습니다 — 아래 `[DECIDE]` 는 그대로 열려
 있습니다. 41건 전수 검증은

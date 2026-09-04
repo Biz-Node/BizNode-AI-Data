@@ -1,6 +1,6 @@
 """A-3 — **앵커가 재료를 정한다.** 검색 히트가 아니라.
 
-지금까지 `/ask` 의 재료 기업은 `_companies_from(result)` 가 정했다. 그런데 해소에
+지금까지 `/ask` 의 재료 기업은 `companies_from(result)` 가 정했다. 그런데 해소에
 실패한 질의에서 그 히트는 **의미검색이 고른 무관한 기업**이다 — 실측(2026-08-25):
 
     「엔비디아는 어떤가?」  anchor=엔비디아
@@ -355,10 +355,10 @@ def test_the_relation_cut_count_is_logged(wired, caplog):
     """★완료조건 ⓓ — 잘라낸 관계 개수가 로그에 남는다. 조용히 자르면
     「그게 전부」로 읽힌다([규칙 2])."""
     wired["decision"] = _context_decision()
-    # 상한(_MAX_RELATIONS_PER_COMPANY × 기업 수)을 확실히 넘긴다.
+    # 상한(MAX_RELATIONS_PER_COMPANY × 기업 수)을 확실히 넘긴다.
     wired["relations"] = {_SAMSUNG: [
         _row(f"e_{i}", _SAMSUNG, "삼성전자", f"0777777{i}", f"밖{i}")
-        for i in range(rs_module._MAX_RELATIONS_PER_COMPANY * 2 + 5)]}
+        for i in range(rs_module.MAX_RELATIONS_PER_COMPANY * 2 + 5)]}
 
     with caplog.at_level("INFO"):
         RetrieveService(_orchestrator()).retrieve_for_ask(_request())

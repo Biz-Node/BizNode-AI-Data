@@ -80,7 +80,7 @@ def stub_services(monkeypatch):
     monkeypatch.setattr(rs_module, "relation_service", relation)
     # ★임베더를 끈다 — Tier A 는 조립 계약만 본다. 켜 두면 단위 테스트가
     #   OpenAI 를 부르고, 유사도 때문에 순서가 흔들려 재현이 안 된다.
-    monkeypatch.setattr(rs_module, "_default_embed", None)
+    monkeypatch.setattr(rs_module, "default_embed", None)
     return company, relation
 
 
@@ -188,13 +188,13 @@ def test_events_are_capped_per_company_and_reported(stub_services, caplog):
     자르되 **조용히 자르지 않는다.**"""
     company, _ = stub_services
     company.events_of.return_value = [
-        _event(f"evt_{i}", f"사건{i}") for i in range(rs_module._MAX_EVENTS_PER_COMPANY + 4)]
+        _event(f"evt_{i}", f"사건{i}") for i in range(rs_module.MAX_EVENTS_PER_COMPANY + 4)]
     orch = _orchestrator([_hit("00126380", "삼성전자")])
 
     with caplog.at_level("INFO"):
         got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
-    assert len(got.events) == rs_module._MAX_EVENTS_PER_COMPANY
+    assert len(got.events) == rs_module.MAX_EVENTS_PER_COMPANY
     assert "events truncated" in caplog.text
 
 
@@ -202,7 +202,7 @@ def test_each_company_gets_its_own_quota(stub_services):
     """★기업별로 **독립** selection 한다 — 한 기업이 상한을 다 먹으면 다른
     기업의 사건이 통째로 사라진다. 그건 「다른 기업이라서 버린 것」이 된다."""
     company, _ = stub_services
-    n = rs_module._MAX_EVENTS_PER_COMPANY
+    n = rs_module.MAX_EVENTS_PER_COMPANY
     company.events_of.side_effect = lambda key: (
         [_event(f"a{i}", f"A사건{i}") for i in range(n + 5)] if key == "A"
         else [_event("b1", "B사건")])
@@ -219,7 +219,7 @@ def test_rule_matched_event_types_are_kept_over_others(stub_services):
     company, _ = stub_services
     company.events_of.return_value = (
         [_event(f"x{i}", f"확장{i}", event_type="사업확장")
-         for i in range(rs_module._MAX_EVENTS_PER_COMPANY)]
+         for i in range(rs_module.MAX_EVENTS_PER_COMPANY)]
         + [_event("labour", "노조 설립", event_type="노무")])
     # ★앵커를 명시한다 — 이 테스트가 보는 것은 **기업별 경로**의 규칙 티어다.
     #   앵커가 없으면 전역 사건 검색으로 빠진다(2026-09-02).
@@ -511,7 +511,7 @@ def test_real_shared_event_does_not_leak_other_companies_evidence():
 # 최종 설계 §5 시나리오 3 · §17-2. 세 번 옮겨 온 자리다 — `workspace` 시절에는
 # 담아 둔 기업이 재료였고, §17-3 이 그걸 폐기한 뒤로는 **검색 히트**가 재료였다.
 # 그런데 앵커 없는 질의의 히트는 관계 freshness 순이라 기업이 사실상 임의로
-# 정해졌고(F1), 히트에 실려 오던 Event 노드는 `_companies_from()` 이 통째로
+# 정해졌고(F1), 히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로
 # 버렸다(F4). 지금은 **전역 사건을 먼저 고르고 기업을 역산한다**(설계 Q3).
 
 def _global_row(event_id, name, ckey, cname, *, event_type="사업확장", is_risk=False):
@@ -663,10 +663,10 @@ def test_relations_do_not_grow_with_the_derived_companies(stub_services):
         _global_row(f"g{i}", f"사건{i}", f"0000000{i}", f"기업{i}")
         for i in range(rs_module._MAX_GLOBAL_EVENTS)]
     company.relations_of.side_effect = lambda key: [
-        _relation(f"{key}-{i}") for i in range(rs_module._MAX_RELATIONS_PER_COMPANY)]
+        _relation(f"{key}-{i}") for i in range(rs_module.MAX_RELATIONS_PER_COMPANY)]
     orch = _orchestrator([])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="최근 주요 사건"))
 
-    ceiling = rs_module._MAX_RELATIONS_PER_COMPANY * rs_module._MAX_COMPANIES
+    ceiling = rs_module.MAX_RELATIONS_PER_COMPANY * rs_module._MAX_COMPANIES
     assert len(got.relations) <= ceiling

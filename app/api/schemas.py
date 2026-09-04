@@ -1153,7 +1153,7 @@ class AskRequest(BaseModel):
     #   `anchor_source` 가 둘을 못 가르고, 프롬프트도 못 가른다.
     #
     # ★**랭킹 문맥으로는 쓰지 않는다**(지금은). 검색 계층에 넘기지 않으므로
-    #   `_ring_of`·`workspace_priority` 의 뜻이 안 바뀐다 — 앵커 판정에만 쓴다.
+    #   `ring_of`·`workspace_priority` 의 뜻이 안 바뀐다 — 앵커 판정에만 쓴다.
     #   넓힐지는 실측 뒤에 정할 일이다.
     context_keys: list[str] = Field(
         default_factory=list,

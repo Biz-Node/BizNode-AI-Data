@@ -32,10 +32,10 @@ log = trace_logger(__name__)
 # 도구가 7종이라 한 바퀴에 7번이면 두 바퀴가 안 돈다. 「한 바퀴 돌고 부족한
 # 것을 한 번 더」를 허용하는 선으로 잡았다.
 MAX_TOOL_CALLS = 12
-# 기업당 상한(`_MAX_EVENTS_PER_COMPANY`=10)의 4배. 워크스페이스가 4곳까지
+# 기업당 상한(`MAX_EVENTS_PER_COMPANY`=10)의 4배. 워크스페이스가 4곳까지
 # 흔하다는 관찰에서 나온 값이고, 실측은 아니다.
 MAX_EVENTS = 40
-# `_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배. 위와 같은 근거.
+# `MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배. 위와 같은 근거.
 # ★**이 상한은 한 번도 문 적이 없다**(실측 2026-08-29). `graph_tools.get_propagation`
 #   이 사건 목록을 자기 상한 3 으로 **먼저** 자르기 때문이다(원칙 ③ — 상한은 도구
 #   안에 있다). 12 는 「기업 4곳 × 3」을 가정했는데 도구는 기업별이 아니라 **목록
@@ -53,7 +53,7 @@ MAX_HOPS = 6
 #   리스트 길이만 제한하면 **반복 호출**로 우회된다」인데, `fetch_propagation` 은
 #   Agent 도구가 아니라 결정론 노드이고 `_AFTER_LOOP` 에 **한 번만** 배선된다 —
 #   우회할 반복이 없다. 게다가 도구가 목록 전체에 자기 상한 3 을 먼저 걸어
-#   (`_MAX_RISK_EVENTS_FOR_PROPAGATION`) 이 상한은 **한 번도 문 적이 없다.**
+#   (`MAX_RISK_EVENTS_FOR_PROPAGATION`) 이 상한은 **한 번도 문 적이 없다.**
 #   그런데 카운터는 계속 소진 판정에 들어가 「루프가 잘리지도 않았는데 켜지는」
 #   플래그를 만들었다. 세는 것과 **막는 것**을 가르는 편이 정직하다.
 #

@@ -39,7 +39,7 @@
   「물은 것과 다른 대상으로 답하기」의 같은 종류였다.
 
 ★**`workspace_keys` 가 빈 케이스가 이 평가셋에 처음 들어온다.** 그러면
-  `_ring_of` 는 양끝이 둘 다 밖이라 **전부 R3** 을 낸다. 링 분포를 한 표로 합치면
+  `ring_of` 는 양끝이 둘 다 밖이라 **전부 R3** 을 낸다. 링 분포를 한 표로 합치면
   R3 증가를 랭킹 변화로 잘못 읽으므로, 보고서가 `workspace_keys` 유무로 갈라
   찍는다(`report.py` §3-1).
 
@@ -442,7 +442,7 @@ CASES: tuple[AgentEvalCase, ...] = (
         question="이 회사에 노무 관련 리스크가 있었나?",
         verifies="★**워크스페이스가 비어도 답한다.** 화면이 대상을 알고 있으므로 "
                  "`context` 앵커가 선다 — 담아야만 물어볼 수 있는 것이 아니다. "
-                 "★`workspace_keys` 가 비어 `_ring_of` 가 **전부 R3** 을 내는 "
+                 "★`workspace_keys` 가 비어 `ring_of` 가 **전부 R3** 을 내는 "
                  "케이스라(보고서 §3-1 이 갈라 찍는 이유) `ctx-beats-workspace` 와 "
                  "대조군을 이룬다. 실측: anchor_source=context · SEMANTIC 10건",
         coverage=("anchor:CONTEXT", "agent:호출됨", "ctx:워크스페이스 없음",

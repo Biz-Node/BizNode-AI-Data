@@ -132,7 +132,7 @@ pytest tests/search/eval -q                 # 검색 회귀 기준선 (별개)
 
 링을 관측한 케이스가 **워크스페이스 있음** 한쪽뿐이라 위 표와 같은 값이 됩니다. `get_relations` 는 **Agent 가 고르는 도구**라 모든 케이스가 링을 남기지는 않습니다 — 도구별 호출 빈도 표를 함께 보세요.
 
-★이 절이 필요한 이유는 그대로입니다. `workspace_keys` 가 비면 `_ring_of` 는 **전부 R3** 을 냅니다(양끝이 둘 다 밖). 그런 케이스가 섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다 — `ctx-detail-page-no-workspace` 가 링을 남기는 실행부터 이 표가 두 줄이 됩니다.
+★이 절이 필요한 이유는 그대로입니다. `workspace_keys` 가 비면 `ring_of` 는 **전부 R3** 을 냅니다(양끝이 둘 다 밖). 그런 케이스가 섞이면 R3 증가를 랭킹 변화로 잘못 읽습니다 — `ctx-detail-page-no-workspace` 가 링을 남기는 실행부터 이 표가 두 줄이 됩니다.
 
 ### 이 표에서 읽히는 것 — ★판정이 아니라 관측입니다
 
@@ -563,7 +563,7 @@ pytest tests/search/eval -q                 # 검색 회귀 기준선 (별개)
 | 워크스페이스 · 보고 있는 기업 | 없음 · ['00164742'] |
 | 기대 Agent 호출 | 예 |
 | 끌어오려는 도구 | `get_events`, `search_news` |
-| 무엇을 검증하나 | ★**워크스페이스가 비어도 답한다** — 이 평가셋에서 유일하다. 그전에는 `guard_workspace` 가 검색 앞에서 끊어 「담아야만 물어볼 수 있다」였는데, 보통은 물어보고 나서 담는다. ★`workspace_keys` 가 비어 `_ring_of` 가 **전부 R3** 을 내는 유일한 케이스이기도 하다(보고서 §3-1 이 갈라 찍는 이유). 실측: anchor_source=context · SEMANTIC 10건 |
+| 무엇을 검증하나 | ★**워크스페이스가 비어도 답한다** — 이 평가셋에서 유일하다. 그전에는 `guard_workspace` 가 검색 앞에서 끊어 「담아야만 물어볼 수 있다」였는데, 보통은 물어보고 나서 담는다. ★`workspace_keys` 가 비어 `ring_of` 가 **전부 R3** 을 내는 유일한 케이스이기도 하다(보고서 §3-1 이 갈라 찍는 이유). 실측: anchor_source=context · SEMANTIC 10건 |
 | 커버 분기 | anchor:CONTEXT, agent:호출됨, gate:워크스페이스 없음, company:단일, event:노무 |
 | 실제 anchor | context · ['현대자동차'] |
 | 실제 도구 | `get_events`×1 · `search_dart`×1 · `search_news`×1 (호출 3) |

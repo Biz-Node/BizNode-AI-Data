@@ -116,9 +116,9 @@ def test_limits_are_the_same_objects_as_retrieve_service():
     """★상한 **값을 바꾸지 않는다.** 새로 쓰면 두 벌이 되어 조용히 갈린다."""
     from app.services import retrieve_service as rs
 
-    assert gt._MAX_RELATIONS_PER_COMPANY == rs._MAX_RELATIONS_PER_COMPANY
-    assert gt._MAX_EVENTS_PER_COMPANY == rs._MAX_EVENTS_PER_COMPANY
-    assert gt._MAX_RISK_EVENTS_FOR_PROPAGATION == rs._MAX_RISK_EVENTS_FOR_PROPAGATION
+    assert gt.MAX_RELATIONS_PER_COMPANY == rs.MAX_RELATIONS_PER_COMPANY
+    assert gt.MAX_EVENTS_PER_COMPANY == rs.MAX_EVENTS_PER_COMPANY
+    assert gt.MAX_RISK_EVENTS_FOR_PROPAGATION == rs.MAX_RISK_EVENTS_FOR_PROPAGATION
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -246,7 +246,7 @@ def test_eventness_suspect_events_are_dropped(stub):
 def test_grounding_suspect_relations_are_dropped(stub):
     """★`graph_service` 가 파급 계산에서 빼는 것과 같은 규칙이다.
 
-    ★실측(2026-08-28)으로는 `company_service._relation()` 이 이미 같은 규칙을
+    ★실측(2026-08-28)으로는 `company_service.relation_row()` 이 이미 같은 규칙을
       적용해 여기까지 오지 않는다 — 그래도 **도구 경계에서 다시 본다.** 위쪽
       `_HIDE` 가 느슨해지면 이 도구가 조용히 따라 느슨해지면 안 된다.
     """

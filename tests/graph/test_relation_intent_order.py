@@ -1,6 +1,6 @@
 """링 **안**의 의도 정렬이 살아 있는가 — 1.5차 회귀 방지 (현황서 §8-18).
 
-    링 분류(`_ring_of`) → **링 안에서 의도 정렬** → `ordered[:limit]`
+    링 분류(`ring_of`) → **링 안에서 의도 정렬** → `ordered[:limit]`
                             ↑ 여기가 죽어 있었다
 
 ★죽은 방식이 조용했다. `agent_tools.get_relations(keys)` 가 `edge_types` 를 안

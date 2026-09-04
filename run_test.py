@@ -182,8 +182,8 @@ def cmd_global(args) -> None:
     import time
 
     from app.services import company_service, evidence_selector as es
-    from app.services.retrieve_service import (_companies_of_events,
-                                               _default_embed,
+    from app.services.retrieve_service import (companies_of_events,
+                                               default_embed,
                                                select_global_events)
 
     _head(f"전역 사건 검색 — {args.question!r}   (LLM 없음 · 임베딩만)")
@@ -202,11 +202,11 @@ def cmd_global(args) -> None:
     rows = company_service.global_events()
     t_q = (time.perf_counter() - t0) * 1000
     t0 = time.perf_counter()
-    events = select_global_events(args.question, embed=_default_embed,
+    events = select_global_events(args.question, embed=default_embed,
                                   limit=args.limit)
     t_s = (time.perf_counter() - t0) * 1000
 
-    firms = _companies_of_events(events)
+    firms = companies_of_events(events)
     print(f"\n  후보    : {len(rows)}행 · 고유 사건 {len({r['event_id'] for r in rows})}"
           f" · 기업 {len({r['company']['key'] for r in rows if r['company']})}"
           f"   (Cypher {t_q:.0f}ms)")

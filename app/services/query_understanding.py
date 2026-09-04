@@ -191,7 +191,7 @@ def decide_anchor(
     #     이벤트」로 조용히 바뀐다 — **질문이 묻지 않은 것을 대상으로 답하기**다.
     #
     #   ★**실패가 아니다.** 앵커 없는 질의는 정상이고, 재료는 Global Search 의
-    #     히트가 댄다(`retrieve_service._hits_reflect_the_anchor`). 워크스페이스는
+    #     히트가 댄다(`retrieve_service.hits_reflect_the_anchor`). 워크스페이스는
     #     그 결과의 **순서**에만 관여한다(`result_ranker.workspace_priority`).
     #
     #   ★`workspace_names` 는 **그대로 싣는다.** 앵커가 아니라 **소속 표기**로
