@@ -1,8 +1,12 @@
 """반복 실행의 **변동폭**을 잰다. ★판정하지 않는다 — 관측만 한다.
 
+★아래가 인용하는 `BizNode_Agent_Evaluation.md` 는 **2026-09-05 에 삭제됐다**
+  (현황서 §12 · 저장소 이력에 남아 있다). 인용을 지우지 않는 이유는 그 수치가
+  이 모듈이 왜 있는지의 근거이고, 근거를 지우면 「왜 재는가」가 사라지기 때문이다.
+
 왜 필요한가. 「모델을 바꿨더니 도구 선택이 안정됐다」를 말하려면 **바꾸기 전의
 변동폭**이 있어야 한다. 그런데 저장소에 있던 것은 총 도구 호출 `33~37`, **관측
-4회**가 전부였다(`docs/BizNode_Agent_Evaluation.md` §10-6 ⑥ — 「동일 실행 N회
+4회**가 전부였다(`BizNode_Agent_Evaluation.md` §10-6 ⑥ — 「동일 실행 N회
 반복으로 변동폭 확정」 **미착수**). 그건 표본이 아니라 일화다. 그 상태로 새
 모델을 2~3회 돌려 비교하면 차이를 모델에 귀속시킬 수 없다 — 이 저장소가 임베딩
 드리프트(§4-5)와 링 계측기(§4-9)에서 **두 번 겪은 바로 그 함정**이다.
@@ -116,7 +120,7 @@ def total_embed_misses(passes: Passes) -> Spread:
     ★`EMBED_CACHE_STRICT=1` 은 이걸 0 으로 만드는 장치가 **아니다.**
       `default_embed` 를 타는 경로만 걸리고, `search_news`·`search_dart` 의
       질의는 `ChromaStore.query()` 로 캐시를 우회한다 — 그 질의문은 LLM 이
-      매번 새로 쓴다(`docs/BizNode_Agent_Evaluation.md` §10-7).
+      매번 새로 쓴다(`BizNode_Agent_Evaluation.md` §10-7).
     """
     return _per_pass(passes, lambda runs: sum(
         r.observed.embed_cache_misses for r in runs.values()))
