@@ -30,17 +30,41 @@ from app.tools.errors import KeyNotResolved
 
 
 def resolved(keys: Sequence[str]) -> tuple[list[str], dict[str, str]]:
-    """(범위를 통과한 key 순서대로, key → `norm_name`).
+    """(범위를 통과한 key 를 **정본으로** 순서대로, 정본 key → `norm_name`).
 
     빈 입력이면 `([], {})`. 범위 밖이면 `OutOfScopeKey`, 그래프에 없으면
     `KeyNotResolved` — **둘 다 0건으로 넘어가지 않는다.**
+
+    ★**정본으로 되짚는 이유** (2026-09-05 · 현황서 §6-0 A-5). 조회는 `corp_code`
+      와 `norm_name` 을 **둘 다** 매치하지만 돌려주는 key 는 `corp_code` 를 우선한
+      **정본 하나**다. 그래서 물어본 key 로 그대로 `in found` 를 보면, 그래프가
+      **찾았는데도** 「못 찾은 key」가 나갔다:
+
+          resolved(['00126380'])  → OK
+          resolved(['삼성전자'])   → ★KeyNotResolved  (같은 기업인데)
+
+      `corp_code` 가 없는 기업은 정본이 곧 `norm_name` 이라 안 걸렸고, **있는
+      기업을 이름으로 부를 때만** 걸렸다. 그 문구는 Agent 가 읽고 다음 호출을
+      정하는 값이라(원칙 ④) 틀린 원인을 말하면 안 된다.
+
+      ★돌려주는 key 를 정본으로 맞춰야 **부르는 쪽의 `found[k]` 가 성립한다** —
+        세 도구가 전부 `for k in wanted: found[k]` 로 짝지어 읽는다.
     """
     wanted = scope.check(keys)          # ① 범위 밖이면 여기서 `OutOfScopeKey`
     if not wanted:
         return [], {}
     found = company_service.norm_names_by_keys(wanted)
-    missing = [k for k in wanted if k not in found]
+    by_norm_name = {norm: key for key, norm in found.items()}
+
+    canonical: list[str] = []
+    missing: list[str] = []
+    for key in wanted:
+        hit = key if key in found else by_norm_name.get(key)
+        if hit is None:
+            missing.append(key)
+        elif hit not in canonical:      # 같은 기업을 두 형태로 불러도 한 번만
+            canonical.append(hit)
     if missing:
         # ★0건으로 넘어가지 않는다. 「해소됐다 ≠ 그래프에 있다」다.
         raise KeyNotResolved(f"그래프에서 Company 를 못 찾은 key: {missing}")
-    return wanted, found
+    return canonical, found

@@ -310,20 +310,12 @@ def cmd_tools(args) -> None:
     """
     import json
 
-    from app.services import company_service
     from app.tools import agent_tools, citation, scope
 
-    # ★사명을 **정본 key 로 옮겨 두고** 부른다. 도구의 key 해소는 요청한 key 를
-    #   그대로 돌려주지 않고 `corp_code` 를 우선한 정본을 준다 — 그래서 사명으로
-    #   부르면 그래프가 **찾았는데도** 「못 찾은 key」로 거부된다. 그 거부를 여기서
-    #   보면 도구가 아니라 하네스 탓이라 재료 유무를 볼 수가 없다.
-    #   ★운영 쪽 결함은 따로 남아 있다 — 현황서 §6-0 A-5.
+    # ★사명을 그대로 넘긴다. `keys.resolved()` 가 정본으로 되짚으므로
+    #   `corp_code` 든 `norm_name` 이든 같은 기업이면 같은 재료가 나온다
+    #   (현황서 §6-0 A-5 — 전에는 이름으로 부르면 거부됐다).
     key = args.key
-    canonical = company_service.norm_names_by_keys([key])
-    if canonical and key not in canonical:
-        key = next(iter(canonical))
-        print(f"\n  ※ {args.key!r} → 정본 key {key!r} 로 옮겨 부릅니다.")
-
     rejected: list[str] = []
     _head(f"도구 7종 — key={key!r}  (LLM 없음)")
 
