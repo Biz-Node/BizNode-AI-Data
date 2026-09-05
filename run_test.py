@@ -12,6 +12,17 @@
     $PY run_test.py tools 삼성전자             도구 7종을 직접 부른다        무료
     $PY run_test.py ask "질문"                ★Agent 루프 끝까지           LLM 호출
 
+★**얼마나 걸리나 — 빈 화면은 고장이 아닙니다**(2026-09-05 실측).
+
+    모듈 적재     10초쯤   kiwipiepy 모델 105MB + chromadb  ← 첫 실행이 특히 느리다
+    anchor        20초     search        20초
+    global        15초     retrieve      25초
+    ask         1~2분      Agent 루프 + LLM
+
+  진행은 `…` 줄과 INFO 로그로 나갑니다(둘 다 `stderr`). **아무 표시도 없이 멈춰
+  있으면** 그때가 진짜 이상한 것이고, 예외로 끝나면 `_diagnose()` 가 어느
+  컨테이너가 죽었는지 짚어 줍니다.
+
 ★**`python run_test.py` 로는 안 돕니다** — 셋 다 막힙니다(2026-09-05 실측).
 
     python  …   command not found            그런 명령이 없다
@@ -67,13 +78,30 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# ★`stdout` 만 utf-8 로 돌리면 **예외 traceback 은 그대로 깨진다**(2026-09-05
+#   실측) — Windows OS 에러 문자열(`WinError 10061` 등)이 콘솔 코드페이지로
+#   나가 「?????」로 보인다. traceback 은 `stderr` 로 나가므로 그것도 돌린다.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+# ★**여기서 로그를 켠다.** `app/api/main.py` 만 `configure_logging()` 을 불러서
+#   서버로 돌릴 때는 Agent 턴·도구 호출·예산 소진·LLM 요청/응답이 다 찍히는데,
+#   `run_test.py` 는 그걸 부른 적이 없어 root 로거가 기본 WARNING 인 채로
+#   남는다 — `agent.turn`·`run_tools`·`llm.request` 같은, 도구 7종의 관측치와
+#   정확히 같은 목적의 로그 줄이 **전부 조용히 버려졌다**(2026-09-05 실측).
+#   `ask` 의 docstring 이 「관측치를 함께 찍는다」고 적어 둔 것이 바로 이 로그다.
+from app.core.config import LOG_LEVEL  # noqa: E402
+from app.core.trace import configure_logging  # noqa: E402
+
+configure_logging(LOG_LEVEL)
 
 # 기본 워크스페이스 — 대표 질문이 이 둘 중심이라 재료가 확실히 잡힌다.
 _WORKSPACE = ["00126380", "00164779"]      # 삼성전자 · SK하이닉스
@@ -83,6 +111,29 @@ _LINE = "─" * 72
 
 def _head(title: str) -> None:
     print(f"\n{_LINE}\n  {title}\n{_LINE}")
+
+
+def _step(text: str) -> None:
+    """진행 중임을 **즉시** 알린다.
+
+    ★왜 필요한가 (2026-09-05 실측). 빈 화면이 24초 이어졌다:
+
+        0.6s   schemas import
+       11.8s   retrieve_service import   ← kiwipiepy 모델 105MB + chromadb
+        0.8s   RetrieveService() 생성
+       11.4s   retrieve() 본체
+
+      앞의 12초는 **로그가 나올 수 없는 구간**이다 — 로거를 켜 두는 것으로는
+      안 되고(`configure_logging` 은 이미 켜져 있다), 우리 코드가 아직 안 돌기
+      때문이다. `python -u` 도 소용없다. 버퍼가 아니라 **찍을 게 없어서**다.
+
+      그동안 사용자는 「도는 중」과 「죽었다」를 구별할 수 없었다. 실제로 그렇게
+      막혔고, 그게 이 함수가 생긴 이유다.
+
+    ★`stderr` 로 보낸다 — INFO 로그와 **같은 스트림**이라 시간 순서가 맞고,
+      `> out.txt` 로 결과만 받을 때 진행 표시가 섞이지 않는다.
+    """
+    print(f"  … {text}", file=sys.stderr, flush=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -163,6 +214,7 @@ def cmd_search(args) -> None:
         SearchRequest(query=args.question, workspace_keys=args.workspace))
 
     _head(f"검색 — {args.question!r}")
+    _step("검색 계층 — 의미검색으로 빠지면 10초쯤")
     print(f"  mode {query.mode.value} · edge_types {query.edge_types} "
           f"· direction {query.direction} · 총 {result.total}건\n")
     for hit in result.hits:
@@ -262,6 +314,7 @@ def cmd_retrieve(args) -> None:
 
     _head(f"/retrieve — {args.question!r}   (LLM 없음)")
 
+    _step("검색 → 재료 조립 — 10초쯤 · 아래 INFO 로그로 단계가 보인다")
     t0 = time.perf_counter()
     got = RetrieveService().retrieve(AskRequest(
         question=args.question, workspace_keys=args.workspace,
@@ -420,6 +473,7 @@ def cmd_ask(args) -> None:
 
     new_trace_id()
     with observe.observing() as seen:
+        _step("Agent 루프 — 도구 호출과 LLM 이 붙어 1~2분 걸린다")
         state = ask_graph().invoke(
             # ★`context_keys` 를 **빠뜨리면 안 된다.** 전에 여기만 빠져 있어
             #   `--context` 가 조용히 버려졌다 — `anchor` 는 CONTEXT 로 가는데
@@ -508,6 +562,49 @@ def cmd_ask(args) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
+#  실패 진단 — Docker 인프라(Neo4j·PostgreSQL·Chroma)가 죽어 있을 때
+# ══════════════════════════════════════════════════════════════════
+
+# ★2026-09-05 실측 — `ask` 실행 중 Chroma 컨테이너가 **재시작 도중**이라
+#   `ConnectionRefusedError`(WinError 10061)가 났다. `docker ps` 는 "Up" 이라고
+#   찍지만 그 순간 포트가 안 열려 있을 수 있다 — 코드 결함이 아니라 인프라
+#   타이밍 문제인데, 원본 traceback 만 보면 그걸 한눈에 못 알아본다. 흔한 신호를
+#   미리 걸러 **어느 컨테이너·어느 포트를 볼지** 바로 알려준다.
+_INFRA_HINTS = [
+    ("Chroma", "8001", ("chroma", "8001")),
+    ("Neo4j", "7687", ("neo4j", "7687", "bolt")),
+    ("PostgreSQL", "5432", ("postgres", "5432", "psycopg")),
+    ("Redis", "6379", ("redis", "6379")),
+]
+
+
+def _diagnose(exc: BaseException) -> str | None:
+    """예외 사슬에서 흔한 인프라 다운 신호를 찾는다. 못 찾으면 `None`."""
+    chain: list[BaseException] = []
+    cur: BaseException | None = exc
+    while cur is not None and cur not in chain:
+        chain.append(cur)
+        cur = cur.__cause__ or cur.__context__
+
+    text = " ".join(f"{type(e).__module__}.{type(e).__name__}: {e}" for e in chain).lower()
+    connection_signal = any(s in text for s in (
+        "connectionrefused", "connecterror", "10061", "serviceunavailable",
+        "connection refused", "could not connect", "operationalerror",
+    ))
+    if not connection_signal:
+        return None
+
+    for label, port, needles in _INFRA_HINTS:
+        if any(n in text for n in needles):
+            return (f"★{label}(포트 {port}) 연결이 거부됐다 — 컨테이너가 죽었거나 "
+                    f"막 재시작하는 중일 수 있다.\n"
+                    f"    확인: docker ps --filter name=biznode\n"
+                    f"    로그: docker logs biznode-{label.lower()} --tail 30")
+    return ("★연결이 거부됐다 — Docker 컨테이너(Neo4j·PostgreSQL·Chroma·Redis) 상태를 "
+            "확인해 보라.\n    docker ps --filter name=biznode")
+
+
+# ══════════════════════════════════════════════════════════════════
 
 
 def main() -> None:
@@ -569,7 +666,19 @@ def main() -> None:
         parser.print_help()
         print(__doc__)
         return
-    args.func(args)
+    # ★여기서 알려야 한다 — 아래 `args.func()` 안의 첫 줄이 **12초짜리
+    #   import** 라, 이 줄이 없으면 그동안 화면이 통째로 빈다.
+    _step("모듈 적재 — kiwipiepy 모델(105MB)과 chromadb 를 읽는다 · 10초쯤")
+    try:
+        args.func(args)
+    except Exception as exc:
+        hint = _diagnose(exc)
+        print(f"\n{_LINE}\n  ★실행 중 예외로 끝났다 — {type(exc).__name__}: {exc}\n{_LINE}",
+              file=sys.stderr)
+        if hint:
+            print(f"\n{hint}\n", file=sys.stderr)
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
