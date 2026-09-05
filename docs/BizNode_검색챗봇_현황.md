@@ -2039,53 +2039,386 @@ TSMC 최근 리스크               LX세미콘·코미코·티씨케이 …    
 `GraphSearcher` 가 비-Company 히트를 실어 옵니다. 막는 곳은 앵커 판정과 재료 선정
 **두 줄**입니다. 시나리오 6(Product)·7(Person)이 통째로 안 됩니다.
 
+★**정정 — 「두 줄」이 전부가 아닙니다**(2026-09-06 실측). 대표 질의 48건을 재 보니
+그 두 줄에 **닿지도 못하는** 질의가 11건이었습니다(Kiwi 가 공정거래위원회·낸드플래시의
+토큰을 아예 안 준다). 그리고 두 줄을 고쳐도 관계 질의는 △ 에서 멈춥니다 —
+`_REL_TYPES` 가 Person·Product 의 정의 엣지를 재료에서 빼기 때문입니다. 아래 실측의
+§11·§13 을 보십시오.
+
 ★**A-7 과 같은 자리를 엽니다** — A-7 은 「`_query()` 가 앵커를 항상 **한 개** 담는다」
 이고 이것은 「**한 종류**만 담는다」라, 둘 다 같은 반환 구조를 고치는 수술입니다.
 따로 두 번 열 이유가 없습니다.
 
-#### 측정 — 앵커로 세워도 **사건에는 답할 재료가 없다** (2026-09-05)
+#### 실측 — Anchor Type × Query Intent 를 대표 질의 48건으로 쟀다 (2026-09-06)
+
+★**구현 전 실측입니다.** production 코드는 한 줄도 안 고쳤습니다 — `git status` 비어
+있고 **1,107 passed · 2 xfailed · 실패 0**, 질의 로그 md5 불변(§16·§17 준수).
+실험 코드는 저장소 밖(job scratch)에서 production 함수를 **부르기만** 했습니다.
+대상은 전부 그래프에 **실재하는 노드** 15개이고, 셀마다 질의 3건씩 4×4×3 = 48건입니다.
+
+##### 1. Executive Summary — 결론 셋
 
 ```text
-노드      Product 1,949 · Event 1,074 · Person 754 · Organization 564
-근거      세 라벨 전부 100% 보유 (Person 1,031 · Product 2,420 · Organization 1,053 엣지)
-사건 연결  Person 0/754 · Organization 0/564 · Product 68/1,949 (3.5%)
+① 갈림길은 「앵커 타입」이 아니다. 앵커 노드가 HAS_EVENT 를 **자기가** 들고 있느냐다.
+   Company 조차 317/3,451(9.2%)만 들고 있다. 자기 사건이 0인 Company(삼성에스디에스)는
+   Person 앵커와 **똑같이** 실패한다 — 「최근 이슈」 질의에서 사건 0건.
+
+② 우회 경로 Anchor→Company→Event 의 Node Coverage 는 네 타입이 거의 같다.
+   Company 81.3% · Organization 78.0% · Person 76.0% · Product 74.3%.
+   「Person 은 Event 연결이 0이니 EVENT 를 REJECT」는 **실측이 부정한다.** 우회는 열려 있다.
+
+③ 그런데 앵커를 확장해도 관계 질의는 여전히 못 답한다.
+   `company_service._REL_TYPES` 가 IS_EXECUTIVE_OF(787)·DEVELOPS(2,050)를 재료에서 뺀다.
+   Person 의 정의 엣지와 Product 의 정의 엣지가 **정확히 그 둘**이다. → §13①
 ```
 
-★**Person·Organization 은 사건에 하나도 안 닿습니다.** 가진 것은 관계뿐입니다 —
-이재용은 지분 4 · 임원 1 · 소송 1. 앵커로 세우면 **관계 질문은 답이 나오지만
-「최근 이슈」류는 여전히 못 답합니다.**
+##### 2. Anchor Type × Query Intent 매트릭스
 
-**Anchor Type × Query Intent**
+기호는 §19 판정입니다 — `✓ 직접 탐색 가능 · △ 우회 경로 필요 · ✗ 데이터/구조 부족`.
+왼쪽이 **CURRENT**(지금 배포된 것), 오른쪽이 **CANDIDATE**(1홉 Company 확장 시뮬레이션).
 
-| 앵커 타입 | 관계 질의 | 사건 질의 | 파급 질의 |
-|---|---|---|---|
-| Company | ✅ | ✅ | ✅ |
-| Product | ✅ | △ 68/1,949 | △ |
-| Person | ✅ | ❌ 0/754 | ❌ |
-| Organization | ✅ | ❌ 0/564 | ❌ |
+| 앵커 \ 의도 | RELATION | EVENT | IMPACT | SEMANTIC |
+|---|---|---|---|---|
+| **Company** | ✓ / ✓ | ✓ / ✓ | ✓ / ✓ | ✓ / ✓ |
+| **Person** | ✗ / △ | ✗ / △ | ✗ / ✓ | ✗ / △ |
+| **Organization** | ✗ / ✓ | ✗ / △ | ✓ / ✓ | ✗ / △ |
+| **Product** | ✗ / △ | ✗ / △ | ✗ / ✓ | ✗ / △ |
 
-★**갈림길은 질문 성격이 아니라 노드 라벨입니다** — 「국민연금이 소송 건 곳 있어?」는
-**성공합니다.** 국민연금공단이 Company 노드로도 있어서 통과했을 뿐입니다.
-
-#### 보류 — 추출 파이프라인이 선행 조건 (2026-09-05 결정)
-
-앵커를 확장해도 Person·Organization 의 사건 질의는 **데이터에 없어서** 못 답합니다.
-사건 연결이 붙은 뒤에 다시 봅니다.
-
-★**A-9 와 같은 줄에서 만납니다.**
+**Query Coverage** — 셀당 3건 중 필요한 재료를 확보한 수. 기준을 코드로 못 박았습니다:
 
 ```text
-retrieve_service.py:133  companies = companies_from(result)
-   히트에서 Company 만 추린다 — 앵커의 **타입도 개수도** 안 본다
-
-  A-8 을 고치려면  비-Company 앵커를 재료 출발점으로
-  A-9 를 고치려면  2차 앵커를 재료 출발점으로
-      → 둘 다 「히트가 아니라 **앵커**에서 재료를 시작한다」로 수렴한다
+필요 재료   RELATION 기업≥1 ∧ 관계≥1   EVENT 사건≥1
+            IMPACT   관계≥1 ∧ 근거≥1   SEMANTIC 사건≥1 ∨ 관계≥1
+CURRENT 은 여기에 둘을 더 요구한다
+   ⓐ 앵커 폐포 적합도 > 0.5      재료가 앵커와 무관하면 확보가 아니다
+   ⓑ 재료에 **앵커 자신**이 한 번은 나타난다   나타나지 않으면 귀속을 못 한다
 ```
 
-`anchor_companies()` 가 **이미 있습니다** — 지금은 `hits_reflect_the_anchor` 가 False 인
-경로에서만 불립니다. 둘은 결국 **그 함수를 언제 쓰느냐**로 합쳐지므로, 따로 설계하면
-같은 줄을 두 번 열게 됩니다.
+| 앵커 \ 의도 | RELATION | EVENT | IMPACT | SEMANTIC | 계 |
+|---|---|---|---|---|---|
+| Company | 3/3 · 3/3 | **2/3** · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 11/12 · 12/12 |
+| Person | 1/3 · 3/3 | 0/3 · **2/3** | 0/3 · 3/3 | 0/3 · 3/3 | 1/12 · 11/12 |
+| Organization | 2/3 · 3/3 | 0/3 · **2/3** | 3/3 · 3/3 | 0/3 · 3/3 | 5/12 · 11/12 |
+| Product | 0/3 · 3/3 | 0/3 · **2/3** | 0/3 · 3/3 | 0/3 · 3/3 | 0/12 · 11/12 |
+| **합계** | | | | | **17/48 · 45/48** |
+
+★**ⓑ 를 빼면 23/48 로 올라갑니다.** 그 6건은 전부 「기계적으로는 통과했지만 재료가
+앵커를 한 번도 안 가리키는」 것입니다 — 예: 「HBM 가격이 급락하면…」이 관계 50건을
+냈는데 그중 **HBM 을 잇는 엣지가 0건**입니다. 통과한 이유는 HBM 의 1홉 폐포가 전역
+후보의 21.7% 를 덮어 우연히 겹친 것입니다(§5). **그것을 성공으로 세지 않습니다.**
+
+##### 3. 각 Cell 의 traversal path — CURRENT / AVAILABLE / CANDIDATE 를 가른다
+
+**CURRENT** — 지금 production 이 실제로 도는 경로. **앵커 타입과 무관하게 하나뿐입니다.**
+
+```text
+질문 → AnchorExtractor(Postgres trigram)  → EntityResolver(corp_code_master 118,535)
+     → decide_anchor()          ★Company 만 본다 — company_service.find_by_names 가 (c:Company)
+     → material_companies()
+          companies_from(hits)   히트에서 **Company 만** 추림          retrieve_service.py:133
+          events_of(key)         MATCH (c:Company)-[:HAS_EVENT]->(e)   company_service.py
+          relations_of(key)      MATCH (c:Company)-[r]-(o) AND type(r) IN _REL_TYPES
+```
+
+비-Company 앵커는 이 경로에 **진입할 수 없습니다.** 실측 48건의 `anchor_source` 분포:
+
+```text
+query 14 · anchorless 32 · unresolved 2
+  └ query 14 중 12건이 Company 앵커, 2건은 Organization「국민연금」이 **Company 국민연금공단**으로 붙은 것
+```
+
+**AVAILABLE** — production 을 안 고치고 그래프에 실제로 있는 것. bounded traversal 로
+hop 수와 relation type 을 못 박아 쟀습니다.
+
+```text
+Path A   Anchor → Event                     1 hop   HAS_EVENT | IMPACTS
+Path B   Anchor → Company                   1 hop   전체 관계 타입
+Path C   Anchor → Company → Event           2 hop   (B) + HAS_EVENT
+Path D   Anchor → Company → Company         2 hop   (B) + 전체 관계 타입
+Path E   Anchor → Company → Company → Event 3 hop   (D) + HAS_EVENT     ★IMPACT 후보
+```
+
+**CANDIDATE** — A-8 에서 고려할 수 있는 것. 실험은 **Path B(관계 score 내림차순, 상한
+기존 `_MAX_COMPANIES`=5)** 로 재료 기업을 정하고 **그 뒤는 production 함수를 그대로**
+썼습니다(`events_of` · `evidence_selector.select` · `relations_of` · `ring_of`).
+바뀌는 것은 「재료 기업을 어디서 얻나」 **한 줄**뿐입니다.
+
+★**세 구분을 지킵니다.** 예 —
+
+```text
+Graph availability       : YES   Person 573/754 = 76.0% 가 Company 경유로 Event 에 닿는다
+Current retrieval support: NO    해소기가 Company 사전만 본다
+Candidate A-8 path       : Person -[IS_EXECUTIVE_OF|OWNS_STAKE_IN|SUES]-> Company -[HAS_EVENT]-> Event
+                           2 hop · 상한 _MAX_COMPANIES(5) × MAX_EVENTS_PER_COMPANY(10)
+```
+
+##### 4. Coverage — Node 와 Query 를 섞지 않는다
+
+**Node Coverage** (전수 · 그래프 전체)
+
+| path | Company | Person | Organization | Product |
+|---|---|---|---|---|
+| A Anchor→Event | 317/3,451 **9.2%** | 0/754 **0%** | 0/564 **0%** | 68/1,949 **3.5%** |
+| B Anchor→Company | 3,283/3,451 95.1% | 736/754 97.6% | 514/564 91.1% | 1,834/1,949 94.1% |
+| C Anchor→Company→Event | 2,804/3,451 **81.3%** | 573/754 **76.0%** | 440/564 **78.0%** | 1,449/1,949 **74.3%** |
+| D Anchor→Company→Company | 3,184/3,451 92.3% | 718/754 95.2% | 491/564 87.1% | 1,807/1,949 92.7% |
+
+★**Company 의 직접 사건 연결이 9.2% 라는 것이 이번 실측의 첫 반전입니다.** 「Company 는
+되고 나머지는 안 된다」가 아닙니다 — **어떤 라벨이든 자기 사건을 든 노드가 소수**이고,
+우회 경로에서는 네 타입이 74~81% 로 **거의 같습니다.**
+
+앵커당 연결 Company 수는 Person 평균 1.11(최대 6) · Organization 1.54(최대 **73**) ·
+Product 1.10(최대 7)입니다. **Organization 에만 허브가 있습니다.**
+
+**Query Coverage** 는 §2 표입니다. **혼동하지 않습니다** — Node 는 「그런 노드가 몇
+%냐」, Query 는 「대표 질의 몇 건이 답할 재료를 얻었냐」입니다. 예: Product EVENT 의
+직접 경로 Node Coverage 는 3.5% 지만, CANDIDATE Query Coverage 는 2/3(66.7%)입니다.
+
+##### 5. Relevance — 「우연인가」를 lift 로 가른다
+
+판정 기준을 먼저 못 박았습니다.
+
+```text
+relevant  = 재료가 앵커 자신이거나 앵커에서 1홉 안의 Company 에 붙어 있다 (Path B 폐포)
+base      = 전역 사건 후보 933행 중 그 폐포가 차지하는 비율   ← 우연히 걸릴 확률
+lift      = 관측 적합도 / base        ★1.0 이면 **우연과 같다**
+```
+
+★**너그러운 쪽으로 잡았습니다** — Path C 재료까지 「관련」으로 셉니다. 이 기준에서도
+낮게 나오면 그건 확실한 실패입니다.
+
+```text
+CURRENT anchorless 32건의 lift 분포
+  ≤1.0 (우연 이하)   6건    ← 낸드플래시 EVENT 0.00 · 공정위 SEMANTIC 0.62 · 이재용 IMPACT 0.72
+  1.0~2.0            8건
+  2.0~5.0           11건
+  >5.0               4건    ← 카카오톡 25.45·16.96 (폐포가 1.2% 라 분모가 작다)
+  측정 불가          3건    ← 문무일·국민연금 (폐포 안에 사건이 0)
+```
+
+★**앵커 이름이 유사도를 움직이기는 합니다.** 질의에서 **앵커 이름만 뺀 대조군 32건**을
+돌렸더니 선택된 사건 10건 중 겹치는 것이 평균 **1.94건**(10건은 아예 0겹침)이었습니다 —
+즉 이름이 순위를 확실히 바꿉니다. 문제는 **어디로 바꾸는지가 통제되지 않는 것**입니다:
+정의선 EVENT 는 lift 4.67 로 현대차그룹 사건을 끌어왔는데, 이재용 EVENT 는 lift 2.15
+인데도 적합도가 **0.067** 입니다. 같은 타입·같은 의도에서 이만큼 흔들리는 것을
+**지원되는 경로라고 부를 수 없습니다.**
+
+★**허브 앵커에서는 적합도 자체가 변별력을 잃습니다.** 공정거래위원회의 1홉 폐포는
+전역 후보의 **48.0%** 라 아무 재료나 절반은 「관련」으로 세어집니다. Organization 을
+연결 Company 전체로 확장하는 설계는 **아무것도 좁히지 못한다**는 뜻입니다 → §12.
+
+**불필요 재료 — CANDIDATE 의 대가.** 재료가 늡니다: 삼성전자 앵커에서 사건 10 → 13,
+관계 10 → 50. 1홉 Company 5곳으로 넓히면 **앵커 자신이 아닌 기업의 사건**이 함께
+들어옵니다. 이 교환은 A-9 의 상한 문제와 **같은 예산**을 씁니다 → §10.
+
+##### 6. Answerability — 재료만으로 답할 근거가 서는가
+
+```text
+Person + RELATION   「이재용이 어느 회사 임원이야?」
+
+  CURRENT    non_company_labels() 가 이재용을 Person 으로 **정확히 판정하고 떨어뜨린다**
+             → named=[] → anchorless → 재료 = 이화공영·모트라스·유니투스… 의 전역 사건
+             answerability ✗   이재용이 재료에 한 번도 안 나온다
+
+  CANDIDATE  이재용 -[IS_EXECUTIVE_OF ×1 | OWNS_STAKE_IN ×4]-> 삼성전자·삼성SDI·삼성물산·삼성에스디에스
+             재료 기업 4곳 = **질문의 답 그 자체**
+             그런데 관계 재료에 IS_EXECUTIVE_OF 가 **없다**(_REL_TYPES 밖 · 진입 4/5)
+             answerability △   기업 목록은 맞지만 「임원인지 주주인지」를 못 가린다
+             ★김준성은 엣지가 IS_EXECUTIVE_OF ×2 뿐이라 **진입 0/2** — 아무 관계도 안 남는다
+```
+
+```text
+Person + EVENT      「이재용 관련 최근 이슈가 뭐야?」
+
+  CURRENT    적합도 0.067 · 앵커 관계 0건                      answerability ✗
+  CANDIDATE  삼성전자 등 4곳의 사건 12건 · 근거 55              answerability △
+             「이재용이 임원인 회사들의 최근 사건」으로는 답이 선다.
+             「이재용 **본인의** 사건」은 그래프에 0/754 이라 **어떤 경로로도 못 답한다.**
+
+Person + EVENT      「문무일 관련 최근 이슈가 뭐야?」  ← 대조군
+  CANDIDATE  1홉 Company = 삼성에스디에스 1곳, 그 회사 사건이 **0건**
+             answerability ✗   원인은 traversal 이 아니라 **데이터**다 (D)
+```
+
+```text
+Product + IMPACT    「HBM 가격이 급락하면 어떤 기업이 타격을 받을까?」
+
+  CURRENT    관계 50건 중 HBM 을 잇는 엣지 **0건** · 적합도 0.717 은 우연
+             answerability ✗   재료가 HBM 을 안 가리킨다
+  CANDIDATE  삼성전자·XMC·SK하이닉스·마이크론·CXMT + 사건 30 + 근거 79
+             answerability ✓   가정의 대상 → 관련 기업 → 관계·근거가 다 선다
+             ★실제 Event 가 없어도 답이 선다 — IMPACT 가 요구하는 것은 **구조적 근거**다
+```
+
+##### 7. 실패 케이스 — 원인을 갈라 기록한다
+
+판정 순서를 명시합니다: ① 성공 → ② CANDIDATE 로도 재료가 없으면 **D** → ③ 앵커가
+다른 노드로 해소됐으면 **H** → ④ Kiwi 토큰에 앵커 이름이 통째로 없으면 **B** →
+⑤ 토큰은 있는데 비-Company 라 떨어졌으면 **E**.
+
+| 분류 | 건수 | 실측 |
+|---|---|---|
+| 성공 | 17 | — |
+| **E** 경로는 있는데 retrieval 이 지원 안 함 | **16** | `non_company_labels()` 가 이재용·정의선·문무일·HBM·카카오톡을 **정확히 비-Company 로 판정하고 떨어뜨린 뒤 아무것도 하지 않는다**(15건). ★나머지 1건은 **Company 앵커**다 — 삼성에스디에스 EVENT 는 앵커가 완벽히 잡혔는데 Path C 138건이 있는 채로 사건 0건이 나갔다 |
+| **B** anchor resolution 실패 | **11** | Kiwi 가 고유명사 토큰을 **아예 안 준다** — 공정거래위원회·고용노동부·낸드플래시·국민연금에서 `_name_tokens()` = `[]`. 「김준성은」은 `['김']` 로 쪼개져 `named='김'` → unresolved. 「Brity Works」는 `['Brity','Works']` 로 갈려 노드명과 안 맞는다 |
+| **D** Event 데이터 부족 | **3** | 문무일·국민연금·Brity Works — 1홉 Company 의 사건이 0. **CANDIDATE 로도 ✗** |
+| **H** 별칭·정규화 | **1** | `국민연금`(Organization, 엣지 3) 과 `국민연금공단`(Company, 엣지 34)이 **별도 노드** |
+
+★**H 는 성공으로 위장합니다.** 「국민연금이 지분을 가진 기업은?」이 CURRENT 에서 사건
+24건·관계 50건을 냈습니다 — 잘 답한 것처럼 보이지만 Organization 앵커가 동작해서가
+아니라 **다른 이름의 Company 노드로 갈아탄 것**입니다. 같은 앵커의 CANDIDATE
+(Organization 경로)는 1홉 Company 가 삼성물산 1곳뿐이라 사건 0건입니다.
+**A-10 과 같은 뿌리**이고 A-8 traversal 문제와 **섞으면 안 됩니다.**
+
+★**곁가지로 잡힌 것 — `AnchorExtractor` 오탐.** 「…관련된 **기업은** 어디야?」에서
+`기업은` 이 trigram 으로 실존 기업 **기업은행**에 붙어 `resolve()` 가 **exact 1.0** 을
+냅니다. 48건 중 **5건**에서 `resolved_entities=[기업은행]` 이었습니다. 앵커가 되지 않은
+이유는 하나뿐입니다 — **A-2 가 넣은 「그래프에 있나」 관문**에 걸렸습니다(그래프에는
+`IBK기업은행` 만 있고 `corp_code` 가 `null`). 그 관문이 없었으면 5건이 전부 기업은행
+이야기가 됐습니다. **방어선이 하나뿐인 것**을 §5-15 에 걸어 둡니다.
+
+##### 8. IMPACT 분석 — 가정형은 Event 가 아니라 **구조**를 요구한다
+
+```text
+가정의 대상 → Anchor → 직접 연결 Company → 관련 Company → 관계·근거
+```
+
+실측에서 IMPACT 는 **네 타입 모두 CANDIDATE 3/3** 입니다. 이유가 분명합니다 —
+IMPACT 는 「그 사건이 실제로 있었나」를 안 묻고 **구조적 근거**를 묻는데, Path B+D 가
+네 타입 모두 87~95% 로 열려 있기 때문입니다.
+
+```text
+HBM     Path B 7곳  → Path D 579곳   → 근거 79   ✓
+이재용   Path B 4곳  → Path D 520곳   → 근거 54   ✓
+공정위   Path B 73곳 → Path D 1,552곳 → 근거 72   ✓  단 5곳으로 잘린다
+```
+
+★**여기가 이번 실측의 최대 수확입니다.** 「Person 은 Event 가 0이니 REJECT」라는
+선입견을 적용했으면 **IMPACT 를 통째로 버릴 뻔했습니다.**
+
+★**단, 무제한 확장은 금지입니다.** Path D 가 520~1,552곳이라 그대로 쓰면 재료가
+폭발합니다. 실험은 Path B 만 `_MAX_COMPANIES`(5)로 자르고 Path D 는 기존
+`relations_of` 1홉에 맡겼습니다 — **새 상한을 만들지 않았습니다.**
+
+##### 9. 직접 Event 연결이 없는 앵커의 Company 경유 유효성
+
+```text
+             Path A 직접    Path C 경유(Node)      CANDIDATE 사건 실측      판정
+Person         0/754        573/754  76.0%        12 · 32 · 10 · 0        유효 3/4
+Organization   0/564        440/564  78.0%        22 · 50 · 25 · 0        유효 3/4
+Product       68/1,949      1,449/1,949 74.3%     32 · 31 · 12 · 0        유효 3/4
+```
+
+★**Company 경유는 데이터상 유효합니다.** 네 번째(문무일·국민연금·Brity Works)만
+실패하는데 그것은 「연결 Company 가 1곳이고 그 회사가 사건 0」인 경우입니다 —
+**타입의 문제가 아니라 그 노드의 문제**이고, Company 앵커에서도 똑같이 납니다
+(삼성에스디에스 = 사건 0).
+
+★**Product 의 직접 연결 68건은 살릴 값이 아닙니다.** 3.5% 이고, `events_of()` 가
+`MATCH (c:Company)-[:HAS_EVENT]->(e)` 라 Product 자신의 25건은 어느 경로로도 안
+들어옵니다. 살리려면 조회를 하나 더 만들어야 하는데 경유 경로가 74.3% 를 덮습니다.
+
+##### 10. A-9 와의 구조적 연관 — **필요 여부만 기록한다**
+
+이번 실측에서 A-9 는 **고치지 않았습니다.** 기록할 것은 둘입니다.
+
+```text
+현재 material assembly 로 충분한가?          → 아니다.
+   CURRENT 은 비-Company 앵커에서 재료를 만들 진입점이 없다(48건 중 34건이 anchorless/unresolved).
+Anchor-based material assembly 가 필요한가?  → 그렇다.
+   CANDIDATE 는 `companies` 를 앵커에서 만들었을 뿐인데 Query Coverage 가 17/48 → 45/48.
+```
+
+★**그래도 구현안은 여기서 확정하지 않습니다.** A-8(타입)과 A-9(개수)가 같은 줄
+(`retrieve_service.py:133`)에서 만나는 것은 이번에도 확인됐지만, **상한을 어떻게
+나눌지는 아직 안 쟀습니다** — A-9 의 「1차 앵커가 다 먹는다」와 A-8 의 「1홉 5곳」이
+`_MAX_COMPANIES` 라는 **같은 예산**을 씁니다. 통합 설계는 그 측정 뒤입니다.
+
+##### 11. A-8 최소 변경 범위 — 실측 뒤에 **처음** 제안한다
+
+```text
+① decide_anchor() 에 비-Company 노드 해소를 더한다
+   지금은 non_company_labels() 가 「이것은 Person 이다」까지 알아내고 **버린다.**
+   그 판정 결과를 앵커로 세우면 된다 — 새 조회가 아니다(이미 라벨을 받아 왔다).
+
+② material_companies() 에 Path B 갈래를 더한다
+   앵커가 비-Company 면 1홉 Company 를 재료 기업으로 삼는다.
+   상한은 기존 `_MAX_COMPANIES` 를 그대로 쓴다 — 새 숫자를 만들지 않는다.
+
+③ `_REL_TYPES` 에 IS_EXECUTIVE_OF·DEVELOPS 를 넣을지는 **따로 판단한다**
+   ★없으면 ①② 를 해도 Person·Product 의 RELATION 은 ✓ 가 아니라 △ 에서 멈춘다.
+   ★그런데 이건 A-8 이 아니다 — Company 앵커에서도 이미 깨져 있다(§13①).
+```
+
+★**B 분류 11건은 ①②로 안 고쳐집니다.** 공정거래위원회·낸드플래시는 Kiwi 가 토큰을
+아예 안 주므로 해소기에 도달하지 못합니다. **토큰화(§5-15)가 별도 선행 조건**이고,
+그것까지 세면 CANDIDATE 45/48 은 「토큰이 온다고 가정했을 때」의 상한입니다.
+
+##### 12. 구현하지 않아야 할 범위
+
+```text
+✗ Product → Event 직접 조회 신설            Node Coverage 3.5%. 경유가 74.3% 를 덮는다
+✗ Organization 을 연결 Company 전체로 확장   공정위 73곳 → 폐포가 전역의 48%. 아무것도 안 좁힌다
+✗ Path D(2홉 Company)를 재료 기업으로 승격   520~1,552곳. 기존 relations_of 1홉으로 충분하다
+✗ anchorless 전역 경로를 비-Company 앵커의 폴백으로 유지
+                                            lift 가 0.0~25.4 로 흔들린다. **우연을 경로로 쓰지 않는다**
+✗ 새 ranking tier · 새 similarity threshold  이번 실측에 그것을 요구하는 결과가 하나도 없다
+```
+
+##### 13. 데이터 품질 문제 — A-8 **밖**으로 뺀다
+
+```text
+① 재료 관계 화이트리스트가 그래프의 25.4% 를 버린다      ★이번에 새로 찾음
+   company_service._REL_TYPES 8종에 IS_EXECUTIVE_OF(787)·DEVELOPS(2,050)가 없다.
+   HAS_EVENT·IMPACTS(2,080)는 사건 경로가 받지만 이 둘은 **어느 경로로도 재료에 못 온다.**
+       엣지 11,168 = 관계 재료 6,251(56.0%) + 사건 경로 2,080 + **못 들어옴 2,837(25.4%)**
+   종단 확인 — 앵커가 완벽히 잡힌 Company 질의에서도 그렇다:
+       "삼성전자 임원이 누구야?"      → relations = OWNS_STAKE_IN ×10.  임원 0건
+       "삼성전자가 개발하는 제품은?"  → relations = OWNS_STAKE_IN ×10.  제품 0건
+   ★`graph_tools.get_relations` 도 같은 함수를 쓰므로 두 입구가 **똑같이** 못 봅니다
+     (계약 6 파리티는 지켜집니다 — 양쪽이 같이 눈이 멀어 있을 뿐입니다).
+
+② 별칭이 별도 노드다 — 국민연금(Organization, 엣지 3) vs 국민연금공단(Company, 엣지 34)
+   → **A-10** 과 같은 뿌리. A-8 traversal 과 섞지 않는다.
+
+③ AnchorExtractor 오탐 — 「기업은」→ 기업은행 exact 1.0 (48건 중 5건)
+   A-2 의 그래프 존재 관문이 **유일한** 방어선이다 → §5-15.
+
+④ Kiwi 가 기관·제품 이름을 고유명사로 안 준다
+   공정거래위원회·고용노동부·낸드플래시·국민연금에서 토큰 **0개**. 「김준성은」→「김」.
+   §5-15 부분 토큰 문제와 같은 자리. **A-8 범위 밖이지만 A-8 의 선행 조건이다.**
+```
+
+#### 판정 — ADOPT / PARTIAL / REJECT (2026-09-06)
+
+```text
+Company        RELATION ADOPT    EVENT ADOPT    IMPACT ADOPT    SEMANTIC ADOPT
+               ★단 「자기 사건 0」인 Company 는 지금 사건 0건이다(삼성에스디에스).
+                 Path C 폴백을 다는 것은 **A-8 과 같은 변경**이다.
+
+Person         RELATION PARTIAL   기업 목록은 나오지만 IS_EXECUTIVE_OF 가 재료 밖(진입 0~4/5)
+               EVENT    PARTIAL   본인 사건 0/754. 「임원인 회사의 사건」으로만 답이 선다
+               IMPACT   ADOPT     Path B+D+근거가 다 선다 — 이번 실측 최대 수확
+               SEMANTIC PARTIAL
+
+Organization   RELATION ADOPT     관계 4종이 전부 화이트리스트 안(공정위 76/76 진입)
+               EVENT    PARTIAL   허브 73곳을 5곳으로 자르면 무엇이 남는지 미결
+               IMPACT   ADOPT
+               SEMANTIC PARTIAL
+
+Product        RELATION PARTIAL   DEVELOPS 가 재료 밖(HBM 8건 중 2건만 진입)
+               EVENT    PARTIAL   직접 3.5% · 경유 74.3%
+               IMPACT   ADOPT
+               SEMANTIC PARTIAL
+
+Recommended    ① decide_anchor() 비-Company 해소   ② material_companies() Path B 갈래
+               둘 다 기존 상한 재사용. Query Coverage 17/48 → 45/48 (실측)
+Deferred       Organization 허브 절단 규칙 · Company「자기 사건 0」 Path C 폴백 · A-9 예산 분배
+Rejected       Product 직접 Event 조회 · Path D 승격 · anchorless 폴백 유지 · 새 tier/threshold
+선행 조건       §5-15 토큰화 — B 분류 11건은 ①② 로 안 고쳐진다
+범위 밖         `_REL_TYPES` 확장(§13①) · 별칭 노드 병합(A-10)
+```
+
 **A-9. ★다중 앵커 질의의 재료가 1차 앵커로 쏠린다** `[TODO]` (2026-09-05 · A-7 구현이 드러냄)
 
 앵커가 둘이어도 **재료 기업은 1차 앵커 하나**입니다. 관계는 앵커 축이 살려 내지만
@@ -4050,6 +4383,7 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 
 | 날짜 | 변경 | 왜 |
 |---|---|---|
+| 2026-09-06 | ★**A-8 을 대표 질의 48건으로 실측했다 — 구현은 하지 않았다**(코드 무수정) | ★**결론이 선입견과 달랐다.** 「Person 은 Event 연결 0이니 EVENT REJECT」를 전제하지 않고 쟀더니 **우회 경로 Anchor→Company→Event 의 Node Coverage 가 네 타입 모두 74~81%** 로 거의 같았다(Company 81.3 · Organization 78.0 · Person 76.0 · Product 74.3). ★**갈림길은 앵커 타입이 아니라 「자기 사건을 들었나」다** — Company 조차 317/3,451(9.2%)뿐이고, 자기 사건 0인 Company(삼성에스디에스)는 Person 앵커와 **똑같이** 사건 0건을 낸다. ★**IMPACT 를 버릴 뻔했다** — 가정형은 Event 가 아니라 구조를 요구하는데 Path B+D 가 네 타입 모두 87~95% 로 열려 있어 **CANDIDATE 3/3** 이다. ★**새로 찾은 것 — 재료 관계 화이트리스트가 그래프의 25.4% 를 버린다.** `company_service._REL_TYPES` 에 IS_EXECUTIVE_OF(787)·DEVELOPS(2,050)가 없어 **앵커가 완벽히 잡힌 Company 질의에서도** 「삼성전자 임원이 누구야?」가 OWNS_STAKE_IN ×10 만 낸다. Person·Product 의 **정의 엣지가 정확히 그 둘**이라 앵커를 확장해도 RELATION 은 △ 에서 멈춘다. ★**우연을 경로로 세지 않았다** — anchorless 32건의 lift 가 0.0~25.4 로 흔들리고 6건이 우연 이하다. 앵커 이름만 뺀 대조군 32건과 사건 겹침이 평균 1.94/10 이라 이름이 순위를 바꾸기는 하는데 **어디로 바꾸는지가 통제되지 않는다.** ★실측 종합 — Query Coverage **CURRENT 17/48 → CANDIDATE 45/48**, 실패 분류 E 16 · B 11 · D 3 · H 1. 판정은 Person/Product RELATION·EVENT·SEMANTIC **PARTIAL**, 네 타입 IMPACT **ADOPT**, Organization RELATION **ADOPT**. ★**production 무수정** — `git status` 비어 있고 1,107 passed, 질의 로그 md5 불변 |
 | 2026-09-05 | ★**A-7 해소 — 두 기업을 물으면 둘 다 앵커로 잡는다. 그리고 후속 둘을 갈라 냈다** | ★**측정이 원인을 옮겼다** — `_query()` 가 앵커를 하나만 담는 것은 증상이고, `resolved_entities` 가 **애초에 한 개만 온다**(「삼성전자와 SK하이닉스」에서 SK하이닉스 하나). 뿌리는 `AnchorExtractor` 인데 `decide_anchor()` 가 이미 토큰을 들고 있어 **`search/` 무수정**으로 2차 앵커를 세웠다. ★**증상이 하나가 아니었다** — 앵커를 둘로 만들어도 두 기업을 잇는 엣지가 재료에 안 들어온다. 네 쌍 전부 그래프에는 엣지가 있는데(3·4·1·2건) 앵커 기업 관계가 225~566건이라 상한 10 에서 밀린다. `ring_of` 에 앵커 축을 더해 **질문이 명시적으로 지목한 두 대상 사이의 관계**를 워크스페이스 링보다 위에 뒀다 — A-1 과 달리 포화 위험이 없다(566건 중 3건). ★`SK` 가 **SK주식회사로 실제 해소되므로** 1차 앵커 이름의 부분 문자열인 토큰을 빼 거른다(§5-15 전면 해결은 아니다). ★**사건·파급은 안 바뀐다** — `ring_of` 호출부가 관계 선정 두 곳뿐이고 둘을 함께 고쳤다(계약 6 파리티). ★실측: 앵커↔앵커 직접 관계가 4/4 에서 0 → 3·3·1·2건. 불변식 5건이 (앵커·기업·관계·사건·근거) 전부 동일하고, 단일 대상 질의의 그래프 조회는 여전히 1회다. 기준선 앵커 14 케이스 무변화. **1,107 passed · 2 xfailed · 실패 0**(검사 8건 신설). ★**후속 둘을 갈라 기록했다** — **A-9**(재료 기업이 1차 앵커 하나라 비교 질의의 사건·근거가 반쪽이다 · `companies_from` 이 히트만 보고 앵커를 안 본다) · **A-10**(별칭이 별도 노드면 같은 회사가 앵커 둘로 실린다 · 재료는 무변경이고 `anchors[]` 만 는다). ★**A-8 을 쟀고 보류로 정했다** — Person 0/754 · Organization 0/564 · Product 68/1,949 로 **사건에 닿지 않아** 앵커를 확장해도 사건 질의는 못 답한다. A-8·A-9 는 `companies = companies_from(result)` **같은 줄**에서 만나므로 따로 설계하지 않는다 |
 | 2026-09-05 | **시험이 질의 로그에 쌓이던 것을 막고 오염된 표본을 옆으로 치웠다** | B-1 이 「집계할 때 `trace_id != "-"` 로 배치를 뺀다」를 전제했는데 **실측에서 안 통했다** — 4,192행 중 3,369행(80%)이 trace_id 를 갖는데 상위 질문이 `q` 1,727 · `x` 195 · 평가셋 질의다. `trace_id` 는 요청 경계에서 발급되므로 `TestClient` 를 쓰는 테스트도 받는다. ★**환경변수로는 못 막는다** — `querylog` 가 `_DISABLED`·`_PATH` 를 import 시점에 굳혀 conftest 가 도는 시점엔 늦다. `tests/conftest.py` 를 신설해 autouse 로 모듈 속성을 덮었다(루트 conftest 는 「fixture 를 추가하지 마라」를 못 박아 뒀다). `test_querylog.py` 는 자기 `sink` 가 뒤에 돌며 다시 켜서 안 죽는다. ★실측: 환경변수 없이 전체 시험을 돌려도 로그가 **4,192행 → 4,192행**, 고치기 전 같은 실행이 쌓던 약 100행이 0 이 됐다. 그물이 걷히면 깨지는 회귀 검사 1건을 신설했다. ★오염된 표본은 `logs/queries.2026-09-05.jsonl` 로 옮기고 집계를 새로 시작한다. ★**`run_test.py` 수동 시험은 아직 쌓인다** — 실제 경로를 도는데 질의는 개발자가 지은 것이라 B-1 이 피하려는 편향과 같다. B-1 을 돌리기 전에 정한다. **1,099 passed · 2 xfailed · 실패 0** |
 | 2026-09-05 | ★**A-1 해소 — 워크스페이스가 처음으로 사건 순위에 반영된다. 티어가 아니라 몫이었다** | 담아 둔 기업이 있는 사용자와 없는 사용자가 글자까지 같은 답을 받던 건. ★**「어느 자리에 얹을까」가 틀린 질문이었다** — 사전식 티어를 세 자리에 얹어 재니 셋 다 상위 10건을 10/10 으로 채웠다(워크스페이스가 전역 후보 933행 중 188행 20%). 이진 티어는 높이와 무관하게 상한을 독점하고, 10/10 은 최종 설계 §19-3 이 금지한 hard filter 와 관측상 구별되지 않는다. ★**여섯 안을 실측으로 기각**했다 — 티어 세 자리 · 상한(천장이라 방향이 반대) · IMPACTS 다단 티어(파급이 3.1%뿐) · 1홉 이웃 티어(워크스페이스가 무엇이든 33% 이고 그 절반이 삼성전자다 — 삼성전자가 사실상 모든 워크스페이스의 이웃이라 신호가 아니다) · 정렬 전체에서 뗀 라운드로빈(투자 질문에 워크스페이스 파업 3건이 들어왔다) · 전 질의 하한(「최근 파업」에서 담아 둔 회사의 파업이 죽는다 — 하한이 순환이다). ★**채택은 배분**이다. `select_propagation()` 이 「첫 사건이 예산을 통째로 먹는다」를 라운드로빈으로 푼 것과 같은 처방이다(§5-20). 몫은 **규칙·위험·최근창 서명이 같은 덩어리 안에서만** 나눠 질의가 부른 유형을 못 넘게 하고, 규칙도 위험도 없는 질의에서만 워크스페이스 후보에 전역 컷을 하한으로 건다. ★**새 상수 0개** — 몫은 라운드로빈이, 하한은 전역 컷이 정한다. 질의마다 유사도 대역이 달라 절대값 상수는 애초에 못 쓴다. ★**`sims` 가 비면 몫을 강제하지 않는다**(§5-27 과 같은 자리). ★**기존 정렬 7줄을 한 줄도 안 고쳤다** — 배분은 정렬 위에 얹은 계층이고, `workspace_keys` 가 비면 건너뛴다. ★실측: 워크스페이스 3종 × 질의 6종에서 규칙 위반 0 · 위험 위반 0. 현대차·기아가 「투자」에서 2/10 에 멈추고(사업확장이 2건뿐) 「최근 파업」에서는 5/10 을 채운다. 「요즘 반도체」에서는 하한이 현대차 파업을 막아 0/10 이다. ★**기준선 18 중 17 무변화**이고 변한 1건은 A-3 의 라벨 수정이다 — 고치기 전 정렬을 재현해 대조하니 워크스페이스를 안 준 경로는 `event_id` 목록이 글자까지 같다. **1,098 passed · 2 xfailed · 실패 0**(테스트 11건 신설) |
