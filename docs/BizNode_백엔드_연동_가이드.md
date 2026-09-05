@@ -541,8 +541,8 @@ unresolved   지정했는데 못 찾았다
 
 ★**응답 필드 둘이 2026-08-26 에 추가됐습니다** —
 `AskResponse.anchor_source` 와 `RetrieveResponse.anchors[]`. 뜻은
-[설계서 §14](BizNode_Search_Layer.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
-[현황서 §3-2](BizNode_Search_Layer.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
+[설계 §14](BizNode_Search_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
+[현황 §3-2](BizNode_검색챗봇_현황.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
 
 ★`anchor_source` 가 `unresolved` 면 **`failed=false` 인데 `sources` 가 빕니다** — 서버
 오류가 아니라 「그 기업을 못 찾았다」는 뜻이고, `answer` 에 대안이 담깁니다. 화면에서

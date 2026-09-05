@@ -74,7 +74,7 @@ def names_of(keys: list[str]) -> dict[str, str]:
 
     ★**못 찾은 key 를 조용히 지우지 않는다.** 그래프에 없는 기업이 워크스페이스에
       담겨 있을 수 있다 — 이름 자리에 key 를 그대로 두고 로그에 남긴다
-      ([규칙 2](../../docs/BizNode_Search_Layer.md)).
+      ([규칙 2](../../docs/BizNode_Search_설계.md)).
 
     ★**이름은 식별 기준이 아니다.** 식별은 key 이고(`corp_code` → `norm_name`),
       이름은 표시·해석용이다(설계서 §16-1).
