@@ -184,3 +184,116 @@ def test_real_shared_event_does_not_leak_other_companies_evidence():
         got = set(by_id[row["eid"]]["evidence_ids"])
         assert got.isdisjoint(row["theirs"]), (
             f"{row['name']}: 남의 근거 {got & set(row['theirs'])} 가 섞였다")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  전역 사건 후보 — 앵커 없는 질문 (2026-09-02)
+# ══════════════════════════════════════════════════════════════════════
+#
+# ★`events_of()`(기업 기준)와 `global_events()`(전역)는 **행 조립부를 공유한다**
+#   (`_event_row`). 사본을 두면 두 경로가 같은 사건을 다른 모양으로 내는데, 그
+#   차이는 DTO 가 `extra="ignore"` 라 **예외가 아니라 조용한 결측**으로 나온다.
+
+def _global_row(ckey="00164779", cname="SK하이닉스", **over):
+    row = {"e": {"event_id": "evt_1", "name": "노조 설립", "event_type": "노무",
+                 "is_risk": True, "article_count": 3, "timeline": [],
+                 "evidence_ids": ["ev_node"]},
+           "h": {"role": "subject", "occurred_at": "2026-06-11",
+                 "evidence_id": "ev_edge"},
+           "sign": "negative", "ckey": ckey, "cname": cname}
+    row.update(over)
+    return row
+
+
+def test_the_two_paths_build_the_same_row_shape(monkeypatch):
+    """★`company` 말고는 글자까지 같아야 한다 — 조립부가 한 곳이라는 증거."""
+    # 같은 입력이어야 대조가 성립한다 — `_row` 는 `sign` 을 안 싣는 헬퍼다.
+    same = dict(_row(node_evidence_ids=["ev_node"],
+                     edge_props={"role": "subject", "occurred_at": "2026-06-11",
+                                 "evidence_id": "ev_edge"}),
+                sign="negative")
+    _stub_rows(monkeypatch, [same])
+    per_company = company_service.events_of(_HYNIX)[0]
+
+    _stub_rows(monkeypatch, [_global_row()])
+    global_ = company_service.global_events()[0]
+
+    assert set(per_company) == set(global_)
+    assert {k: v for k, v in per_company.items() if k != "company"} == \
+           {k: v for k, v in global_.items() if k != "company"}
+
+
+def test_the_per_company_path_leaves_the_company_empty(monkeypatch):
+    """★기업 기준 조회는 부르는 쪽이 이미 어느 기업인지 안다 — 채우면 군더더기다."""
+    _stub_rows(monkeypatch, [_row(node_evidence_ids=[],
+                                  edge_props={"evidence_id": "ev_edge"})])
+
+    assert company_service.events_of(_HYNIX)[0]["company"] is None
+
+
+def test_the_global_path_says_who_it_happened_to(monkeypatch):
+    """★전역은 행마다 기업이 달라 **행이 스스로 말해야 한다.**"""
+    _stub_rows(monkeypatch, [_global_row()])
+
+    got = company_service.global_events()[0]
+
+    assert got["company"] == {"key": "00164779", "name": "SK하이닉스"}
+    # 근거는 여전히 **이 기업의 엣지 것**이다 — 노드 합집합이 아니다.
+    assert got["evidence_ids"] == ["ev_edge"]
+
+
+def test_a_company_without_a_key_is_dropped(monkeypatch):
+    """★key 없는 기업을 실으면 그 사건은 범위 설정에서 빠져 도구가 거부한다."""
+    _stub_rows(monkeypatch, [_global_row(ckey=None)])
+
+    assert company_service.global_events() == []
+
+
+def test_pairs_come_back_in_the_order_they_were_asked_for(monkeypatch):
+    """★순서가 곧 순위다 — 서버가 고른 차례를 도구가 흐트러뜨리면 안 된다.
+
+    Cypher 의 `UNWIND` 는 순서를 보장하지 않으므로 파이썬에서 되맞춘다.
+    """
+    _stub_rows(monkeypatch, [
+        _global_row(ckey="B", cname="비", e={"event_id": "e2", "name": "b",
+                                             "event_type": "기타", "is_risk": False,
+                                             "article_count": 1, "timeline": [],
+                                             "evidence_ids": []}),
+        _global_row(ckey="A", cname="에이", e={"event_id": "e1", "name": "a",
+                                              "event_type": "기타", "is_risk": False,
+                                              "article_count": 1, "timeline": [],
+                                              "evidence_ids": []}),
+    ])
+
+    got = company_service.events_by_pairs([("e1", "A"), ("e2", "B")])
+
+    assert [r["event_id"] for r in got] == ["e1", "e2"]
+
+
+def test_a_pair_that_no_longer_exists_is_skipped_not_raised(monkeypatch):
+    """★그래프가 그 사이 바뀌었을 수 있다. 없는 것과 터지는 것은 다르다."""
+    _stub_rows(monkeypatch, [])
+
+    assert company_service.events_by_pairs([("gone", "A")]) == []
+
+
+@pytest.mark.needs_db
+def test_real_global_candidates_exclude_the_eventness_suspects():
+    """★표시가 있는데 재료로 쓰면 표시를 한 이유가 없어진다(ERD)."""
+    rows = company_service.global_events()
+
+    assert rows, "전역 후보가 0건이면 앵커 없는 질문에 답할 재료가 없다"
+    assert not [r for r in rows if r["eventness_suspect"]]
+    assert all(r["company"] and r["company"]["key"] for r in rows)
+
+
+@pytest.mark.needs_db
+def test_real_pairs_round_trip_through_the_graph():
+    """★`global_events()` 가 준 쌍은 `events_by_pairs()` 로 **그대로** 돌아온다.
+    이 왕복이 깨지면 `/ask` 의 도구가 서버가 고른 사건을 못 집어 온다."""
+    rows = company_service.global_events()[:5]
+    pairs = [(r["event_id"], r["company"]["key"]) for r in rows]
+
+    back = company_service.events_by_pairs(pairs)
+
+    assert [(r["event_id"], r["company"]["key"]) for r in back] == pairs

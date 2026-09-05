@@ -20,11 +20,11 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
 from app.core.trace import trace_logger
 from app.services import company_service
-from app.tools import scope
+from app.tools import keys as keys_module
 from app.tools.dto import (PER_NOTE_LOSS, PER_NOTE_NO_FINANCIALS,
                            BusinessOverviewDTO, FilingDTO, MarketDTO)
 from app.tools.errors import KeyNotResolved
@@ -42,11 +42,9 @@ def _one(key: str) -> str:
       준다. 그러면 「그 기업은 자료가 없다」와 「key 가 틀렸다」가 구별되지
       않는다(원칙 ④). 여기서 한 번 가른다.
     """
-    wanted = scope.check([key])            # ① 범위 밖이면 `OutOfScopeKey`
+    wanted, _ = keys_module.resolved([key])
     if not wanted:
         raise KeyNotResolved("key 가 비어 있다")
-    if not company_service.norm_names_by_keys(wanted):
-        raise KeyNotResolved(f"그래프에서 Company 를 못 찾은 key: {wanted}")
     return wanted[0]
 
 

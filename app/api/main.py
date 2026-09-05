@@ -10,7 +10,8 @@
       3단계  하나씩 진짜로     app/services/       ← 라우트는 그대로, 속만 간다
 
   **3단계가 끝났다. 공개 라우트 21개가 전부 실제 DB 를 읽는다**(2026-08-23).
-  스텁이 없으므로 `X-Stub` 헤더도 더는 나가지 않는다.
+  스텁이 없으므로 `X-Stub` 표시 장치도 지웠다 — 붙일 라우트가 0개인 채로
+  모든 요청이 미들웨어를 지나고 있었다.
 
 경계 — 이 API 는 사용자를 모른다
 
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
@@ -56,7 +57,7 @@ from app.api.schemas import (
     AskRequest, AskResponse, CompanyDetail, CompanySummary, ErrorResponse, Event, ExecutiveItem,
     Filing, GraphResponse, InsightCard, MarketResponse, NewsFeedResponse, NewsItem,
     OwnershipResponse, ProductItem, Propagation, Relation, RelationDetail,
-    RetrieveResponse, RiskEvent, SearchResponse, Suggestion, TrendingItem,
+    RetrieveResponse, SearchResponse, Suggestion,
     WorkspaceChangesRequest, WorkspaceChangesResponse, WorkspaceGraphRequest,
     WorkspaceInsightRequest, WorkspaceSuggestRequest, WorkspaceSuggestResponse,
     WorkspaceSummaryRequest,
@@ -103,15 +104,9 @@ app = FastAPI(
 #   만들면 낭비다. 테스트는 app.dependency_overrides 가 아니라 이 모듈 속성을
 #   갈아끼운다 — 라우트가 Depends 를 쓰지 않기 때문이다.
 _retrieve_service = RetrieveService()
-# ★`AnswerService` **인스턴스는 여기 두지 않는다.** `/ask` 는 그래프가 처리하고
-#   이 앱에서 저 인스턴스를 부르는 라우트가 하나도 없었다 — 만들어만 두면 기동
-#   때마다 쓰이지 않는 객체가 하나 선다.
-#
-#   ★**클래스는 지우지 않았다.** 출력 대조의 기준선이 그쪽이라
-#     (`batch/audit/ask_graph_parity.py`) 지우면 「그래프가 예전과 같은 답을
-#     내는가」를 물을 수 없다. 다만 그 스크립트는 자기가 쓸 인스턴스를 직접
-#     만든다(`AnswerService(RetrieveService(embed=embed))`) — 여기 것을 쓰지
-#     않았으므로 대조는 그대로 돈다. 최종 폐기 여부는 별도 결정이다.
+# ★`/ask` 는 이 인스턴스를 **그래프를 통해** 쓴다. 1차 답변 경로는 폐기했다
+#   (2026-09-04) — 대조 기준선이던 그쪽이 1.5차 표기·앵커리스 개정 뒤로 이미
+#   빨간불이라 「예전과 같은 답인가」를 물을 수 없는 상태였다.
 # 그래프는 위 인스턴스를 **그대로** 쓴다 — 두 벌을 만들면 SearchOrchestrator 가
 # 둘이 되어 커넥션·캐시가 갈린다.
 bind_service(_retrieve_service)
@@ -124,26 +119,6 @@ app.add_middleware(
     allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_methods=["*"], allow_headers=["*"],
 )
-
-
-# 아직 고정값인 라우트를 **경로 그대로** 적는다. 접두사로 판정하던 때는 같은
-# 접두사 안에 진짜와 가짜가 섞여 두 개를 거꾸로 표시했다.
-#
-# ★비어 있는 것이 정상이다 — 지금은 전부 실물이다. 라우트가 실물이 될 때 여기서
-#   빼는 것을 잊으면 **멀쩡한 응답이 가짜로 나간다.** `/news` 가 실물이 된 뒤에도
-#   남아 있어, 12,250건을 돌려주면서 `X-Stub: true` 를 달고 나갔다(2026-08-23).
-#   헤더가 아니라 **본문이 무엇을 부르는지**로 판단해야 한다.
-_STUB: tuple[str, ...] = ()
-
-
-@app.middleware("http")
-async def _mark_stub(request, call_next):
-    """`_STUB` 에 적힌 라우트에만 `X-Stub: true`."""
-    resp: Response = await call_next(request)
-    path = request.url.path
-    if any(path == s or path.startswith(s + "/") for s in _STUB):
-        resp.headers["X-Stub"] = "true"
-    return resp
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -515,8 +490,9 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
 
     `evidence[].evidence_id` 를 반드시 붙인다. 화면이 답과 근거를 나란히 놓는다.
 
-    - `workspace_keys` 를 주면 **그 범위 안에서만** 찾는다. 관계는 **양끝이 모두**
-      그 안에 있어야 한다 — 챗봇은 사용자의 워크스페이스 안에서 존재하는 기능이다.
+    - `workspace_keys` 는 **선택이고 필터가 아니다.** 주면 Global 검색 결과의
+      **순서**에 반영되고, 안 주면 Global Ranking 그대로다 — 워크스페이스 밖
+      기업도 그대로 나온다(최종 설계 §6-2).
     - `evidence[].missing=true` 는 **id 는 있는데 원문을 못 찾은 것**이다. 지우지
       않고 알린다 — 지우면 「근거가 없는 관계」로 읽힌다. **인용하면 안 된다.**
     - `propagation[].stated` 로 **보도와 계산을 가른다.** 섞어 말하면 추론을
@@ -525,7 +501,7 @@ async def retrieve(body: AskRequest) -> RetrieveResponse:
     # ★이 라우트는 **어댑터다.** 로직은 RetrieveService 에 있다 — 추론 담당은
     #   이 HTTP 를 거치지 않고 같은 서비스를 직접 import 한다(같은 프로세스).
     #   여기 로직을 넣으면 두 입구가 다르게 동작한다.
-    return await _get_retrieve_service().retrieve_async(body)
+    return await _retrieve_service.retrieve_async(body)
 
 
 @app.post("/ask", response_model=AskResponse, tags=["챗봇"],
@@ -536,6 +512,13 @@ async def ask(body: AskRequest) -> AskResponse:
     `/retrieve` 가 만든 재료 밖의 것은 인용할 수 없다 — `sources` 에 실리는
     `evidence_id` 는 전부 서버가 재료 안에서 확인한 것이다.
 
+    - `workspace_keys` 는 **선택이다.** 비어 있어도 Global Search 로 답한다
+      (최종 설계 §6-1) — 워크스페이스는 검색 경계가 아니라 랭킹 문맥이다.
+    - `anchor_source` 로 **무엇을 대상으로 답했는지**를 가른다 —
+      `query`(질문이 지정) / `context`(보고 있는 기업) /
+      `anchorless`(지정하지 않음 — 정상) / `unresolved`(지정했는데 못 찾음).
+      ★`unresolved` 면 LLM 을 부르지 않고 못 찾았다고만 답한다. 워크스페이스
+      기업으로 **갈아타지 않는다**(설계서 §14-3).
     - `failed=true` 면 `answer` 는 고정 안내 문구다. `sources` 는 그래도 원본
       근거를 담고 있다 — 답을 못 썼어도 근거는 보여줄 수 있다.
     - `missing=true` 였던 근거는 `sources` 에 오지 않는다.
@@ -553,9 +536,10 @@ async def ask(body: AskRequest) -> AskResponse:
 
 @app.get("/health", tags=["운영"], summary="상태 확인")
 def health() -> dict:
-    # ★`stub` 이 상수 True 라 **모든 라우트가 실물이 된 뒤에도** True 였다.
-    #   배포 점검이 늘 「미완성」이라 답하는 셈이었다.
-    return {"status": "ok", "stub": bool(_STUB), "version": app.version}
+    # ★`stub` 키를 **남긴다.** 값은 언제나 `false` 다(전부 실물이라 고정값 라우트가
+    #   없다). 백엔드가 이미 읽고 있을 수 있어 키를 빼지 않는다 — 실물 여부는
+    #   이 값이 아니라 **본문이 무엇을 부르는지**로 판단한다.
+    return {"status": "ok", "stub": False, "version": app.version}
 
 
 # ══════════════════════════════════════════════════════════════════

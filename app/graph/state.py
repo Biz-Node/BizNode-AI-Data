@@ -5,8 +5,10 @@
   나가 있어서, 여기서 모양을 바꾸면 그래프가 「같은 값을 다르게 부르는 두 번째
   진실」이 된다.
 
-★`app/tools/dto.py` 는 **쓰지 않는다.** 저건 표기(`source_note`·`caution` 등)를
-  붙이는 계층이라, 넣는 순간 프롬프트가 바뀌고 출력 대조가 깨진다. Phase 1.5 다.
+★`app/tools/dto.py` 는 **재료 세 축에만** 쓴다(1.5차에 들어왔다). 표기
+  (`source_note`·`caution` 등)가 프롬프트에 실려야 해서다 — 근거는 아래
+  `events`·`propagation`·`relations` 주석에 있다. `evidence` 는 `claim_check` 가
+  읽는 모양이라 API 스키마 그대로 둔다.
 
 ★상한 상수(`_MAX_*`)를 State 에 올리지 않는다. State 는 **이번 요청에서 흐르는
   값**만 담는다. 상한은 모듈 상수라 요청마다 달라질 이유가 없고, State 에 두면
@@ -71,18 +73,31 @@ class AskState(TypedDict, total=False):
     #   Phase 0 이전에는 두 곳에서 따로 계산됐고 값이 갈릴 수 있었다:
     #
     #       retrieve_service._events_of()   resolved_entities 우선, 비면 decision.anchors
-    #       answer_service.ask()            decision.anchors 만
+    #       (폐기된 1차 경로)               decision.anchors 만
     #
     #   `source=query` 일 때 `decision.anchors` 는 **최고점 1개**인데
     #   (`query_understanding._primary`) `resolved_entities` 는 **복수 후보**라
-    #   두 리스트가 다를 수 있다. `answer_service` 주석이 「의도는 재료를 고를 때
-    #   쓴 것과 같아야 한다」고 못 박아 놓고도 코드가 못 지키고 있었다.
+    #   두 리스트가 다를 수 있다. 1차 주석이 「의도는 재료를 고를 때 쓴 것과
+    #   같아야 한다」고 못 박아 놓고도 코드가 못 지키고 있었다.
     #
     #   ★**retrieve 쪽 계산식을 채택한다** — 재료를 실제로 고른 것이 그쪽이다.
     #     `check_claims` 가 이 값을 읽으므로 「무엇으로 골랐나」와 「무엇으로
     #     검사하나」가 처음으로 같아진다.
     anchor_names: list[str]
     intent: str
+
+    # ★**앵커 없는 질문에서 서버가 고른 사건**(2026-09-02).
+    #   `(event_id, company_key)` 쌍의 순서 있는 목록. 앵커 경로에서는 비어 있다.
+    #
+    #   `plan_material` 이 전역 사건 검색을 **한 번** 돌려 여기 싣고,
+    #   `_scope_of` 가 `scope.event_pairs` 로 넘기면 `get_events` 가 **고르지 않고
+    #   조회만** 한다. 도구가 다시 고르면 `/retrieve` 의 전역 10건과 재료가
+    #   갈린다 — 앵커 없는 경로에서 `companies` 는 이미 그 사건에서 역산된
+    #   것이라, 기업별로 다시 조회하면 기업당 10건 × 최대 10곳이 된다.
+    #
+    #   ★`companies` 와 달리 이건 **사건 쪽 순서**다. 둘의 순서가 어긋나도
+    #     문제가 없다 — 기업은 사건에서 나온 부산물이고 범위 설정에만 쓰인다.
+    event_pairs: list[tuple[str, str]]
 
     # ── agent ⇄ run_tools 노드 (2차) ──────────────────────────
     # ★Agent 대화. `agent` 가 고르고 `run_tools` 가 결과를 붙인다.

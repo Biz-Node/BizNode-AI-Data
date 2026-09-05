@@ -28,6 +28,7 @@ from typing import Optional
 
 from app.api.schemas import (AnchorSource, AskRequest, Event, Evidence, MatchType,
                              Propagation, Relation, RelationEndpoint, RetrieveResponse)
+from app.core import querylog
 from app.core.trace import new_trace_id, trace_logger
 from app.services import (company_service, evidence_selector, query_understanding,
                           relation_selector, relation_service, workspace_service)
@@ -50,16 +51,22 @@ _MAX_LOGGED_EVIDENCE = 10
 # 검색 히트 수만큼 Neo4j 왕복이 생기므로(설계서 §26) 일단 막아 두되, **잘라낸
 # 사실을 로그로 남긴다** — 조용히 자르면 「그게 전부」로 읽힌다.
 _MAX_COMPANIES = 5
-_MAX_RELATIONS_PER_COMPANY = 10
-_MAX_RISK_EVENTS_FOR_PROPAGATION = 3
+MAX_RELATIONS_PER_COMPANY = 10
+MAX_RISK_EVENTS_FOR_PROPAGATION = 3
 # ★사건에는 상한이 **없었다**(Step2, 2026-08-23). 실측으로 「삼성전자와
 #   SK하이닉스의 담합 소송」이 사건 155건 → 근거 205건 → 34,430자를 프롬프트에
 #   실었다. 기업마다 따로 적용한다 — 전체 상한 하나로 두면 사건 많은 기업이
 #   다 먹는다. 역시 실측 근거 없는 잠정치다.
-_MAX_EVENTS_PER_COMPANY = 10
+MAX_EVENTS_PER_COMPANY = 10
+# ★앵커 없는 질문의 사건 상한 — **한 줄로 세운 전체**에 건다(2026-09-02).
+#   기업별 상한과 **일부러 같은 값**이다. 앵커 없는 목록도 「한 화면치 재료」라는
+#   같은 역할이고, 값을 갈라 두려면 그 근거가 먼저다.
+#   ★기업별 상한처럼 **기업마다** 걸면 안 된다 — 후보가 933행 · 234기업이라
+#     기업당 10 이면 상한이 사실상 없는 것과 같다.
+_MAX_GLOBAL_EVENTS = 10
 
 
-def _default_embed(texts: list[str]):
+def default_embed(texts: list[str]):
     """지연 로딩 — 임포트 시점에 OpenAI 클라이언트를 만들지 않는다. 테스트는
     이 이름을 monkeypatch 해서 끈다(`None` 이면 유사도 없이 규칙만 쓴다).
 
@@ -96,11 +103,34 @@ assert set(_MATCH_TYPE_BY_MODE) == set(SearchMode), (
     "SearchMode에 새 값이 생겼다 — match_type 매핑을 갱신할 것")
 
 
-def _match_type_of(result: SearchResult) -> MatchType:
+def is_anchorless(decision: AnchorDecision) -> bool:
+    """전역 사건 검색으로 가는가. **판정을 한 곳에만 둔다** — `/ask` 와
+    `/retrieve` 가 각자 `decision.source is ...` 를 쓰면 조건이 갈린다."""
+    return decision.source is AnchorSource.ANCHORLESS
+
+
+def match_type_of(result: SearchResult,
+                   decision: Optional[AnchorDecision] = None) -> MatchType:
+    """★**앵커가 없으면 `EXACT` 가 아니다**(2026-09-02).
+
+    실측 F1: 「최근 주요 투자 이벤트가 뭐야?」가 앵커를 하나도 못 잡았는데
+    `match_type=EXACT` 로 나갔다. `SearchMode.RELATIONSHIP` 이 `EXACT` 로 매핑돼
+    있어서인데, 그 매핑은 **앵커를 잡은 관계 검색**을 전제한 것이다.
+
+    추론 계층이 이 값에서 읽는 것은 「그래프에서 정확히 찾았나, 의미 유사도로
+    찾았나」 하나뿐이다(§11). 앵커 없는 전역 사건 검색은 규칙 티어와 임베딩
+    유사도가 순위를 만드므로 **`SEMANTIC` 쪽**이다 — 같은 무게로 말하면 안 된다는
+    그 규약이 걸려야 하는 자리다.
+
+    ★새 enum 값을 만들지 않는다. `MatchType` 은 API 계약이고, 추론 계층에
+      필요한 이분법은 지금 둘로 충분하다.
+    """
+    if decision is not None and is_anchorless(decision):
+        return MatchType.SEMANTIC
     return _MATCH_TYPE_BY_MODE[result.mode]
 
 
-def _companies_from(result: SearchResult) -> list[RelationEndpoint]:
+def companies_from(result: SearchResult) -> list[RelationEndpoint]:
     """검색 히트에서 **Company 만** 추린다(설계서 §9).
 
     ★`entity_id` 가 항상 `corp_code` 라고 가정하지 않는다. GraphSearcher 는
@@ -134,7 +164,7 @@ _RING_OUTSIDE_OTHER = 2    # 워크스페이스 ↔ 비-Company (사건·인물�
 _RING_UNRELATED = 3        # 워크스페이스와 닿지 않음 — ★버리지 않는다
 
 
-def _ring_of(row: dict, workspace_keys: set[str]) -> int:
+def ring_of(row: dict, workspace_keys: set[str]) -> int:
     """이 관계가 워크스페이스에서 몇 링 떨어져 있나. **작을수록 안쪽.**
 
     ★`Relation` 을 만들기 **전에** 원본 dict 로 판정한다 — 삼성전자 관계가 526건이라
@@ -151,7 +181,7 @@ def _ring_of(row: dict, workspace_keys: set[str]) -> int:
             else _RING_OUTSIDE_OTHER)
 
 
-def _anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
+def anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
     """앵커 자신을 재료 기업으로 삼는다(설계서 §3 material anchor).
 
     ★앵커 기업 수 상한은 **기존 `_MAX_COMPANIES` 를 그대로** 쓴다 — 새 숫자를
@@ -164,7 +194,7 @@ def _anchor_companies(decision: AnchorDecision) -> list[RelationEndpoint]:
     return companies[:_MAX_COMPANIES]
 
 
-def _with_anchor_backstop(companies: list[RelationEndpoint],
+def with_anchor_backstop(companies: list[RelationEndpoint],
                           decision: AnchorDecision) -> list[RelationEndpoint]:
     """재료 기업이 **하나도 안 남았을 때** 앵커 기업으로 메운다(현황서 §5-16).
 
@@ -201,20 +231,188 @@ def _with_anchor_backstop(companies: list[RelationEndpoint],
     return kept
 
 
-def _hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
-    """검색 히트를 재료로 믿어도 되나.
+def hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
+    """검색 히트를 재료로 써도 되나.
 
-    ★믿어도 되는 경우는 하나다 — ② Search 가 **실제로 앵커를 잡고** 그래프를 돈
-      경우다(`resolved_entities` 가 있음). 그때 히트는 「그 기업의 관계 상대」이고
-      그게 곧 답이다(「삼성전자에 납품하는 기업」).
+    ★**두 경우다.**
 
-    ★믿으면 안 되는 경우 셋 — 전부 히트가 앵커와 무관하다.
+        ① `source=query` 이고 ② Search 가 **실제로 앵커를 잡았다**
+           (`resolved_entities` 가 있음). 그때 히트는 「그 기업의 관계 상대」이고
+           그게 곧 답이다(「삼성전자에 납품하는 기업」).
 
-        SEMANTIC 폴백        의미가 비슷한 아무 기업 (설계서 §14-5)
-        anchorless 슬롯      source 5 + target 5 를 점수순으로 아무거나 (§14-7 ⓑ)
-        norm_name fallback   ② 는 못 찾았고 우리가 뒤늦게 찾은 앵커 (§16-1)
+        ② `source=anchorless` — **앵커가 아예 없다.** 그러면 히트 말고 재료가
+           없다. 전에는 이 자리가 `workspace` 였고 워크스페이스 기업을 앵커로
+           승격시켜 재료를 만들었는데, 그것이 §17-3 이 폐기한 구조다. 앵커를
+           지어내지 않으므로 **Global Search 가 찾아 준 것이 재료**다
+           (최종 설계 §8: Global Search → Candidate → Contextual Ranking).
+
+    ★쓰면 안 되는 경우 둘 — 히트가 **정해진 앵커와 어긋난다.**
+
+        `source=context`       화면이 대상을 알고 있다 — 그 기업이 재료다
+        `source=query` + norm_name fallback
+                               ② 는 못 찾았고 우리가 뒤늦게 찾은 앵커라
+                               히트는 그 앵커를 반영하지 않는다 (§16-1)
+
+    ★★`anchorless` 히트의 **질은 보장되지 않는다.** SEMANTIC 폴백은 의미가
+      비슷한 아무 기업이고, anchorless 관계 조회는 source 5 + target 5 를
+      점수순으로 채운다(§14-7 ⓑ). 그래서 답변에 「대상 지정 없음」 표기가
+      함께 나간다(`llm/prompt.TARGET_NOTE_BY_SOURCE`) — 재료가 약하다는 사실이
+      사용자에게 가는 것이 조용히 서술하는 것보다 낫다(설계서 §14-6).
     """
+    if decision.source is AnchorSource.ANCHORLESS:
+        return True
     return decision.source is AnchorSource.QUERY and bool(query.resolved_entities)
+
+
+def material_companies(decision: AnchorDecision, query: SearchQuery,
+                       result: SearchResult, question: str,
+                       *, embed=None) -> tuple[list[RelationEndpoint], Optional[list]]:
+    """재료 기업을 정한다 — ★**두 입구가 이 함수 하나를 쓴다.**
+
+    `/retrieve`(`_assemble`)와 `/ask`(그래프 `plan_material`)가 같은 질문에 같은
+    재료를 내야 한다. 전에는 분기가 **두 벌**이었고 한 줄이 갈려 있었다:
+
+        /retrieve   use_hits=True 고정
+        /ask        use_hits=hits_reflect_the_anchor(...)
+
+    판정 함수는 이미 공유하고 있었는데 **`/retrieve` 만 그 답을 안 썼다.** 그래서
+    「이 회사 리스크 어때?」(기업 상세 화면)가 입구에 따라 갈렸다 — `/ask` 는
+    삼성전자를, `/retrieve` 는 삼성에스디에스·원익홀딩스·리노공업을 재료로 냈다
+    (현황서 §6-0 A-6 · 2026-09-05).
+
+    ★돌려주는 둘째 값은 **앵커리스에서 이미 고른 사건**이다. 그 경로는 사건을
+      먼저 고르고 기업을 역산하므로, 부르는 쪽이 사건을 다시 고르면 두 입구가
+      **다른 사건**을 보게 된다. 앵커 경로에서는 `None` 이다 — 사건은 기업이
+      정해진 뒤에 고른다.
+    """
+    if is_anchorless(decision):
+        # ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3 · 2026-09-02).
+        #   전에는 검색 히트에서 Company 만 추려 재료 기업을 정했는데, 앵커
+        #   없는 질문에서 그 기업 5곳은 사실상 임의로 정해진 것이었다(F1) —
+        #   「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다.
+        #   히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려
+        #   **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
+        events = select_global_events(question, embed=embed or default_embed)
+        return companies_of_events(events), events
+
+    if hits_reflect_the_anchor(decision, query):
+        companies = companies_from(result)
+    else:
+        # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
+        companies = anchor_companies(decision)
+        log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
+                 [c.key for c in companies], len(result.hits))
+    # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
+    #   이미 앵커가 `companies` 라 무동작이다.
+    return with_anchor_backstop(companies, decision), None
+
+
+def anchor_names_for(query: SearchQuery, decision: AnchorDecision,
+                      companies: list[RelationEndpoint]) -> list[str]:
+    """사건 랭킹에서 **라벨과 질문 양쪽에서 떼어낼 기업명**(`evidence_selector`).
+
+    ★**한 벌만 둔다.** `/ask` 그래프(`plan_material`)와 `/retrieve`(`_events_of`)가
+      같은 값을 써야 한다 — 갈리면 두 입구가 같은 질문에 다른 순위를 낸다.
+
+    ★셋째 갈래가 `anchorless` 때문에 필요해졌다(이번 개정). 전에는
+
+          resolved_entities  →  없으면 decision.anchors
+
+      뿐이었는데, `anchorless` 는 **둘 다 비어 있다.** 그대로 두면 목록이 `[]` 가
+      되어 `evidence_selector` 가 실험 3회로 정한 규칙 —「질문과 라벨 **양쪽에서**
+      앵커 기업명 제거」— 가 라벨 쪽에서 안 걸리고, 모듈이 **실패로 기록한 실험
+      ②**(「기업명이 든 라벨이 상위를 먹는다」)로 되돌아간다(현황서 §5-23 이
+      워크스페이스 경로에서 이미 한 번 고친 퇴행이다).
+
+      `workspace` 경로에서 그 목록은 「재료가 된 기업들의 이름」이었다.
+      `anchorless` 에서 같은 것은 **히트가 준 재료 기업들의 이름**이다.
+    """
+    names = [r.corp_name for r in query.resolved_entities if r.corp_name]
+    if not names:
+        names = [a.name for a in decision.anchors if a.name]
+    if not names:
+        names = [c.name for c in companies if c.name]
+    return names
+
+
+# ── 전역 사건 검색 (2026-09-02) ──────────────────────────────────────────
+# 최종 설계 §5 시나리오 3 · §17-2. 「최근 주요 투자 이벤트가 뭐야?」처럼 **앵커도
+# 워크스페이스도 없는 질문**의 재료다.
+#
+# ★**한 벌만 둔다.** `/retrieve` 는 이 결과를 그대로 쓰고, `/ask` 는
+#   `plan_material` 이 여기서 고른 쌍을 `scope` 에 실어 도구가 **조회만** 하게
+#   한다(`company_service.events_by_pairs`). 두 입구가 같은 함수를 부르는 것이
+#   아니라 **한 번 고른 것을 나눠 쓰는** 구조라, 갈릴 자리가 없다.
+#
+# ★**랭킹을 새로 만들지 않는다.** `evidence_selector.select()` 를 그대로 부른다 —
+#   규칙 티어·위험·최근창·유사도 덩어리가 전부 그대로 적용된다. 사본을 두면
+#   앵커 경로와 앵커 없는 경로의 순위 규칙이 조용히 갈린다.
+
+
+def select_global_events(question: str, *, embed,
+                         limit: int = _MAX_GLOBAL_EVENTS) -> list[Event]:
+    """전역 사건 후보에서 질문이 부른 것을 고른다. **(기업, 사건) 쌍 단위.**
+
+    ★`anchor_names` 가 **빈 목록인 것이 맞다.** 앵커가 없으니 질문에서도 라벨에서도
+      떼어낼 기업명이 없다. `evidence_selector` 가 실험 3회로 정한 규칙(「질문과
+      라벨 양쪽에서 앵커 기업명 제거」)이 풀려는 문제는 **질문에 든 기업명이
+      유사도를 지배하는 것**인데, 앵커 없는 질문에는 그 기업명이 애초에 없다.
+
+      ★라벨 쪽 기업명(「**삼성전자** 본사 압수수색」)은 여전히 남는다. 행마다
+        기업이 달라 한 벌의 `anchor_names` 로는 못 떼는데, 떼는 편이 나은지는
+        **아직 안 쟀다** — `similarities()` 에 행별 제거를 넣는 것은 시그니처
+        변경이라 근거가 먼저다.
+
+    ★`event_id` 로 **접지 않는다**(설계 Q2). 같은 사건에 기업이 둘 이상 붙은 것이
+      5.7%(실측)이고, 그때 `role`·`occurred_at`·`evidence_ids` 가 기업마다 다르다.
+      앵커 없는 질문에서는 **누구에게 난 일인가**가 곧 답의 일부다.
+    """
+    rows = company_service.global_events()
+    candidates = [Event(**row) for row in rows]
+    intent = evidence_selector.intent_of(question, [])
+    matched = evidence_selector.matched_event_types(intent)
+    risk_wanted = evidence_selector.risk_intent(intent)
+    recent_since = (evidence_selector.recent_window()
+                    if evidence_selector.recent_intent(intent) else None)
+    sims = evidence_selector.similarities(candidates, intent=intent, embed=embed,
+                                          anchor_names=[])
+    kept, cut = evidence_selector.select(
+        candidates, matched=matched, sims=sims, limit=limit,
+        risk_wanted=risk_wanted, recent_since=recent_since)
+    firms = {e.company.key for e in kept if e.company}
+    log.info("global.events 후보=%d 선택=%d 버림=%d intent=%r matched=%s "
+             "risk=%s recent=%s 기업=%d",
+             len(candidates), len(kept), len(cut), intent, sorted(matched),
+             risk_wanted, recent_since, len(firms))
+    # ★Phase 6 의 재료 — 라벨 없이 정답/누락/오탐을 세려면 이 넷이 남아야 한다.
+    querylog.record(question=question, intent=intent, matched=matched,
+                    selected_types=[e.event_type for e in kept],
+                    anchor_source="anchorless", n_events=len(kept),
+                    n_companies=len(firms), risk_wanted=risk_wanted,
+                    recent_since=recent_since, path="global")
+    return kept
+
+
+def companies_of_events(events: list[Event]) -> list[RelationEndpoint]:
+    """선택된 사건에서 **기업을 역산한다**(설계 Q3). 순서 보존 · key 중복 제거.
+
+    ★**자르지 않는다.** `_MAX_COMPANIES` 를 여기 걸면 안 된다 — 이 목록이 곧
+      Agent 의 `scope.allowed` 라, 5 로 자르면 나머지 사건의 기업이 범위 밖이
+      되어 도구가 `OutOfScopeKey` 로 거부한다. 실측(2026-09-02): 상위 10건이
+      **6~10개 기업**에 걸쳐 질의 5건 전부가 5를 넘었다.
+
+      상한은 이미 **사건 쪽에** 걸려 있다(`_MAX_GLOBAL_EVENTS`). 사건을 먼저
+      자르고 기업은 그 결과에서 나오므로, 기업 수는 사건 수를 넘지 못한다.
+    """
+    out: list[RelationEndpoint] = []
+    seen: set[str] = set()
+    for event in events:
+        company = event.company
+        if company is None or company.key in seen:
+            continue
+        seen.add(company.key)
+        out.append(RelationEndpoint(key=company.key, name=company.name))
+    return out
 
 
 class RetrieveService:
@@ -222,7 +420,7 @@ class RetrieveService:
                  *, embed=None) -> None:
         self._orchestrator = orchestrator or build_orchestrator()
         # 주입용 — 테스트가 OpenAI 없이 돌 수 있어야 한다. None 이면 호출 시점에
-        # 모듈 전역 `_default_embed` 를 쓴다(monkeypatch 가 먹도록 늦게 읽는다).
+        # 모듈 전역 `default_embed` 를 쓴다(monkeypatch 가 먹도록 늦게 읽는다).
         self._embed = embed
 
     # ── ②·①b — 검색하고 앵커를 정한다 ──────────────────────────────────
@@ -248,52 +446,41 @@ class RetrieveService:
 
         # ★이름 조회는 **경계에서 한 번**이다(설계서 §16-3). ①b 는 이 결과를
         #   메모리에서 대조만 한다 — 「새 검색을 하지 않는다」(§10 ①b).
+        # ★`context_keys` 도 같은 함수로 붙인다. **그래프 경로와 같아야 한다** —
+        #   `material.resolve_anchor` 와 이 메서드가 갈리면 `/ask` 와 `/retrieve`
+        #   가 같은 요청에 다른 앵커를 낸다(계약 6 parity).
         workspace_names = workspace_service.names_of(request.workspace_keys)
+        context_names = (workspace_service.names_of(request.context_keys)
+                         if request.context_keys else {})
         decision = query_understanding.decide_anchor(
-            request.question, query.resolved_entities, workspace_names)
+            request.question, query.resolved_entities, workspace_names,
+            context_names)
         return query, result, decision
 
     def retrieve(self, request: AskRequest) -> RetrieveResponse:
         """질문 하나 → 챗봇이 인용할 재료. **여기서 문장을 만들지 않는다.**
 
-        ★`/retrieve` 의 **동작은 안 바뀐다**(설계서 §14-5) — `anchors[]` 가 실릴
-          뿐이고, SEMANTIC 은 여기서 여전히 살아 있는 경로다. `unresolved` 조기
-          반환은 `/ask` 의 규약이라 `retrieve_for_ask()` 쪽에 있다.
+        ★재료 기업 선정은 `material_companies()` 한 곳이다 — 그래프의
+          `plan_material` 과 **같은 함수**를 쓴다. 전에는 여기가 `use_hits=True`
+          로 고정돼 있어서 같은 질문이 입구에 따라 다른 재료를 냈다(§6-0 A-6).
+
+        ★`SEMANTIC` 은 여전히 살아 있는 경로다(설계서 §14-5) — `match_type` 은
+          그대로 나간다. 바뀐 것은 「의미 유사 기업을 **재료로도 쓰나**」뿐이다.
+
+        ★`unresolved` 조기 반환은 여기 없다. `/ask` 의 규약이고, 그래프의
+          조건부 엣지(`is_resolved`)가 그 자리에서 갈라 준다.
         """
         query, result, decision = self._search(request)
-        return self._assemble(request, query, result, decision, use_hits=True)
-
-    def retrieve_for_ask(self, request: AskRequest) -> tuple[AnchorDecision,
-                                                             Optional[RetrieveResponse]]:
-        """`/ask` 전용 입구 — **`unresolved` 면 재료를 만들지 않는다**(설계서 §14-4).
-
-        ★못 찾은 대상에 워크스페이스 재료를 붙이면 그게 곧 조용한 오답이다.
-          조립을 건너뛰므로 Neo4j 왕복(사건·관계·파급·근거)도 나가지 않는다.
-        """
-        query, result, decision = self._search(request)
-        if decision.source is AnchorSource.UNRESOLVED:
-            log.info("ask.unresolved named=%r — 재료를 만들지 않는다", decision.named)
-            return decision, None
-        # ★`/ask` 에서만 앵커가 재료를 정한다(설계서 §14-5) — `/retrieve` 는 무변경.
-        use_hits = _hits_reflect_the_anchor(decision, query)
-        return decision, self._assemble(request, query, result, decision,
-                                        use_hits=use_hits)
+        return self._assemble(request, query, result, decision)
 
     # ── ③~⑥ — 재료를 조립한다 ──────────────────────────────────────────
     def _assemble(self, request: AskRequest, query: SearchQuery,
-                  result: SearchResult, decision: AnchorDecision,
-                  *, use_hits: bool) -> RetrieveResponse:
-        if use_hits:
-            companies = _companies_from(result)
-        else:
-            # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-            companies = _anchor_companies(decision)
-            log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
-                     [c.key for c in companies], len(result.hits))
-        # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
-        #   이미 앵커가 `companies` 라 무동작이다.
-        companies = _with_anchor_backstop(companies, decision)
-        events = self._events_of(companies, request.question, query, decision)
+                  result: SearchResult, decision: AnchorDecision) -> RetrieveResponse:
+        companies, global_events = material_companies(
+            decision, query, result, request.question, embed=self._embed)
+        # 앵커리스는 사건을 이미 골랐다 — 다시 고르면 두 입구가 다른 사건을 본다.
+        events = (global_events if global_events is not None
+                  else self._events_of(companies, request.question, query, decision))
         propagation = self._propagation_of(events)
         relations = self._relations_of(companies, set(request.workspace_keys),
                                        query, decision)
@@ -307,7 +494,7 @@ class RetrieveService:
 
         return RetrieveResponse(
             question=request.question,
-            match_type=_match_type_of(result),
+            match_type=match_type_of(result, decision),
             anchors=decision.anchors,
             companies=companies,
             events=events,
@@ -334,30 +521,25 @@ class RetrieveService:
           질문이 부른 기업이 둘이면 둘 다 근거다. scope 밖 기업은 애초에
           `companies` 에 없으므로 섞이지 않는다.
         """
-        # ★**workspace 앵커 경로에서 이 목록이 비어 순위가 퇴행했다** (2026-08-26).
-        #
-        #   `decide_anchor()` 는 `resolved_entities` 가 **있으면** `query` 로 가므로,
-        #   `source=workspace` 는 **정의상 `resolved_entities` 가 0** 이다. 그런데
-        #   `anchor_names` 를 거기서만 읽어서 workspace 질의는 늘 `[]` 였다
-        #   (실측: 「납품 단가 압박」·「최근 인수 사례」·「생산 차질 위험」 셋 다).
-        #
-        #   그러면 `evidence_selector` 가 실험 3회로 정한 규칙 —「질문과 라벨
-        #   **양쪽에서** 앵커 기업명 제거」— 가 라벨 쪽에서 안 걸린다. 질문에는
-        #   기업명이 없고(그래서 workspace 로 떨어졌다) 라벨에는 있으니, 모듈이
-        #   **실패로 기록한 실험 ②**(「기업명이 든 라벨이 상위를 먹는다」)로
-        #   그대로 되돌아간다.
-        #
-        #   ★이름은 이미 손에 있다 — `decision.anchors` 가 그 워크스페이스 기업들이다.
-        anchor_names = [r.corp_name for r in query.resolved_entities if r.corp_name]
-        if not anchor_names:
-            anchor_names = [a.name for a in decision.anchors if a.name]
+        # ★**앵커 없는 경로에서 이 목록이 비면 순위가 퇴행한다** (현황서 §5-23).
+        #   왜 셋째 갈래(재료 기업 이름)가 필요한지는 `anchor_names_for` 에 적었다.
+        #   ★계산식은 **그 함수 한 곳**에만 둔다 — `/ask` 그래프의 `plan_material`
+        #     이 같은 함수를 부른다.
+        anchor_names = anchor_names_for(query, decision, companies)
         intent = evidence_selector.intent_of(question, anchor_names)
         matched = evidence_selector.matched_event_types(intent)
+        # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). 「리스크」에 걸리는
+        #   event_type 패턴이 하나도 없어 위험 질의가 규칙 티어를 통째로 못 받았다.
+        risk_wanted = evidence_selector.risk_intent(intent)
+        # ★세 번째 축 — 시간. 「최근」은 지금까지 아무도 해석하지 않고 임베딩에
+        #   잡음으로 들어가기만 했다. 물었을 때만 창을 연다(안 물으면 `None`).
+        recent_since = (evidence_selector.recent_window()
+                        if evidence_selector.recent_intent(intent) else None)
 
         by_company = [(c, [Event(**row) for row in company_service.events_of(c.key)])
                       for c in companies]
         # 유사도는 **한 번에** 구한다 — 기업마다 부르면 왕복이 기업 수만큼 는다.
-        embed = self._embed if self._embed is not None else _default_embed
+        embed = self._embed if self._embed is not None else default_embed
         sims = evidence_selector.similarities(
             [e for _, events in by_company for e in events],
             intent=intent, embed=embed, anchor_names=anchor_names)
@@ -367,7 +549,8 @@ class RetrieveService:
         dropped = 0
         for _company, events in by_company:
             kept, cut = evidence_selector.select(
-                events, matched=matched, sims=sims, limit=_MAX_EVENTS_PER_COMPANY)
+                events, matched=matched, sims=sims, limit=MAX_EVENTS_PER_COMPANY,
+                risk_wanted=risk_wanted, recent_since=recent_since)
             dropped += len(cut)
             for event in kept:
                 previous = seen.get(event.event_id)
@@ -380,6 +563,11 @@ class RetrieveService:
         if dropped:
             log.info("events truncated dropped=%d kept=%d intent=%r matched=%s "
                      "sims=%d", dropped, len(out), intent, sorted(matched), len(sims))
+        querylog.record(question=question, intent=intent, matched=matched,
+                        selected_types=[e.event_type for e in out],
+                        anchor_source=decision.source.value, n_events=len(out),
+                        n_companies=len(companies), risk_wanted=risk_wanted,
+                        recent_since=recent_since, path="per_company")
         return out
 
     # ── 파급 ────────────────────────────────────────────────────────────
@@ -395,11 +583,11 @@ class RetrieveService:
           응답 스키마와 모양이 다르다.
         """
         risky = [e for e in events if e.is_risk]
-        if len(risky) > _MAX_RISK_EVENTS_FOR_PROPAGATION:
+        if len(risky) > MAX_RISK_EVENTS_FOR_PROPAGATION:
             log.info("risk events truncated %d -> %d",
-                     len(risky), _MAX_RISK_EVENTS_FOR_PROPAGATION)
+                     len(risky), MAX_RISK_EVENTS_FOR_PROPAGATION)
         out: list[Propagation] = []
-        for event in risky[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:
+        for event in risky[:MAX_RISK_EVENTS_FOR_PROPAGATION]:
             rows = relation_service.event_impact(event.event_id)
             if rows is None:      # 사건 노드를 못 찾음 — 조용히 0건으로 두지 않는다
                 log.warning("event_impact miss: %s", event.event_id)
@@ -446,7 +634,7 @@ class RetrieveService:
                 if row["edge_id"] in seen:
                     continue
                 seen.add(row["edge_id"])
-                by_ring.setdefault(_ring_of(row, workspace_keys), []).append(row)
+                by_ring.setdefault(ring_of(row, workspace_keys), []).append(row)
 
         # ★질문이 무슨 관계를 물었나 — 지금까지 `SearchQuery` 에 와 있는데도 한
         #   번도 참조되지 않던 신호다(현황서 §5-4).
@@ -459,7 +647,12 @@ class RetrieveService:
                    for row in relation_selector.order(
                        by_ring[ring], matched=matched, direction=query.direction,
                        anchor_keys=anchor_keys)]
-        limit = _MAX_RELATIONS_PER_COMPANY * max(len(companies), 1)
+        # ★기업 수에 **천장을 씌운다**(2026-09-02). 앵커 없는 경로에서 `companies`
+        #   가 선택된 사건에서 역산되면서 5곳 → 최대 10곳이 됐는데, 그건 도구
+        #   범위와 사건을 위한 변경이지 **관계를 늘리려던 것이 아니다.** 씌우지
+        #   않았더니 관계 90~100건 · 재료 94,921자로 앵커 경로(48,719자)의 두 배가
+        #   됐다(실측). 상한은 예전 그대로 `_MAX_COMPANIES` 곱까지다.
+        limit = MAX_RELATIONS_PER_COMPANY * max(min(len(companies), _MAX_COMPANIES), 1)
         kept, cut = ordered[:limit], ordered[limit:]
 
         log.info("relations.rings %s -> kept=%d cut=%d matched=%s direction=%s",

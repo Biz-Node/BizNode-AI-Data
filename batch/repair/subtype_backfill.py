@@ -44,6 +44,7 @@ import openai
 
 from app.core.config import OPENAI_API_KEY
 from app.core.database import neo4j_session
+from pipeline import llm
 from pipeline.normalizer.relations import canonical_forms
 from pipeline.ontology import HAS_EVENT_ROLES, SUBTYPE_RULES
 from pipeline.vectorstore.chroma_store import ChromaStore
@@ -165,16 +166,15 @@ def _schema(field: str, enum: Optional[list[str]] = None) -> dict:
     }
 
 
-_client: Optional[openai.OpenAI] = None
-
-
 def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY 없음")
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
+    """공용 게터에 위임하되 **키 없음을 먼저 알린다.**
+
+    ★`llm.get_client()` 는 키가 없어도 객체를 만들고 호출할 때 터진다.
+      이 배치는 LLM 이 전부라 그때 터지면 이미 조회를 다 돈 뒤다.
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY 없음")
+    return llm.get_client()
 
 
 def _ask(system: str, body: str, field: str,

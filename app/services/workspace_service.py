@@ -29,12 +29,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
 
 from app.core.database import neo4j_session
 from app.core.trace import trace_logger
 from app.services import company_service
-from app.services.company_service import _relation
+from app.services.company_service import relation_row
 from pipeline.normalizer.ksic import label_of
 
 log = trace_logger(__name__)
@@ -75,7 +74,7 @@ def names_of(keys: list[str]) -> dict[str, str]:
 
     ★**못 찾은 key 를 조용히 지우지 않는다.** 그래프에 없는 기업이 워크스페이스에
       담겨 있을 수 있다 — 이름 자리에 key 를 그대로 두고 로그에 남긴다
-      ([규칙 2](../../docs/BizNode_Search_Layer_설계.md)).
+      ([규칙 2](../../docs/BizNode_Search_설계.md)).
 
     ★**이름은 식별 기준이 아니다.** 식별은 key 이고(`corp_code` → `norm_name`),
       이름은 표시·해석용이다(설계서 §16-1).
@@ -306,7 +305,7 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
 
         # ① 담긴 기업끼리 직접 이어진 엣지
         for r in s.run(_DIRECT, k=keys, types=_TRADE):
-            rel = _relation({"key": r["ak"], "name": r["an"]},
+            rel = relation_row({"key": r["ak"], "name": r["an"]},
                             {"key": r["bk"], "name": r["bn"]}, r["t"],
                             dict(r["p"] or {}), eid=r["eid"])
             if rel is None:
@@ -344,7 +343,7 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
                                    type(r) AS t, properties(r) AS p,
                                    elementId(r) AS eid""",
                             mid=r["key"], ks=keys + [r["key"]], types=_BRIDGE_TYPES):
-                        rel = _relation({"key": e["ak"], "name": e["an"]},
+                        rel = relation_row({"key": e["ak"], "name": e["an"]},
                                         {"key": e["bk"], "name": e["bn"]},
                                         e["t"], dict(e["p"] or {}), eid=e["eid"])
                         if rel is None:
@@ -391,7 +390,7 @@ def workspace_graph(keys: list[str], *, expand: bool = True,
             #   **어디로 이어졌는지는 안 준** 셈이다.
             if ref_keys:
                 for e in s.run(_REF_EDGES, refs=ref_keys, pinned=keys, types=_TRADE):
-                    rel = _relation({"key": e["ak"], "name": e["an"]},
+                    rel = relation_row({"key": e["ak"], "name": e["an"]},
                                     {"key": e["bk"], "name": e["bn"]}, e["t"],
                                     dict(e["p"] or {}), eid=e["eid"])
                     if rel is None:

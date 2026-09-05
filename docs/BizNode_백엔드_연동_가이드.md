@@ -429,9 +429,9 @@ DB에서 가장 큰 노드고(LG전자 599 · SK하이닉스 494 · 중앙값 80
 
 **고정값을 돌려주는 라우트는 없습니다** (2026-08-23 확인).
 
-⚠ `X-Stub: true` 헤더가 `GET /news` 하나에 아직 붙습니다. `/news` 는 실제로
-PostgreSQL 을 읽으므로(실측 12,250건) **이 헤더를 실물 여부 판단에 쓰지 마세요.**
-헤더를 정리할지는 아직 정하지 않았습니다.
+`X-Stub` 헤더는 **없어졌습니다.** 붙일 라우트가 0개인 채로 표시 장치만 남아
+있어 지웠습니다. `GET /health` 의 `stub` 키는 남아 있고 **값은 언제나 `false`**
+입니다 — 실물 여부는 이 값이 아니라 응답 본문으로 판단하세요.
 
 ---
 
@@ -448,21 +448,101 @@ PostgreSQL 을 읽으므로(실측 12,250건) **이 헤더를 실물 여부 판�
             요청 바디는 /retrieve 와 같습니다(AskRequest). 새 이름을 만들지 않았습니다.
 ```
 
-★`/ask` 에서 `workspace_keys` 는 **필수**입니다 — 그래프 안에서 인사이트를
-만드는 챗봇이라 워크스페이스 없이 부를 수 없습니다. 스키마 기본값이
-`default_factory=list` 라 **422 는 아니지만**, 2026-08-26 부터 **서버가 검색 전에
-거부**하고 `anchor_source="unresolved"` 로 고정 문구를 돌려줍니다.
+### ★계약 변경 2건 (2026-09-02) — Global Event Search
 
-★**요청 계약은 바뀌지 않습니다** (2026-08-25 확인). `/ask` 는 계속
-`{ question, workspace_keys }` 를 받고, `workspace_keys` 는 **현재 워크스페이스 기업의
-`corp_code` 배열**입니다 — 요청마다 실어 보내 주세요. 워크스페이스 동기화 API 는
-**만들지 않습니다.**
+근거: [최종 설계 §5 시나리오 3 · §17-2](BizNode_Workspace_Contextual_Agent_Final_Design.md).
+「최근 주요 투자 이벤트가 뭐야?」처럼 **대상을 지정하지 않은 질문**이 이제 전역 사건을
+근거로 답합니다. 그 전에는 Event 노드를 한 번도 안 건드리고 관계 신선도 순으로 뽑은
+기업 5곳을 재료로 썼습니다 — 「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이
+나왔습니다.
+
+**① `Event` 에 `company` 필드가 생깁니다 (선택 · 기존 응답은 안 바뀝니다).**
+
+```jsonc
+{
+  "event_id": "evt_news_0b5557ee7b12",
+  "name": "EUV 장비 투자",
+  "event_type": "사업확장",
+  "occurred_at": "2026-06-25",
+  "company": { "key": "00164779", "name": "SK하이닉스" }   // ← 신설
+}
+```
+
+```text
+대상을 지정한 질문   company = null    companies[] 가 이미 그 답이라 안 싣습니다
+대상이 없는 질문     company = {…}     ★사건마다 기업이 다릅니다
+```
+
+> ⚠ **대상 없는 질문의 사건은 `company` 를 반드시 그려 주세요.** 안 그리면 사용자가
+> 어느 회사 이야기인지 모릅니다. 이때 `companies[]` 는 **고른 사건들에서 역산한
+> 목록**이라 순서가 사건 순서와 다를 수 있고, 사건과 1:1 로 대응하지 않습니다 —
+> 사건 옆에 붙일 회사 이름은 `companies[]` 를 뒤지지 말고 `event.company` 를 쓰세요.
+
+★같은 사건이 **기업마다 한 번씩** 나올 수 있습니다. 사건 하나에 여러 기업이 엮인
+경우(전체의 5.7%)인데, `role`·`occurred_at`·`evidence_ids` 가 기업마다 다르므로
+합치지 않습니다. `event_id` 로 접어서 그리면 그중 하나가 사라집니다.
+
+**② 대상 없는 질문의 `match_type` 이 `EXACT` → `SEMANTIC` 이 됩니다.**
+
+```text
+전   대상을 못 잡았는데도 match_type = "EXACT"     ← 결함이었습니다
+후   대상이 없으면            match_type = "SEMANTIC"
+```
+
+`match_type` 이 말하는 것은 「그래프에서 정확히 찾았나, 의미 유사도로 찾았나」입니다.
+대상이 없는 검색은 규칙과 임베딩 유사도로 순위를 매기므로 `SEMANTIC` 쪽입니다.
+**「SEMANTIC 결과를 같은 무게로 말하지 않는다」는 표기 규칙이 이제 이 경로에도
+걸립니다** — 화면에서 `EXACT` 를 「확실한 결과」로 표시하고 있다면 그 배지가 대상 없는
+질문에서 더 이상 붙지 않습니다. 값 자체는 새로 생긴 것이 없으니 파싱은 그대로입니다.
+
+★**요청 계약은 바뀌지 않습니다.** 보내던 대로 보내 주시면 됩니다.
+
+---
+
+### ★계약 변경 2건 (2026-09-01) — Workspace & Contextual Agent 최종 설계
+
+근거: [최종 설계 §6-1·§17-1·§17-3](BizNode_Workspace_Contextual_Agent_Final_Design.md).
+**워크스페이스는 검색 경계가 아니라 랭킹 문맥**이라는 정의가 확정되면서 둘이 바뀝니다.
+
+**① `/ask` 의 `workspace_keys` 가 필수 → 선택입니다.**
+
+```text
+전   workspace_keys: []  →  검색조차 하지 않고 거부
+                            「이 워크스페이스에 담긴 기업이 없어 답변할 수 없습니다」
+후   workspace_keys: []  →  Global Search + Global Ranking 으로 **정상 답변**
+```
+
+Home 화면처럼 아무것도 담지 않은 상태에서 던지는 질문이 이제 답을 받습니다.
+`workspace_keys` 를 주면 검색 결과의 **순서**에 반영될 뿐, 워크스페이스 밖 기업이
+결과에서 사라지지 않습니다. **보내던 대로 계속 보내 주시면 됩니다** — 값이 있을 때의
+동작은 그대로이고, 빈 배열이 더 이상 거부되지 않는 것이 달라진 전부입니다.
+
+**② `AskResponse.anchor_source` 의 `workspace` 값이 `anchorless` 로 바뀝니다.**
+
+```text
+query        질문이 지정한 대상에 대해 답했다
+context      사용자가 지금 보고 있는 기업을 대상으로 삼았다
+anchorless   ★질문이 대상을 지정하지 않았다 — **정상**. 옛 `workspace` 자리
+unresolved   지정했는데 못 찾았다
+```
+
+옛 `workspace` 는 「담아 둔 기업을 답변 대상으로 삼았다」는 뜻이었습니다. 그것이
+질문이 묻지 않은 대상으로 답하는 구조라 폐기했습니다 — 이제 앵커가 없으면 없다고
+말하고, 재료는 Global Search 가 찾은 것을 씁니다. `RetrieveResponse.anchors[]` 도
+이때 **빈 배열**입니다(전에는 워크스페이스 기업이 실렸습니다).
+
+> ⚠ **화면에서 `"workspace"` 를 분기 조건으로 쓰고 있다면 `"anchorless"` 로 바꿔
+> 주세요.** 값이 사라지므로 그대로 두면 그 분기가 죽습니다.
+
+★**그 밖의 요청 계약은 바뀌지 않습니다.** `/ask` 는 계속
+`{ question, workspace_keys, context_keys }` 를 받고, `workspace_keys` 는 **현재
+워크스페이스 기업의 `corp_code` 배열**입니다 — 요청마다 실어 보내 주세요.
+워크스페이스 동기화 API 는 **만들지 않습니다.**
 
 ★**응답 필드 둘이 2026-08-26 에 추가됐습니다** —
-`AskResponse.anchor_source`(`query`/`workspace`/`unresolved`)와
-`RetrieveResponse.anchors[]`. 뜻은
-[설계서 §14](BizNode_Search_Layer_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
-[현황서 §3-2](BizNode_Search_Layer_현황서.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
+`AskResponse.anchor_source` 와 `RetrieveResponse.anchors[]`. 뜻은
+[설계 §14](BizNode_Search_설계.md#14-앵커-출처--무엇을-대상으로-답하는가) ·
+[현황 §3-2](BizNode_검색챗봇_현황.md#3-2-반드시-알아야-할-계약-아홉) 를 보세요.
 
 ★`anchor_source` 가 `unresolved` 면 **`failed=false` 인데 `sources` 가 빕니다** — 서버
 오류가 아니라 「그 기업을 못 찾았다」는 뜻이고, `answer` 에 대안이 담깁니다. 화면에서

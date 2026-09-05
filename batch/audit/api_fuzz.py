@@ -34,7 +34,6 @@ import re
 import sys
 import time
 from collections import Counter
-from typing import Any
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")

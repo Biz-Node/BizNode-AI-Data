@@ -12,11 +12,10 @@ from __future__ import annotations
 import re
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
-import openai
+from pipeline.llm import get_client
 
-from app.core.config import OPENAI_API_KEY
 from pipeline.ontology import (
     AMOUNT_RULES,
     EDGE_DEFINITIONS,
@@ -218,9 +217,6 @@ class ExtractedRelation:
     amount: Optional[float] = None
 
 
-_client: Optional[openai.OpenAI] = None
-
-
 # 숫자 필드가 의미를 갖는 타입 (`ontology.AMOUNT_RULES`)
 _RATIO_TYPES = frozenset({"OWNS_STAKE_IN", "ACQUIRES"})
 _AMOUNT_TYPES = frozenset({"ACQUIRES", "SUPPLIES_TO", "REGULATES", "SUES",
@@ -274,13 +270,6 @@ def _ratio(value, edge_type: str, evidence, subtype) -> Optional[float]:
     return num                                        # 근거의 %가 다른 숫자다
 
 
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
-
 def extract_relations(title: str, body: str, hint_companies: list[str],
                       known_products: str = "") -> list[ExtractedRelation]:
     """기사 → 관계 목록. 실패 시 빈 리스트.
@@ -319,7 +308,7 @@ def extract_relations(title: str, body: str, hint_companies: list[str],
     """
     hint = f"\n\n[참고] 이 기사에 등장하는 관심 기업: {', '.join(hint_companies[:8])}" if hint_companies else ""
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_EXTRACT_MODEL,
             temperature=0,
             messages=[

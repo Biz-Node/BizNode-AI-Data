@@ -19,6 +19,10 @@ from __future__ import annotations
 # 쓰는 자리는 `tests/agent/eval/conftest.py::runs`.
 AGENT_EVAL_REPORT = "--agent-eval-report"
 
+# 평가셋 **전체를 몇 번 돌릴 것인가.** ★비용이 그대로 배수다.
+# 쓰는 자리는 `tests/agent/eval/conftest.py::repeats`.
+AGENT_EVAL_REPEAT = "--agent-eval-repeat"
+
 
 def pytest_addoption(parser) -> None:
     parser.addoption(
@@ -26,3 +30,8 @@ def pytest_addoption(parser) -> None:
         help="Agent 평가셋 결과 문서를 이 경로에 쓴다. ★판정과 **같은 실행**의 "
              "결과를 쓰므로 LLM 왕복이 한 번으로 끝난다 "
              "(예: --agent-eval-report=docs/BizNode_Agent_평가셋.md)")
+    parser.addoption(
+        AGENT_EVAL_REPEAT, action="store", default=1, type=int, metavar="N",
+        help="Agent 평가셋 전체를 N 번 돌려 **변동폭**을 잰다(기본 1). "
+             "★비용이 N 배다. 판정은 1회차만 쓰고 변동폭은 보고서에만 "
+             "실린다 — 「도구 선택이 흔들린다」는 관측이지 판정이 아니다")

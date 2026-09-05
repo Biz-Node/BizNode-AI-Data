@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -256,7 +255,6 @@ def main() -> int:
     # ── 1차: 무료 문자 검사 ────────────────────────────────
     suspects: list[tuple[dict, str, float, list[str]]] = []
     by_edge = Counter()
-    no_text = 0
     for r in rows:
         ev = texts.get(r["ev"], "")
         if not ev:
@@ -265,7 +263,6 @@ def main() -> int:
                 if ev:
                     break
         if not ev:
-            no_text += 1
             continue
         # Company/Person 이름은 약칭·표기 차이가 많아 제외하고,
         # **Event·Product 이름과 subtype**을 본다(오염이 여기서 난다).
@@ -281,7 +278,6 @@ def main() -> int:
             suspects.append((r, ev, score, missing))
             by_edge[r["edge"]] += 1
 
-    checked = len(rows) - no_text
     print(f"[1차 · 무료] Event·Product 이름이 근거에 없는 엣지: "
           f"{len(suspects)}건")
     for edge, n in by_edge.most_common():
@@ -341,7 +337,6 @@ def main() -> int:
             print(f"  · {rd + 1}/{rounds}회차 — {len(chunk)}건")
         with ThreadPoolExecutor(max_workers=8) as pool:
             results.extend(pool.map(_verify, chunk))
-    targets = all_targets[:len(results)]
 
     failed = [(r, v) for r, v in results if v.get("failed")]
     ok_results = [(r, v) for r, v in results if not v.get("failed")]

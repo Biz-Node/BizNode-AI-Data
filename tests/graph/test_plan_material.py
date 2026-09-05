@@ -21,8 +21,12 @@ from datetime import date
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from app.api.schemas import Anchor, AnchorSource
+from app.graph.nodes import material as material_module
 from app.graph.nodes.material import plan_material
+from app.services import retrieve_service as rs_module
 from app.services.query_understanding import AnchorDecision
 from pipeline.normalizer.resolver import Resolution
 from search.dto.search_hit import SearchHit
@@ -53,6 +57,29 @@ def _hit(entity_id, name):
                      source_score=1.0, sources=["neo4j"])
 
 
+def _global_row(event_id, name, ckey, cname, *, event_type="사업확장"):
+    """`company_service.global_events()` 가 주는 행 모양 — (기업, 사건) 한 쌍."""
+    return {"event_id": event_id, "name": name, "event_type": event_type,
+            "is_risk": False, "eventness_suspect": False, "sign": None,
+            "role": "subject", "occurred_at": "2026-06-01", "article_count": 1,
+            "timeline": [], "evidence_ids": [],
+            "company": {"key": ckey, "name": cname}}
+
+
+@pytest.fixture
+def stub_global_events(monkeypatch):
+    """전역 사건 후보를 통제한다. **DB 경계에서** 막아 선택 로직은 진짜로 돈다.
+
+    ★임베더도 끈다 — 켜 두면 단위 테스트가 OpenAI 를 부르고 유사도 때문에
+      순서가 흔들려 재현이 안 된다(`test_retrieve_service` 와 같은 이유).
+    """
+    company = MagicMock()
+    company.global_events.return_value = []
+    monkeypatch.setattr(rs_module, "company_service", company)
+    monkeypatch.setattr(material_module, "default_embed", None)
+    return company
+
+
 def _state(request_, *, resolved=(), hits=(), decision=None):
     return {"request": request_, "query": _query(resolved), "result": _result(hits),
             "decision": decision or AnchorDecision(
@@ -79,19 +106,38 @@ def test_anchor_names_prefer_resolved_entities(request_):
 
 
 def test_anchor_names_fall_back_to_decision_anchors(request_):
-    """`resolved_entities` 가 비면 앵커로 내려간다 — `source=workspace` 가 그렇다.
+    """`resolved_entities` 가 비면 앵커로 내려간다 — `source=context` 가 그렇다.
 
-    ★이 fallback 이 없으면 workspace 질의의 `anchor_names` 가 늘 `[]` 가 되어
-      `evidence_selector` 의 「질문과 라벨 양쪽에서 앵커명 제거」 규칙이 라벨
-      쪽에서 안 걸린다(현황서 §5-23 이 고친 퇴행).
+    ★이 fallback 이 없으면 `anchor_names` 가 `[]` 가 되어 `evidence_selector`
+      의 「질문과 라벨 양쪽에서 앵커명 제거」 규칙이 라벨 쪽에서 안 걸린다
+      (현황서 §5-23 이 고친 퇴행).
     """
     decision = AnchorDecision(
-        source=AnchorSource.WORKSPACE,
-        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.WORKSPACE)])
+        source=AnchorSource.CONTEXT,
+        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.CONTEXT)])
 
     got = plan_material(_state(request_, resolved=[], decision=decision))
 
     assert got["anchor_names"] == ["삼성전자"]
+
+
+def test_anchor_names_fall_back_to_material_companies_when_anchorless(
+        request_, stub_global_events):
+    """★**셋째 갈래**(최종 설계 §17-3 이 열었다 · `anchor_names_for`).
+
+    `anchorless` 는 `resolved_entities` 도 `decision.anchors` 도 비어 있다.
+    거기서 멈추면 §5-23 이 고친 퇴행이 그대로 돌아온다 — 라벨에 든 기업명이
+    유사도 상위를 먹는다. 전에는 워크스페이스 앵커가 그 이름을 댔고, 지금은
+    **선택된 전역 사건에서 역산한 재료 기업**이 댄다(2026-09-02).
+    """
+    stub_global_events.global_events.return_value = [
+        _global_row("e1", "EUV 장비 투자", "00164779", "SK하이닉스")]
+    decision = AnchorDecision(source=AnchorSource.ANCHORLESS)
+
+    got = plan_material(_state(request_, resolved=[], decision=decision,
+                               hits=[_hit("00164779", "SK하이닉스")]))
+
+    assert got["anchor_names"] == ["SK하이닉스"]
 
 
 def test_anchor_names_drop_empty_names(request_):
@@ -147,22 +193,52 @@ def test_hits_are_not_trusted_without_resolved_entities(request_):
     assert [c.key for c in got["companies"]] == [_SAMSUNG], "앵커 자신이 출발점이다"
 
 
-def test_workspace_anchor_never_trusts_hits(request_):
-    """`source=workspace` 는 정의상 `resolved_entities` 가 0 이다.
+def test_context_anchor_never_trusts_hits(request_):
+    """`source=context` 는 화면이 대상을 알고 있다 — 히트가 아니라 그 기업이다.
 
-    ★따라서 히트가 몇 건이든 재료는 앵커다. 워크스페이스 앵커에서 히트를
-      믿으면 「담아 둔 기업을 물었는데 의미가 비슷한 남의 기업으로 답하는」
-      것이 된다.
+    ★따라서 히트가 몇 건이든 재료는 앵커다. 여기서 히트를 믿으면 「현대차
+      페이지를 보며 물었는데 의미가 비슷한 남의 기업으로 답하는」 것이 된다.
     """
     decision = AnchorDecision(
-        source=AnchorSource.WORKSPACE,
-        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.WORKSPACE)])
+        source=AnchorSource.CONTEXT,
+        anchors=[Anchor(key=_SAMSUNG, name="삼성전자", source=AnchorSource.CONTEXT)])
 
     got = plan_material(_state(request_, hits=[_hit("00999999", "아무기업")],
                                decision=decision))
 
     assert [c.key for c in got["companies"]] == [_SAMSUNG]
     assert "00999999" not in [c.key for c in got["companies"]], "히트를 쓰면 안 된다"
+
+
+def test_anchorless_takes_its_material_from_global_events(request_, stub_global_events):
+    """★**앵커가 없으면 전역 사건이 재료다**(최종 설계 §5 시나리오 3 · §17-2).
+
+    세 번 옮겨 온 자리다. `workspace` 시절에는 담아 둔 기업이 재료였고, §17-3 이
+    그걸 폐기한 뒤로는 **검색 히트**가 재료였다. 그런데 앵커 없는 질의의 히트는
+    관계 freshness 순으로 채운 것이라 기업이 사실상 임의로 정해졌다 —
+    「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다(F1).
+    히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려, **살아 있는
+    유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
+
+    ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3). 그래서 아래 두 가지가
+      동시에 성립해야 한다 — 히트에만 있던 기업은 안 오고, 사건이 지목한 기업은
+      온다.
+    """
+    stub_global_events.global_events.return_value = [
+        _global_row("e1", "EUV 장비 투자", "00164779", "SK하이닉스")]
+    decision = AnchorDecision(source=AnchorSource.ANCHORLESS,
+                              workspace_names={_SAMSUNG: "삼성전자"})
+
+    got = plan_material(_state(request_, resolved=[], decision=decision,
+                               hits=[_hit("00999999", "아무기업")]))
+
+    assert [c.key for c in got["companies"]] == ["00164779"]
+    assert "00999999" not in [c.key for c in got["companies"]], \
+        "히트에만 있는 기업이 재료가 되면 안 된다 — 사건이 기업을 정한다"
+    assert _SAMSUNG not in [c.key for c in got["companies"]], \
+        "워크스페이스 기업이 재료로 승격되면 안 된다"
+    # ★도구가 다시 고르지 않도록 **고른 쌍**을 실어 보낸다.
+    assert got["event_pairs"] == [("e1", "00164779")]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -202,7 +278,7 @@ def test_backstop_fills_companies_when_hits_yield_none(request_):
       막으려던 것이 「앵커는 멀쩡한데 재료가 0」이라, 그게 곧 계약이다.
       `backstop` 플래그가 State 에서 빠져도 이 계약은 그대로 검사된다.
 
-    ★`_with_anchor_backstop()` 을 **대역으로 바꾸지 않는다.** 그러면 백스톱이
+    ★`with_anchor_backstop()` 을 **대역으로 바꾸지 않는다.** 그러면 백스톱이
       실제로 무엇을 넣는지는 아무도 안 보게 된다. 대역은 그 함수가 존재 확인에
       쓰는 DB 한 자리(`company_service.names_by_keys`)뿐이고, 그건 conftest 의
       `graph_companies` 가 세운다.

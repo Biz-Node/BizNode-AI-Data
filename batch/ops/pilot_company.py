@@ -417,10 +417,8 @@ def main() -> int:
     print(f"{'단계':22} {'건수':>8} {'잔존율':>8}  비용")
     print("-" * 62)
     base = funnel[0][1] or 1
-    prev = base
     for label, n, cost in funnel:
         print(f"{label:22} {n:>8,} {n/base*100:>7.1f}%  {cost}")
-        prev = n
     print(f"\n추출 {len(extract_targets)}건 → 엣지 {total_edges}건 "
           f"(기사당 {total_edges/max(len(extract_targets),1):.1f})")
     return 0

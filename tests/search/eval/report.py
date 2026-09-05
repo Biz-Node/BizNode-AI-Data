@@ -33,8 +33,11 @@ _OUTCOME_RE = re.compile(
 def _pytest_outcomes() -> dict[str, str]:
     """nodeid -> 판정. pytest를 서브프로세스로 돌려 `-rA` 요약을 읽는다."""
     proc = subprocess.run(
+        # ★`--color=no` 를 못 박는다. 안 그러면 `FORCE_COLOR`·`PY_COLORS` 가 걸린
+        #   환경에서 판정 줄이 `\x1b[32mPASSED\x1b[0m ...` 로 나와 정규식이
+        #   전부 빗나가고, 문서가 조용히 판정 `?` 로 채워진다.
         [sys.executable, "-m", "pytest", _TEST_PATH, "-q", "-rA", "--no-header",
-         "-p", "no:cacheprovider"],
+         "--color=no", "-p", "no:cacheprovider"],
         cwd=_ROOT, capture_output=True, text=True,
     )
     outcomes: dict[str, str] = {}

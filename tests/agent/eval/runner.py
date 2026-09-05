@@ -118,7 +118,11 @@ class CaseRun:
 
 def build_request(case: AgentEvalCase) -> AskRequest:
     return AskRequest(question=case.question,
-                      workspace_keys=list(case.workspace_keys))
+                      workspace_keys=list(case.workspace_keys),
+                      # ★「담은 것」과 **갈라서** 넘긴다. 한 필드로 합치면
+                      #   `anchor_source` 가 `context` 와 `workspace` 를 못 가르고,
+                      #   그러면 이 평가셋이 새 갈래를 덮지 못한다.
+                      context_keys=list(case.context_keys))
 
 
 def run_case(case: AgentEvalCase) -> CaseRun:
@@ -142,3 +146,20 @@ def run_all() -> dict[str, CaseRun]:
     """★케이스마다 **한 번만** 돌린다. LLM 왕복이 들어 있어 두 번 돌리면
     비용이 두 배가 되고, 두 실행이 다른 도구를 골라 판정이 갈릴 수 있다."""
     return {case.id: run_case(case) for case in CASES}
+
+
+def run_all_n(times: int) -> list[dict[str, CaseRun]]:
+    """평가셋 **전체를 `times` 번** 돌린다. 한 원소가 한 패스(20 케이스)다.
+
+    ★**케이스가 아니라 패스를 반복한다.** 같은 케이스를 연달아 n 번 부르면
+      임베딩 캐시가 그 케이스에만 데워져, 「뒤 실행이 앞 실행보다 싸다」가
+      케이스마다 다르게 섞인다. 패스 단위로 돌면 그 편향이 전 케이스에 고르게
+      걸려, 패스끼리 비교할 수 있는 값이 된다.
+
+    ★**판정은 1회차만 쓴다**(`conftest.runs`). 여기서 나온 변동폭은 보고서에만
+      싣는다 — 링과 같은 규약이다. 변동폭에 임계값을 걸면 재는 도구가 판정기가
+      되고, 「상한이 맞나」를 이 수치로 정하겠다는 결정을 미리 해버린다.
+
+    ★**비용이 `times` 배다.** 부르는 쪽이 그걸 알고 부르라고 이름에 수를 받는다.
+    """
+    return [run_all() for _ in range(max(1, times))]

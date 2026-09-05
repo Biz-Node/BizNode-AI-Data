@@ -66,9 +66,15 @@ EVENT_TYPES = [
 # ★「기타」도 다시 본다(2026-08-15). 「뉴스이슈」만 대상이면 한 번 「기타」로
 #   떨어진 것은 영영 그대로 남는다 — 근거가 늘어도 다시 안 묻는다.
 #   사건 국면이 병합되면 이름이 구체적으로 바뀌므로 재판정 가치가 있다.
+# ★`--event-id` 는 **이미 분류된 것 하나만** 다시 묻는 길이다(2026-09-05).
+#   프롬프트에 오분류 예시를 더한 뒤 그 사건들만 되돌리려는데, `--full` 은
+#   1,000건 넘는 전체를 다시 부른다 — 비용도 비용이지만 **멀쩡한 라벨까지
+#   흔들린다.** 고친 것만 확인하고 싶을 때 쓴다.
 _FIND = """
 MATCH (e:Event)
-WHERE $full OR e.event_type IS NULL OR e.event_type IN ['뉴스이슈', '기타']
+WHERE ($ids IS NOT NULL AND e.event_id IN $ids)
+   OR ($ids IS NULL AND
+       ($full OR e.event_type IS NULL OR e.event_type IN ['뉴스이슈', '기타']))
 OPTIONAL MATCH (e)-[r]-(c:Company)
 RETURN e.event_id AS eid, e.name AS name,
        collect(DISTINCT c.name)[0..4] AS companies,
@@ -134,6 +140,19 @@ _SYSTEM = f"""사건에 **유형**과 **리스크 여부**를 붙이세요.
   단 **결과가 나와 해소된 것**은 리스크가 아닙니다:
       「D램 가격 담합 의혹 항소심 완승」  → 규제수사 · is_risk=false
 
+★**판촉·마케팅 「이벤트」를 사업확장으로 잡지 마세요** — 실측된 오분류입니다.
+  「이벤트」는 한국어에서 **사건**과 **판촉 행사** 둘 다 뜻하는데, 뒤쪽은
+  기업 관계에 아무 값이 없습니다. 사업확장은 **생산·수주·투자 결정**이지
+  고객 모으기가 아닙니다:
+
+      「신규 계좌 개설 이벤트」              → 사업확장 ✗   기타 ✓
+      「100만명 돌파 기념 포인트 적립 이벤트」 → 사업확장 ✗   기타 ✓
+      「신규 고객 대상 우량주 추첨 이벤트」    → 사업확장 ✗   기타 ✓
+
+  가르는 기준: **회사의 생산능력·계약·지분이 움직였나.** 경품·적립·할인·추첨·
+  가입 유치는 안 움직입니다. 반대로 「수주」·「증설」은 판촉 낱말이 섞여 있어도
+  사업확장입니다.
+
 ★「기타」는 11종 어디에도 정말 안 맞을 때만 쓰세요. 지금 「기타」가 전체의
   9%인데 대부분 위처럼 제 유형이 있는 사건이었습니다.
 
@@ -176,10 +195,13 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--full", action="store_true", help="이미 분류한 것도 다시")
+    ap.add_argument("--event-id", nargs="+", metavar="ID",
+                    help="이 사건들만 다시 묻는다 (이미 분류됐어도)")
     args = ap.parse_args()
 
     with neo4j_session() as session:
-        rows = [dict(r) for r in session.run(_FIND, full=args.full)]
+        rows = [dict(r) for r in session.run(_FIND, full=args.full,
+                                             ids=args.event_id)]
     print(f"분류 대상 Event {len(rows)}건 (약 {len(rows)*0.3:.0f}원)")
     if not rows:
         print("분류할 사건이 없습니다.")

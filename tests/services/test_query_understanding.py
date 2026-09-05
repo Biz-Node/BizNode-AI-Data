@@ -33,9 +33,17 @@ def _resolution(corp_code: str, corp_name: str, score: float = 1.0) -> Resolutio
 
 @pytest.fixture
 def graph(monkeypatch):
-    """그래프 조회 둘을 가짜로 세운다 — 판정 규칙만 본다."""
-    state = {"companies": {}, "non_company": {}}
+    """그래프 조회 셋을 가짜로 세운다 — 판정 규칙만 본다.
 
+    ★`missing_keys` 는 **「해소는 됐는데 그래프엔 없다」**를 만드는 손잡이다
+      (§6-0 A-2). 비워 두면 모든 key 가 그래프에 있는 것으로 본다 — 그래야
+      이 파일의 기존 시험들이 뜻을 그대로 유지한다.
+    """
+    state = {"companies": {}, "non_company": {}, "missing_keys": set()}
+
+    monkeypatch.setattr(qu.company_service, "names_by_keys",
+                        lambda keys: {k: k for k in keys
+                                      if k and k not in state["missing_keys"]})
     monkeypatch.setattr(qu.company_service, "find_by_names",
                         lambda names: next(
                             (state["companies"][n] for n in names
@@ -108,14 +116,21 @@ def test_foreign_name_counts_as_named(graph):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  workspace — 질문이 대상을 지정하지 않았다
+#  anchorless — 질문이 대상을 지정하지 않았다
 # ══════════════════════════════════════════════════════════════════════
 
-def test_question_without_a_named_target_uses_the_workspace(graph):
+def test_question_without_a_named_target_is_anchorless(graph):
+    """★**워크스페이스를 앵커로 승격시키지 않는다**(최종 설계 §17-3).
+
+    전에는 여기서 담아 둔 두 기업이 `source=workspace` 앵커가 됐다. 그러면
+    「납품 단가 압박」이 「삼성전자·SK하이닉스의 납품 단가 압박」으로 조용히
+    바뀐다 — 질문이 묻지 않은 대상이다.
+    """
     decision = qu.decide_anchor("납품 단가 압박", [], _WS)
-    assert decision.source is AnchorSource.WORKSPACE
-    assert [(a.key, a.source) for a in decision.anchors] == [
-        (_SAMSUNG, AnchorSource.WORKSPACE), (_HYNIX, AnchorSource.WORKSPACE)]
+    assert decision.source is AnchorSource.ANCHORLESS
+    assert decision.anchors == []
+    # 랭킹·표기용으로는 그대로 따라간다.
+    assert decision.workspace_names == _WS
 
 
 def test_product_name_is_not_a_named_target(graph):
@@ -123,7 +138,7 @@ def test_product_name_is_not_a_named_target(graph):
     태그가 붙지만 **Product 노드**다. 기업을 지목한 것이 아니다."""
     graph["non_company"]["HBM"] = "Product"
     decision = qu.decide_anchor("HBM을 만드는 기업", [], _WS)
-    assert decision.source is AnchorSource.WORKSPACE
+    assert decision.source is AnchorSource.ANCHORLESS
 
 
 def test_non_company_filter_matches_exactly_not_by_substring(graph):
@@ -133,28 +148,84 @@ def test_non_company_filter_matches_exactly_not_by_substring(graph):
     assert qu.decide_anchor("자스트리브노고르스크는 어떤가?", [], _WS).source is AnchorSource.UNRESOLVED
 
 
-def test_empty_workspace_still_reports_workspace_source(graph):
-    """★빈 워크스페이스의 **거부**는 여기 책임이 아니다(설계서 §16-2) —
-    `answer_service` 가 판단한다. 여기서는 「대상을 지정하지 않았다」만 말한다."""
-    decision = qu.decide_anchor("납품 단가 압박", [], {})
-    assert decision.source is AnchorSource.WORKSPACE
-    assert decision.anchors == []
+def test_empty_workspace_is_just_anchorless_too(graph):
+    """★워크스페이스 유무가 **판정을 바꾸지 않는다**(최종 설계 §17-3).
+
+    있든 없든 「질문이 대상을 지정하지 않았다」는 같은 사실이다. 전에는 있으면
+    `workspace`, 없으면 거절이었는데 지금은 둘 다 `anchorless` 다 — 거부는
+    아예 사라졌다(§17-1).
+    """
+    with_ws = qu.decide_anchor("납품 단가 압박", [], _WS)
+    without_ws = qu.decide_anchor("납품 단가 압박", [], {})
+
+    assert with_ws.source is without_ws.source is AnchorSource.ANCHORLESS
+    assert with_ws.anchors == without_ws.anchors == []
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  비용 — 해소에 성공하면 그래프를 건드리지 않는다
+#  비용 — 해소에 성공하면 **존재 확인 한 번**으로 끝낸다
 # ══════════════════════════════════════════════════════════════════════
 
-def test_resolved_question_makes_no_graph_call(monkeypatch):
-    """★`resolved_entities` 가 있으면 fallback 도 비-Company 조회도 부르지 않는다 —
-    실측상 41건 중 33건이 이 경로다(현황서 §8-5)."""
+def test_a_resolved_question_costs_one_graph_lookup(monkeypatch):
+    """★계약이 바뀌었다(2026-09-05 · §6-0 A-2). 전에는 **그래프를 아예 안 건드리는
+    것**이 계약이었고, 그래서 「해소됐다 ≠ 그래프에 있다」를 아무도 안 봤다 —
+    죽은 앵커가 그대로 통과해 재료가 0 이 됐다.
+
+    ★**fallback 조회는 여전히 안 부른다.** 늘어난 것은 존재 확인 하나(실측
+      6.5ms · 종단 15초의 0.04%)뿐이다. 41건 중 33건이 이 경로다(§8-5)."""
     calls = []
+    monkeypatch.setattr(qu.company_service, "names_by_keys",
+                        lambda keys: calls.append(("exists", tuple(keys)))
+                        or {k: k for k in keys})
     monkeypatch.setattr(qu.company_service, "find_by_names",
                         lambda n: calls.append("find") or None)
     monkeypatch.setattr(qu.company_service, "non_company_labels",
                         lambda n: calls.append("label") or {})
+
     qu.decide_anchor("삼성전자 실적", [_resolution(_SAMSUNG, "삼성전자")], _WS)
-    assert calls == []
+
+    assert calls == [("exists", (_SAMSUNG,))], "존재 확인 하나로 끝나야 한다"
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ★해소됐다 ≠ 그래프에 있다 (§6-0 A-2)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_a_resolved_key_the_graph_does_not_have_is_not_an_anchor(graph):
+    """★회귀 그물. 「요즘」·「대상」·「미래」·「오늘」·「우리」가 **실제 사명**이라
+    1.000 으로 정확히 붙는데 **그래프엔 하나도 없다**(실측 13개 낱말 중 12개).
+    앵커로 세우면 재료가 통째로 0 이 되고 답이 죽는다 —
+    실측 전: 관계 0 · 사건 0 · 근거 0 → 「확인되지 않았습니다」.
+
+    ★닫힌 낱말 목록으로 막지 않는다. 「그래프에 있나」 하나로 전부 걸린다."""
+    graph["missing_keys"].add("01719318")
+
+    decision = qu.decide_anchor("요즘 반도체 업계 어때?",
+                                [_resolution("01719318", "요즘")], _WS)
+
+    assert decision.source is AnchorSource.ANCHORLESS
+    assert decision.anchors == []
+
+
+def test_a_resolved_key_the_graph_has_is_still_an_anchor(graph):
+    """★기존 동작. 이 줄이 깨지면 고친 게 아니라 부순 것이다."""
+    decision = qu.decide_anchor("삼성전자 실적",
+                                [_resolution(_SAMSUNG, "삼성전자")], _WS)
+
+    assert decision.source is AnchorSource.QUERY
+    assert [a.key for a in decision.anchors] == [_SAMSUNG]
+
+
+def test_a_key_missing_from_the_graph_falls_through_to_the_name_lookup(graph):
+    """★떨어뜨리지 않고 **아래로 흘린다.** `corp_code` 가 그래프에 없어도 이름이
+    거기 있으면 2단이 문다 — 두 표기가 갈린 기업을 잃지 않는다."""
+    graph["missing_keys"].add("99999999")
+    graph["companies"]["TSMC"] = {"key": "tsmc", "name": "TSMC", "corp_code": None}
+
+    decision = qu.decide_anchor("TSMC 리스크", [_resolution("99999999", "TSMC")], _WS)
+
+    assert decision.source is AnchorSource.QUERY
+    assert [a.key for a in decision.anchors] == ["tsmc"]
 
 
 def test_question_without_name_tokens_skips_the_non_company_lookup(monkeypatch):
@@ -163,7 +234,7 @@ def test_question_without_name_tokens_skips_the_non_company_lookup(monkeypatch):
     monkeypatch.setattr(qu.company_service, "find_by_names", lambda n: None)
     monkeypatch.setattr(qu.company_service, "non_company_labels",
                         lambda n: called.append(n) or {})
-    assert qu.decide_anchor("납품 단가 압박", [], _WS).source is AnchorSource.WORKSPACE
+    assert qu.decide_anchor("납품 단가 압박", [], _WS).source is AnchorSource.ANCHORLESS
     assert called == []
 
 

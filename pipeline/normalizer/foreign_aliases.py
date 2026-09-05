@@ -37,7 +37,3 @@ def apply_alias(norm_key: str) -> str:
     """정규화키를 대표형으로. 표에 없으면 그대로 둔다."""
     return _aliases().get(norm_key, norm_key)
 
-
-def reload_aliases() -> None:
-    """배치가 별칭을 추가한 뒤 캐시를 비운다."""
-    _aliases.cache_clear()

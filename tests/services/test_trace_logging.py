@@ -16,13 +16,10 @@ import logging
 import re
 from unittest.mock import MagicMock
 
-from app.api.schemas import (AnchorSource, AskRequest, Evidence, MatchType,
-                             RetrieveResponse)
+from app.api.schemas import (AskRequest)
 from app.core import trace as trace_module
-from app.services import answer_service as as_module
 from app.services import retrieve_service as rs_module
 from app.services.graph_service import Relation
-from app.services.query_understanding import AnchorDecision
 from app.services.retrieve_service import RetrieveService
 from pipeline.freshness import Freshness
 from pipeline.normalizer.resolver import Resolution
@@ -294,120 +291,12 @@ def test_one_request_shares_one_trace_id_across_search_and_evidence(caplog, monk
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  경계 5 — LLM: 무엇을 재료로 줬고 무엇이 인용으로 살아남았는가
+#  경계 5 — LLM 요청·응답과 민감정보 배제는 **운영 경로에서 본다**
 # ══════════════════════════════════════════════════════════════════════
-
-_SECRET_TEXT = "이 문장이 로그에 새면 안 된다"
-
-
-def _evidence(evidence_id, *, missing=False, text=_SECRET_TEXT):
-    return Evidence(evidence_id=evidence_id, text=text, source_doc="doc",
-                    source_type="news", missing=missing)
-
-
-# `/ask` 는 워크스페이스가 비면 검색 전에 거부한다(설계서 §16-2) — 로그를 보려면
-# 앵커 경로를 타야 하므로 채워서 부른다.
-_WORKSPACE = {"00126380": "삼성전자"}
-_WS_KEYS = list(_WORKSPACE)
-
-
-def _retrieved(*, evidence=(), match_type=MatchType.EXACT):
-    return RetrieveResponse(question="q", evidence=list(evidence), match_type=match_type)
-
-
-def _answer_service(retrieved, monkeypatch, *, llm_result):
-    service = MagicMock()
-    # ★`/ask` 는 `retrieve_for_ask()` 만 쓴다 — `(AnchorDecision, 재료)`.
-    service.retrieve_for_ask.return_value = (
-        AnchorDecision(source=AnchorSource.QUERY, workspace_names=_WORKSPACE), retrieved)
-    monkeypatch.setattr(as_module, "ask_json", lambda *a, **k: llm_result)
-    return as_module.AnswerService(service)
-
-
-def test_llm_request_log_carries_material_counts_and_match_type(caplog, monkeypatch):
-    """★`match_type` 이 있어야 「SEMANTIC 재료로 쓴 답변」을 나중에 골라낼 수 있다."""
-    retrieved = _retrieved(evidence=[_evidence("ev_a")], match_type=MatchType.SEMANTIC)
-    service = _answer_service(retrieved, monkeypatch,
-                              llm_result={"answer": "답", "evidence_ids": []})
-
-    with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert "llm.request" in caplog.text
-    assert "match_type=SEMANTIC" in caplog.text
-    assert "evidence=1" in caplog.text
-    assert "prompt_chars=" in caplog.text
-
-
-def test_llm_response_log_separates_cited_accepted_and_dropped(caplog, monkeypatch):
-    """★이 한 줄이 「최종 근거가 어디서 만들어졌는가」에 답한다 — LLM 이 든 id,
-    화이트리스트를 통과한 id, 버려진 id(환각이거나 원문 없음)를 갈라 놓는다."""
-    retrieved = _retrieved(evidence=[_evidence("ev_a"), _evidence("ev_gone", missing=True)])
-    service = _answer_service(
-        retrieved, monkeypatch,
-        llm_result={"answer": "답", "evidence_ids": ["ev_a", "ev_gone", "ev_ghost"]})
-
-    with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert "llm.response" in caplog.text
-    assert "accepted=['ev_a']" in caplog.text
-    assert "ev_ghost" in caplog.text     # 환각 id 가 버려졌다는 사실이 남아야 한다
-    assert "ev_gone" in caplog.text      # missing 이라 버려진 것도 마찬가지
-
-
-def test_llm_failure_is_visible_in_the_log(caplog, monkeypatch):
-    retrieved = _retrieved(evidence=[_evidence("ev_a")])
-    service = _answer_service(retrieved, monkeypatch, llm_result={
-        "answer": "", "evidence_ids": [], "failed": True, "reason": "LLM 호출 실패"})
-
-    with caplog.at_level("INFO"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert "failed=True" in caplog.text
-
-
-# ══════════════════════════════════════════════════════════════════════
-#  민감정보 배제 — 한 번 새면 로그 파일에 영구히 남는다
-# ══════════════════════════════════════════════════════════════════════
-
-def test_evidence_text_never_reaches_the_log(caplog, monkeypatch):
-    """★근거 원문은 뉴스·공시 본문이다. id 만 남기고 본문은 절대 찍지 않는다."""
-    retrieved = _retrieved(evidence=[_evidence("ev_a", text=_SECRET_TEXT)])
-    service = _answer_service(retrieved, monkeypatch,
-                              llm_result={"answer": "답", "evidence_ids": ["ev_a"]})
-
-    with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert _SECRET_TEXT not in caplog.text
-    assert "ev_a" in caplog.text, "본문을 뺐다고 id 까지 빠지면 추적이 안 된다"
-
-
-def test_the_prompt_itself_never_reaches_the_log(caplog, monkeypatch):
-    """★전체 프롬프트에는 시스템 지시문과 근거 본문이 통째로 들어 있다 —
-    길이만 남긴다."""
-    retrieved = _retrieved(evidence=[_evidence("ev_a")])
-    service = _answer_service(retrieved, monkeypatch,
-                              llm_result={"answer": "답", "evidence_ids": []})
-
-    with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert "당신은 BizNode" not in caplog.text     # 시스템 프롬프트 첫 구절
-    assert "<evidence id=" not in caplog.text      # 근거 블록 델리미터
-
-
-def test_the_generated_answer_body_never_reaches_the_log(caplog, monkeypatch):
-    """★답변 본문은 근거 원문을 되풀이한 것이라 같은 위험을 진다."""
-    retrieved = _retrieved(evidence=[_evidence("ev_a")])
-    service = _answer_service(retrieved, monkeypatch, llm_result={
-        "answer": f"근거에 따르면 {_SECRET_TEXT}", "evidence_ids": ["ev_a"]})
-
-    with caplog.at_level("DEBUG"):
-        service.ask(AskRequest(question="q", workspace_keys=_WS_KEYS))
-
-    assert _SECRET_TEXT not in caplog.text
+#
+# ★`tests/graph/test_log_hygiene.py` 로 옮겼다(2026-09-04). 여기 있던 검사들은
+#   폐기된 1차(`AnswerService`)에 붙어 있어서, 요청이 지나가지 않는 코드의
+#   로그 위생을 재고 있었다.
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -23,7 +23,7 @@
     무인용  인용 0건인데 실질 주장을 여럿 했다             evidence_ids 가 비어 있다
 
 앞의 것은 점수로 보이고, 뒤의 것은 점수 없이 `uncited` 로 바로 드러난다 —
-화이트리스트(`answer_service._sources_from`)는 **인용된 id 만** 검사하므로
+화이트리스트(`app/llm/prompt.sources_from()`)는 **인용된 id 만** 검사하므로
 인용하지 않은 주장은 원리적으로 못 잡는다. 그 구멍이 여기서 보인다.
 """
 
@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
+from app.services.evidence_selector import UNCLASSIFIED_EVENT_TYPES
 from pipeline.token_overlap import normalize_dates, overlap, sentence_tokens
 
 # ★`evidence_selector.Embed` 와 같은 모양이다 — 임베딩 구현에 묶이지 않는다.
@@ -209,7 +210,7 @@ def _attribution(text: str, texts: Sequence[str],
     ★**여기서도 판정하지 않는다.** 이름이 없다고 곧 거짓이 아니다 — 별칭·약어·
       대명사로 가리켰을 수 있다. 세는 것은 「의심」이지 「오류」가 아니다.
 
-    ★`about` 표기(`answer_service._evidence_about`)가 **예방**이고 이것이 **관측**이다.
+    ★`about` 표기(`app/llm/prompt.evidence_about()`)가 **예방**이고 이것이 **관측**이다.
       둘은 서로를 대신하지 않는다.
     """
     bodies = [_body_of(t) for t in texts]
@@ -280,6 +281,7 @@ def _intent_linked(evidence_ids: Sequence[str],
 
           matched 가 비었다        질문이 사건 종류를 안 지목했다 → 판정 불가
           출처를 모르는 근거뿐      관계·히트에서 온 근거다 → 판정 불가
+          분류 못 한 사건뿐         event_type 이 「기타」다 → 판정 불가
           출처 사건이 있다          그 종류가 matched 에 있나 → True / False
 
       「판정 불가」를 「연결 없음」으로 떨어뜨리면 **관계 질의가 통째로 차단된다**
@@ -290,6 +292,13 @@ def _intent_linked(evidence_ids: Sequence[str],
     types: set[str] = set()
     for evidence_id in evidence_ids:
         types |= event_types_by_evidence.get(evidence_id, frozenset())
+    # ★분류 못 한 사건은 **출처를 모르는 것과 같다.** 규칙 티어가 「기타」를
+    #   지목할 수 없으므로(`UNCLASSIFIED_EVENT_TYPES`) 그대로 두면 `matched` 와
+    #   절대 안 겹쳐 **구조적으로 늘 `False`** 다 — 근거가 질문과 무관해서가
+    #   아니라 종류를 몰라서 그렇다. 실측(2026-08-29 · 평가셋): 「연결 없음」
+    #   으로 떨어진 것 중 솔리다임 지분 조사 사건(`기타`)이 매 실행 들어 있었다
+    #   — `35ac6a5` 6건 중 2건 · `6d672d1` 5건 중 1건.
+    types -= UNCLASSIFIED_EVENT_TYPES
     if not types:
         return None
     return bool(types & matched)
@@ -423,6 +432,6 @@ def unlinked(checked: Sequence[ClaimCheck]) -> list[ClaimCheck]:
       두고 `supported`/`verdict` 같은 말을 쓰지 않았다 — 재는 것은 「질문이 지목한
       사건 종류에서 온 근거인가」뿐이지 참·거짓이 아니다.
 
-    ★**지우는 것은 여기서 하지 않는다.** 호출측(`answer_service`)이 정한다.
+    ★**지우는 것은 여기서 하지 않는다.** 호출측(`app/graph/nodes/answer.py`)이 정한다.
     """
     return [c for c in checked if c.intent_linked is False]

@@ -1,6 +1,7 @@
 """`/ask` 실행 그래프 (LangGraph).
 
-★**동작을 바꾸지 않는다.** 이 패키지가 하는 일은 `AnswerService.ask()` 가
-  한 덩어리로 하던 실행을 노드로 가르는 것뿐이다. 판단 로직은 전부
-  `RetrieveService`·`AnswerService` 에 그대로 있고, 노드는 위임한다.
+★**이 패키지는 실행 담당이다.** 한 덩어리이던 `/ask` 를 노드로 갈랐을 뿐이고,
+  판단 로직은 여전히 밖에 있다 — 검색·재료는 `RetrieveService`, 프롬프트는
+  `app/llm`·`app/graph/prompt`, 검사는 `claim_check`·`material_consistency`.
+  노드는 위임한다.
 """

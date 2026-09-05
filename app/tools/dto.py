@@ -10,8 +10,9 @@
     `per: null`           → 정보가 없는 건가             (아니다. 적자거나 재무 미수집)
     시총·PER              → 근거 id 를 붙일 수 있는가      (없다. 저장값이 아니라 계산값)
 
-★**계약만이다.** 도구 구현은 아직 없다. 값을 채우는 규칙은 필드 설명과
-  아래 상수에 못 박아 둔다 — 나중에 구현이 말을 바꿀 수 없게.
+★**계약이 먼저고 구현이 뒤다.** 값을 채우는 규칙을 필드 설명과 아래 상수에
+  못 박아 두고, 구현(`app/tools/{graph,company,search}_tools.py`)이 그것을
+  따른다 — 구현이 말을 바꿀 수 없게.
 """
 
 from __future__ import annotations
@@ -192,6 +193,13 @@ class EventPhaseDTO(BaseModel):
     name: str = Field(examples=["삼성전자 압수수색"])
 
 
+class EventCompanyDTO(BaseModel):
+    """이 사건이 **누구에게 난 일인가.** 앵커 없는 질문에서만 실린다."""
+
+    key: str = Field(examples=["00126380"])
+    name: str = Field(examples=["삼성전자"])
+
+
 class EventDTO(BaseModel):
     """사건 한 건."""
 
@@ -232,6 +240,17 @@ class EventDTO(BaseModel):
         description="`IMPACTS` 엣지의 값. 실측(2026-08-27) 1,083건: "
                     "negative 585 · positive 452 · neutral 46. "
                     "`IMPACTS` 가 없는 사건이면 `None`")
+
+    # ★**앵커 없는 질문에서만 찬다**(2026-09-02). 대상을 지정하지 않은 질문은
+    #   사건마다 기업이 다르다 — 안 실으면 LLM 이 「누구에게 난 일인지 모르는
+    #   사건」을 인용하게 되고, 그건 곧 엉뚱한 기업에 사건을 붙이는 일이 된다.
+    #   앵커가 있는 질문에서는 서버가 정한 재료 기업이 하나뿐이라 `None` 이다.
+    #   ★`app/api/schemas.Event.company` 와 **같은 값**이다 — 두 입구가 같은
+    #     사건에 다른 기업을 붙이면 그 차이는 대조에서 안 보인다.
+    company: Optional[EventCompanyDTO] = Field(
+        None,
+        description="★**앵커 없는 질문에서만 찬다.** 이 사건이 누구에게 난 일인가. "
+                    "대상을 지정한 질문에서는 서버가 정한 기업이 하나뿐이라 `None`")
 
     # ── 국면 ──────────────────────────────────────────────────
     # ★**배열을 문자열로 펴지 마라.** 편 적이 있어서 `size()` 가 국면 수가 아니라

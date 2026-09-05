@@ -83,7 +83,7 @@ Embed = Callable[[list[str]], Sequence[Sequence[float]]]
 #                      「Agent 때문인지 임베딩 때문인지」를 못 가른다 —
 #                      그러라고 캐시를 만든 것이다
 #
-# ★**환경변수로 가른다.** 인자로 두면 `retrieve_service._default_embed` 까지
+# ★**환경변수로 가른다.** 인자로 두면 `retrieve_service.default_embed` 까지
 #   내려가야 하는데 그 파일은 2차 동안 손대지 않는 자리다. 평가 스크립트가
 #   프로세스 앞에서 켜면 아래 전 구간에 걸린다.
 STRICT_ENV = "EMBED_CACHE_STRICT"

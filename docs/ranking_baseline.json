@@ -1,0 +1,1968 @@
+{
+ "captured_at": "2026-09-02",
+ "recent_since": "2025-09",
+ "companies": {
+  "00126380": {
+   "name": "삼성전자",
+   "candidates": 128,
+   "risk": 57,
+   "recent_risk": 20,
+   "latest": "2026-07-31",
+   "fingerprint": "925704019224"
+  },
+  "00164779": {
+   "name": "SK하이닉스",
+   "candidates": 60,
+   "risk": 26,
+   "recent_risk": 11,
+   "latest": "2026-08-09",
+   "fingerprint": "70220ddfb0d5"
+  },
+  "(global)": {
+   "name": "전역 사건 후보",
+   "candidates": 933,
+   "risk": 330,
+   "recent_risk": 153,
+   "latest": "2026-08-11",
+   "fingerprint": "ec0bcf20bdda"
+  }
+ },
+ "cases": [
+  {
+   "question": "이 회사 최근 리스크 어때?",
+   "intent": "회사 최근 리스크 어때?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_split_61b9e576fce6",
+     "name": "삼성전자 프리미엄 TV 시장 이중고",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-19",
+     "sim": 0.3329
+    },
+    {
+     "event_id": "evt_news_4f63a5f61e8f",
+     "name": "레인보우로보틱스 투자정보 유출 의혹",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.3126
+    },
+    {
+     "event_id": "evt_news_31c2c05e238a",
+     "name": "미국 ITC 조사",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2025-12-31",
+     "sim": 0.2908
+    },
+    {
+     "event_id": "evt_news_ddfcef1702b9",
+     "name": "2분기 영업손실 7000억",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-01",
+     "sim": 0.3203
+    },
+    {
+     "event_id": "evt_news_5c52339e8730",
+     "name": "스마트 링 특허 소송 패배",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-28",
+     "sim": 0.2284
+    },
+    {
+     "event_id": "evt_split_3cb3e22654a3",
+     "name": "2026년 파업 이슈",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-23",
+     "sim": 0.2574
+    },
+    {
+     "event_id": "evt_news_c915fa8bf141",
+     "name": "삼성전자 본사 압수수색",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.2384
+    },
+    {
+     "event_id": "evt_news_a3d69fbe8343",
+     "name": "위법 쟁위행위 금지 가처분 신청",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-05-18",
+     "sim": 0.2283
+    },
+    {
+     "event_id": "evt_news_6b6194b2b490",
+     "name": "HBM3E 30% 가격 인하",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-10-28",
+     "sim": 0.2511
+    },
+    {
+     "event_id": "evt_split_de5ab9895aec",
+     "name": "임금협약 잠정합의안 가결",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-05-27",
+     "sim": 0.1962
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 6,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "risk+recent"
+  },
+  {
+   "question": "이 회사 최근 리스크 어때?",
+   "intent": "회사 최근 리스크 어때?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_f76556f80d39",
+     "name": "MZ 상소문 사태",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-05-15",
+     "sim": 0.3213
+    },
+    {
+     "event_id": "evt_news_800f4bb4ec50",
+     "name": "단체교섭 요구",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-12",
+     "sim": 0.282
+    },
+    {
+     "event_id": "evt_news_bd870bd6523c",
+     "name": "투자경고종목 지정",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-21",
+     "sim": 0.279
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.2449
+    },
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2676
+    },
+    {
+     "event_id": "evt_news_160742b58437",
+     "name": "TMAH 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2117
+    },
+    {
+     "event_id": "evt_news_50527b8a1bc1",
+     "name": "불소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2127
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.2029
+    },
+    {
+     "event_id": "evt_news_3d5069112715",
+     "name": "솔리다임 지분 적합성 조사",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-02-13",
+     "sim": 0.2169
+    },
+    {
+     "event_id": "evt_news_75e265ad0857",
+     "name": "노조 설립",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-08-09",
+     "sim": 0.1396
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 9,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "risk+recent"
+  },
+  {
+   "question": "최근 위험한 일 있었어?",
+   "intent": "최근 위험한 일 있었어?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_82881e606565",
+     "name": "화성캠퍼스 화재",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2025-12-24",
+     "sim": 0.2877
+    },
+    {
+     "event_id": "evt_split_3cb3e22654a3",
+     "name": "2026년 파업 이슈",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-23",
+     "sim": 0.2604
+    },
+    {
+     "event_id": "evt_news_ec78ee9e7423",
+     "name": "갤럭시 S26 출시 연기",
+     "event_type": "사업확장",
+     "is_risk": true,
+     "occurred_at": "2025-12-31",
+     "sim": 0.2379
+    },
+    {
+     "event_id": "evt_news_ddfcef1702b9",
+     "name": "2분기 영업손실 7000억",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-01",
+     "sim": 0.2454
+    },
+    {
+     "event_id": "evt_news_6b6194b2b490",
+     "name": "HBM3E 30% 가격 인하",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-10-28",
+     "sim": 0.2584
+    },
+    {
+     "event_id": "evt_news_5c52339e8730",
+     "name": "스마트 링 특허 소송 패배",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-28",
+     "sim": 0.1979
+    },
+    {
+     "event_id": "evt_news_4f63a5f61e8f",
+     "name": "레인보우로보틱스 투자정보 유출 의혹",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.2198
+    },
+    {
+     "event_id": "evt_split_de5ab9895aec",
+     "name": "임금협약 잠정합의안 가결",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-05-27",
+     "sim": 0.2219
+    },
+    {
+     "event_id": "evt_news_a3d69fbe8343",
+     "name": "위법 쟁위행위 금지 가처분 신청",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-05-18",
+     "sim": 0.2184
+    },
+    {
+     "event_id": "evt_news_646975cdffb4",
+     "name": "8인치 웨이퍼 감산",
+     "event_type": "공급망",
+     "is_risk": true,
+     "occurred_at": "2026-01-13",
+     "sim": 0.1865
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 5,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "risk+recent"
+  },
+  {
+   "question": "최근 위험한 일 있었어?",
+   "intent": "최근 위험한 일 있었어?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_160742b58437",
+     "name": "TMAH 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2941
+    },
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3133
+    },
+    {
+     "event_id": "evt_news_50527b8a1bc1",
+     "name": "불소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2921
+    },
+    {
+     "event_id": "evt_news_bd870bd6523c",
+     "name": "투자경고종목 지정",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-21",
+     "sim": 0.2351
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.18
+    },
+    {
+     "event_id": "evt_news_b2e5150fda60",
+     "name": "반도체 가공 설비 불꽃 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.1987
+    },
+    {
+     "event_id": "evt_news_f76556f80d39",
+     "name": "MZ 상소문 사태",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-05-15",
+     "sim": 0.1562
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.1504
+    },
+    {
+     "event_id": "evt_news_800f4bb4ec50",
+     "name": "단체교섭 요구",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-12",
+     "sim": 0.1673
+    },
+    {
+     "event_id": "evt_news_3d5069112715",
+     "name": "솔리다임 지분 적합성 조사",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-02-13",
+     "sim": 0.1694
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 9,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "risk+recent"
+  },
+  {
+   "question": "노조 관련 리스크 알려줘",
+   "intent": "노조 관련 리스크 알려줘",
+   "matched": [
+    "노무"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_65f5df0e1d87",
+     "name": "삼성전자 노조 집회",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2022-03-11",
+     "sim": 0.4667
+    },
+    {
+     "event_id": "evt_news_17e28261e6f0",
+     "name": "인사제도 개편안 비판 노조 사내메일 발송 차단",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2021-11-25",
+     "sim": 0.4078
+    },
+    {
+     "event_id": "evt_split_3cb3e22654a3",
+     "name": "2026년 파업 이슈",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-23",
+     "sim": 0.3036
+    },
+    {
+     "event_id": "evt_split_d8a15eddf1c7",
+     "name": "2026년 과반 노조 탄생",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.3036
+    },
+    {
+     "event_id": "evt_news_8718ca44f3a2",
+     "name": "전국삼성전자노조 사상 첫 파업선언",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2024-05-30",
+     "sim": 0.2943
+    },
+    {
+     "event_id": "evt_news_588ab1c29bec",
+     "name": "삼성전자 연봉 협상 거부",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2024-04-24",
+     "sim": 0.323
+    },
+    {
+     "event_id": "evt_split_de5ab9895aec",
+     "name": "임금협약 잠정합의안 가결",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-05-27",
+     "sim": 0.2335
+    },
+    {
+     "event_id": "evt_split_ce711a855780",
+     "name": "성과급 갈등",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-24",
+     "sim": 0.2473
+    },
+    {
+     "event_id": "evt_news_0262e52f326d",
+     "name": "삼성전자 총파업 계획",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2025-12-23",
+     "sim": 0.2671
+    },
+    {
+     "event_id": "evt_news_c6c23bda5597",
+     "name": "2025년 임금·단체협약 잠정 합의",
+     "event_type": "노무",
+     "is_risk": false,
+     "occurred_at": "2025-02-24",
+     "sim": 0.2636
+    }
+   ],
+   "risk_kept": 9,
+   "recent_kept": 5,
+   "fallback_overlap": 4,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "risk+rule"
+  },
+  {
+   "question": "노조 관련 리스크 알려줘",
+   "intent": "노조 관련 리스크 알려줘",
+   "matched": [
+    "노무"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_75e265ad0857",
+     "name": "노조 설립",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-08-09",
+     "sim": 0.4962
+    },
+    {
+     "event_id": "evt_split_5150cfb3b88f",
+     "name": "SK하이닉스 파업 경고",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2025-08-14",
+     "sim": 0.3384
+    },
+    {
+     "event_id": "evt_news_800f4bb4ec50",
+     "name": "단체교섭 요구",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-12",
+     "sim": 0.322
+    },
+    {
+     "event_id": "evt_news_73553a1360d1",
+     "name": "2차 조합원 총력 투쟁 결의대회",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2025-08-12",
+     "sim": 0.2198
+    },
+    {
+     "event_id": "evt_news_98ff80dc34c6",
+     "name": "임단협 협상 타결",
+     "event_type": "노무",
+     "is_risk": false,
+     "occurred_at": "2025-09-04",
+     "sim": 0.2777
+    },
+    {
+     "event_id": "evt_news_160742b58437",
+     "name": "TMAH 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2894
+    },
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3158
+    },
+    {
+     "event_id": "evt_news_3177f9751f2a",
+     "name": "낸드 추가 감산 결정",
+     "event_type": "공급망",
+     "is_risk": true,
+     "occurred_at": "2023-08-18",
+     "sim": 0.3074
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.2551
+    },
+    {
+     "event_id": "evt_news_b2e5150fda60",
+     "name": "반도체 가공 설비 불꽃 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2588
+    }
+   ],
+   "risk_kept": 9,
+   "recent_kept": 7,
+   "fallback_overlap": 6,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "risk+rule"
+  },
+  {
+   "question": "최근 실적 어때?",
+   "intent": "최근 실적 어때?",
+   "matched": [
+    "실적"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_split_61b9e576fce6",
+     "name": "삼성전자 프리미엄 TV 시장 이중고",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-19",
+     "sim": 0.3011
+    },
+    {
+     "event_id": "evt_news_6b6194b2b490",
+     "name": "HBM3E 30% 가격 인하",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-10-28",
+     "sim": 0.309
+    },
+    {
+     "event_id": "evt_news_ddfcef1702b9",
+     "name": "2분기 영업손실 7000억",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-01",
+     "sim": 0.2443
+    },
+    {
+     "event_id": "evt_news_3a0494c04dd7",
+     "name": "1분기 어닝 쇼크",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2023-04-07",
+     "sim": 0.3608
+    },
+    {
+     "event_id": "evt_news_c74f4a5bfc09",
+     "name": "D램 흑자 전환",
+     "event_type": "실적",
+     "is_risk": false,
+     "occurred_at": "2024-01-31",
+     "sim": 0.2835
+    },
+    {
+     "event_id": "evt_news_b9b3b7567ff6",
+     "name": "반도체 투자 손실",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-04-09",
+     "sim": 0.2483
+    },
+    {
+     "event_id": "evt_news_a40c31658d7f",
+     "name": "연간 승인제 도입",
+     "event_type": "기타",
+     "is_risk": false,
+     "occurred_at": "2025-12-30",
+     "sim": 0.291
+    },
+    {
+     "event_id": "evt_split_3cb3e22654a3",
+     "name": "2026년 파업 이슈",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-23",
+     "sim": 0.2346
+    },
+    {
+     "event_id": "evt_news_31c2c05e238a",
+     "name": "미국 ITC 조사",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2025-12-31",
+     "sim": 0.2324
+    },
+    {
+     "event_id": "evt_news_dde66870d063",
+     "name": "RX사업추진실 신설",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-07-25",
+     "sim": 0.2409
+    }
+   ],
+   "risk_kept": 7,
+   "recent_kept": 7,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "recent+rule"
+  },
+  {
+   "question": "최근 실적 어때?",
+   "intent": "최근 실적 어때?",
+   "matched": [
+    "실적"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_bd870bd6523c",
+     "name": "투자경고종목 지정",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-12-21",
+     "sim": 0.2609
+    },
+    {
+     "event_id": "evt_news_d0d209dc6cdf",
+     "name": "D램사업 흑자전환",
+     "event_type": "실적",
+     "is_risk": false,
+     "occurred_at": "2023-10-30",
+     "sim": 0.2534
+    },
+    {
+     "event_id": "evt_news_3d5069112715",
+     "name": "솔리다임 지분 적합성 조사",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-02-13",
+     "sim": 0.2776
+    },
+    {
+     "event_id": "evt_news_a40c31658d7f",
+     "name": "연간 승인제 도입",
+     "event_type": "기타",
+     "is_risk": false,
+     "occurred_at": "2025-12-30",
+     "sim": 0.291
+    },
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.2597
+    },
+    {
+     "event_id": "evt_news_f76556f80d39",
+     "name": "MZ 상소문 사태",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-05-15",
+     "sim": 0.238
+    },
+    {
+     "event_id": "evt_split_64c87b9d9901",
+     "name": "5년 장기공급계약 체결",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-07-29",
+     "sim": 0.2472
+    },
+    {
+     "event_id": "evt_news_c231cdab023c",
+     "name": "서남권 신규 클러스터 구축 추진",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-06-29",
+     "sim": 0.2347
+    },
+    {
+     "event_id": "evt_news_cacc3686a94a",
+     "name": "SK하이닉스 생산능력 확대",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-06-08",
+     "sim": 0.2334
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.2158
+    }
+   ],
+   "risk_kept": 5,
+   "recent_kept": 9,
+   "fallback_overlap": 4,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "recent+rule"
+  },
+  {
+   "question": "안전사고",
+   "intent": "안전사고",
+   "matched": [
+    "사고재해"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_95e8a3d47161",
+     "name": "삼성전자 기흥사업장 방사선 피폭 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2024-05-30",
+     "sim": 0.4558
+    },
+    {
+     "event_id": "evt_news_82881e606565",
+     "name": "화성캠퍼스 화재",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2025-12-24",
+     "sim": 0.3259
+    },
+    {
+     "event_id": "evt_news_5a94737abb9c",
+     "name": "세탁기 폭발 사태",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2022-08-19",
+     "sim": 0.2253
+    },
+    {
+     "event_id": "evt_news_fd0daf4c0033",
+     "name": "엑시노스 보안 결함",
+     "event_type": "품질",
+     "is_risk": true,
+     "occurred_at": "2024-10-25",
+     "sim": 0.3702
+    },
+    {
+     "event_id": "evt_news_c915fa8bf141",
+     "name": "삼성전자 본사 압수수색",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.2848
+    },
+    {
+     "event_id": "evt_news_ec78ee9e7423",
+     "name": "갤럭시 S26 출시 연기",
+     "event_type": "사업확장",
+     "is_risk": true,
+     "occurred_at": "2025-12-31",
+     "sim": 0.2767
+    },
+    {
+     "event_id": "evt_news_0e95c793dc87",
+     "name": "반도체 제어시스템 입찰 담합",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2024-06-02",
+     "sim": 0.3014
+    },
+    {
+     "event_id": "evt_news_d1acf5c7e67a",
+     "name": "HBM3E 12단 인증 지연",
+     "event_type": "제품기술",
+     "is_risk": true,
+     "occurred_at": "2024-02-27",
+     "sim": 0.283
+    },
+    {
+     "event_id": "evt_news_110e2b987dee",
+     "name": "D램 감산",
+     "event_type": "공급망",
+     "is_risk": true,
+     "occurred_at": "2023-04-08",
+     "sim": 0.2924
+    },
+    {
+     "event_id": "evt_news_f307d6a82f49",
+     "name": "갤럭시S22 GOS 집단소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2022-03-21",
+     "sim": 0.3095
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 3,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "control-rule"
+  },
+  {
+   "question": "안전사고",
+   "intent": "안전사고",
+   "matched": [
+    "사고재해"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3987
+    },
+    {
+     "event_id": "evt_news_50527b8a1bc1",
+     "name": "불소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3989
+    },
+    {
+     "event_id": "evt_news_763f3cffe703",
+     "name": "D램 공정사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2023-02-17",
+     "sim": 0.3868
+    },
+    {
+     "event_id": "evt_news_160742b58437",
+     "name": "TMAH 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3524
+    },
+    {
+     "event_id": "evt_news_b2e5150fda60",
+     "name": "반도체 가공 설비 불꽃 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.3458
+    },
+    {
+     "event_id": "evt_news_77b13c5c182a",
+     "name": "이천 공장 질소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2024-02-16",
+     "sim": 0.359
+    },
+    {
+     "event_id": "evt_news_64359812273c",
+     "name": "우시 공장 화재",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2013-09-05",
+     "sim": 0.3575
+    },
+    {
+     "event_id": "evt_news_013b8de40745",
+     "name": "이천캠퍼스 사고",
+     "event_type": "사고재해",
+     "is_risk": false,
+     "occurred_at": "2023-03-02",
+     "sim": 0.3715
+    },
+    {
+     "event_id": "evt_news_304e4be3e4bc",
+     "name": "청주공장 화재 및 유독가스 누출",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2021-11-16",
+     "sim": 0.2874
+    },
+    {
+     "event_id": "evt_news_800f4bb4ec50",
+     "name": "단체교섭 요구",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-12",
+     "sim": 0.2788
+    }
+   ],
+   "risk_kept": 9,
+   "recent_kept": 5,
+   "fallback_overlap": 5,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "control-rule"
+  },
+  {
+   "question": "소송 상황",
+   "intent": "소송 상황",
+   "matched": [
+    "분쟁소송"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_08bae7e927b6",
+     "name": "삼성전자 기밀 빼내 특허소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2024-05-29",
+     "sim": 0.4613
+    },
+    {
+     "event_id": "evt_news_f307d6a82f49",
+     "name": "갤럭시S22 GOS 집단소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2022-03-21",
+     "sim": 0.4262
+    },
+    {
+     "event_id": "evt_news_b1f7d419d6e7",
+     "name": "LTE 특허 소송 승소",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2023-11-28",
+     "sim": 0.4443
+    },
+    {
+     "event_id": "evt_news_9d3b4ecd64b6",
+     "name": "전직금지 가처분 승소",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2022-04-14",
+     "sim": 0.4612
+    },
+    {
+     "event_id": "evt_news_5c52339e8730",
+     "name": "스마트 링 특허 소송 패배",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-28",
+     "sim": 0.418
+    },
+    {
+     "event_id": "evt_news_9b4541203271",
+     "name": "미국 특허 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2025-11-04",
+     "sim": 0.3892
+    },
+    {
+     "event_id": "evt_news_68f7f53d8da2",
+     "name": "스마트워치 상표권 소송 패소",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2022-05-24",
+     "sim": 0.3916
+    },
+    {
+     "event_id": "evt_news_09fab6886f08",
+     "name": "넷리스트 특허 침해 무효 소송 승소",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2023-08-16",
+     "sim": 0.3787
+    },
+    {
+     "event_id": "evt_news_ff344c4d32c4",
+     "name": "와이파이 특허 소송 합의",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2023-08-09",
+     "sim": 0.39
+    },
+    {
+     "event_id": "evt_news_c4a7d305b7c2",
+     "name": "모바일 애플리케이션 프로세서(AP) 소송 종결",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2023-06-09",
+     "sim": 0.3915
+    }
+   ],
+   "risk_kept": 5,
+   "recent_kept": 2,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "control-rule"
+  },
+  {
+   "question": "소송 상황",
+   "intent": "소송 상황",
+   "matched": [
+    "분쟁소송"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_6cce32444018",
+     "name": "TC본더 특허 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2025-08-12",
+     "sim": 0.3823
+    },
+    {
+     "event_id": "evt_split_6a0e33067fda",
+     "name": "특허 소송",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2024-06-16",
+     "sim": 0.4121
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.3486
+    },
+    {
+     "event_id": "evt_news_bb8ccd27176f",
+     "name": "법적 분쟁",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2025-01-02",
+     "sim": 0.3724
+    },
+    {
+     "event_id": "evt_news_4369d6933adf",
+     "name": "SK하이닉스 반도체 특허 침해 소송 무효",
+     "event_type": "분쟁소송",
+     "is_risk": false,
+     "occurred_at": "2020-08-17",
+     "sim": 0.3686
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.3309
+    },
+    {
+     "event_id": "evt_news_50527b8a1bc1",
+     "name": "불소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.353
+    },
+    {
+     "event_id": "evt_news_3d5069112715",
+     "name": "솔리다임 지분 적합성 조사",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-02-13",
+     "sim": 0.2802
+    },
+    {
+     "event_id": "evt_news_77b13c5c182a",
+     "name": "이천 공장 질소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2024-02-16",
+     "sim": 0.3008
+    },
+    {
+     "event_id": "evt_news_bfd873d6c93f",
+     "name": "솔리다임 역효과",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2022-09-28",
+     "sim": 0.3071
+    }
+   ],
+   "risk_kept": 8,
+   "recent_kept": 4,
+   "fallback_overlap": 4,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "control-rule"
+  },
+  {
+   "question": "",
+   "intent": "",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_5c52339e8730",
+     "name": "스마트 링 특허 소송 패배",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-28",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_split_3cb3e22654a3",
+     "name": "2026년 파업 이슈",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-23",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_4f63a5f61e8f",
+     "name": "레인보우로보틱스 투자정보 유출 의혹",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_c915fa8bf141",
+     "name": "삼성전자 본사 압수수색",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-11",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_split_de5ab9895aec",
+     "name": "임금협약 잠정합의안 가결",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-05-27",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_a3d69fbe8343",
+     "name": "위법 쟁위행위 금지 가처분 신청",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-05-18",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_f469818ef15a",
+     "name": "노조 미가입자 명단 유포 사건",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-04-17",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_split_ce711a855780",
+     "name": "성과급 갈등",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-24",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_dfd3b459779e",
+     "name": "레인보우로보틱스 압수수색",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-03-18",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_split_d8a15eddf1c7",
+     "name": "2026년 과반 노조 탄생",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.0
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 10,
+   "fallback": [
+    "evt_news_5c52339e8730",
+    "evt_split_3cb3e22654a3",
+    "evt_news_4f63a5f61e8f",
+    "evt_news_c915fa8bf141",
+    "evt_split_de5ab9895aec",
+    "evt_news_a3d69fbe8343",
+    "evt_news_f469818ef15a",
+    "evt_split_ce711a855780",
+    "evt_news_dfd3b459779e",
+    "evt_split_d8a15eddf1c7"
+   ],
+   "company": "00126380",
+   "kind": "control-nointent"
+  },
+  {
+   "question": "",
+   "intent": "",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_75e265ad0857",
+     "name": "노조 설립",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-08-09",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_split_e56acc5dc358",
+     "name": "미국서 담합 혐의 피소",
+     "event_type": "규제수사",
+     "is_risk": true,
+     "occurred_at": "2026-06-30",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_160742b58437",
+     "name": "TMAH 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_25378bbae4ab",
+     "name": "인산 노출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_50527b8a1bc1",
+     "name": "불소 누출 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_b2e5150fda60",
+     "name": "반도체 가공 설비 불꽃 사고",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-06-12",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_f76556f80d39",
+     "name": "MZ 상소문 사태",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-05-15",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_800f4bb4ec50",
+     "name": "단체교섭 요구",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-03-12",
+     "sim": 0.0
+    },
+    {
+     "event_id": "evt_news_3d5069112715",
+     "name": "솔리다임 지분 적합성 조사",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-02-13",
+     "sim": 0.0
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 10,
+   "fallback": [
+    "evt_news_75e265ad0857",
+    "evt_split_e56acc5dc358",
+    "evt_news_160742b58437",
+    "evt_news_25378bbae4ab",
+    "evt_news_50527b8a1bc1",
+    "evt_news_b2e5150fda60",
+    "evt_news_f76556f80d39",
+    "evt_news_0a95633f77b4",
+    "evt_news_800f4bb4ec50",
+    "evt_news_3d5069112715"
+   ],
+   "company": "00164779",
+   "kind": "control-nointent"
+  },
+  {
+   "question": "최근 주요 투자 이벤트가 뭐야?",
+   "intent": "최근 주요 투자 이벤트가 뭐야?",
+   "matched": [
+    "사업확장"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_80418537b52f",
+     "name": "신규 계좌 개설 이벤트",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-07-10",
+     "company": "현대차증권",
+     "sim": 0.426
+    },
+    {
+     "event_id": "evt_news_0b5557ee7b12",
+     "name": "EUV 장비 투자",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-06-25",
+     "company": "SK하이닉스",
+     "sim": 0.4521
+    },
+    {
+     "event_id": "evt_news_8b392b1c98c6",
+     "name": "스페이스X 투자",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-06-12",
+     "company": "한미반도체",
+     "sim": 0.4649
+    },
+    {
+     "event_id": "evt_news_9c8e0774a396",
+     "name": "IPO 시장 복귀",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-05-22",
+     "company": "마키나락스",
+     "sim": 0.4419
+    },
+    {
+     "event_id": "evt_news_d43099c15974",
+     "name": "OLED 신기술 고도화 설비투자",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-07-30",
+     "company": "LG디스플레이",
+     "sim": 0.4248
+    },
+    {
+     "event_id": "evt_news_a4db45aa8a27",
+     "name": "기업공개(IPO)",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-06-24",
+     "company": "보스턴다이내믹스",
+     "sim": 0.4054
+    },
+    {
+     "event_id": "evt_news_cbf2c93dad7d",
+     "name": "우즈베키스탄 휴머노이드 공장 투자",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-04-07",
+     "company": "로보티즈",
+     "sim": 0.392
+    },
+    {
+     "event_id": "evt_news_c5407c922f9e",
+     "name": "HPSP 투자 수익 실현",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-01-07",
+     "company": "한미반도체",
+     "sim": 0.3859
+    },
+    {
+     "event_id": "evt_news_5565015831bb",
+     "name": "100만명 돌파 기념 최대 10% 포인트 적립 이벤트",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2025-12-15",
+     "company": "우리은행",
+     "sim": 0.4002
+    },
+    {
+     "event_id": "evt_news_5565015831bb",
+     "name": "100만명 돌파 기념 최대 10% 포인트 적립 이벤트",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2025-12-15",
+     "company": "삼성전자",
+     "sim": 0.4002
+    }
+   ],
+   "risk_kept": 0,
+   "recent_kept": 10,
+   "fallback_overlap": 0,
+   "fallback": [
+    "evt_news_ddde6db97c29",
+    "evt_news_75e265ad0857",
+    "evt_news_1ccedf8c1e11",
+    "evt_news_77532234d5eb",
+    "evt_news_be4d2707bf8a",
+    "evt_news_a2835a45e269",
+    "evt_news_77532234d5eb",
+    "evt_news_77532234d5eb",
+    "evt_news_5c52339e8730",
+    "evt_news_7eba0cb2915a"
+   ],
+   "companies_derived": 9,
+   "company": "(global)",
+   "kind": "anchorless-rule"
+  },
+  {
+   "question": "최근 소송 걸린 기업 알려줘",
+   "intent": "최근 소송 걸린 기업 알려줘",
+   "matched": [
+    "분쟁소송"
+   ],
+   "selected": [
+    {
+     "event_id": "evt_news_6cce32444018",
+     "name": "TC본더 특허 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-04-13",
+     "company": "한화세미텍",
+     "sim": 0.4026
+    },
+    {
+     "event_id": "evt_news_828f8fba080a",
+     "name": "장내매수자 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2025-11-14",
+     "company": "파두",
+     "sim": 0.3995
+    },
+    {
+     "event_id": "evt_news_5c52339e8730",
+     "name": "스마트 링 특허 소송 패배",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-28",
+     "company": "삼성전자",
+     "sim": 0.331
+    },
+    {
+     "event_id": "evt_news_b3aceb7eb985",
+     "name": "부당이득금 반환 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-07-16",
+     "company": "LS증권",
+     "sim": 0.345
+    },
+    {
+     "event_id": "evt_news_0e4b6db0b351",
+     "name": "고압수소어닐링(HPA) 장비 특허 침해 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-06-25",
+     "company": "HPSP",
+     "sim": 0.3652
+    },
+    {
+     "event_id": "evt_news_0a9c64e809b2",
+     "name": "HPSP 특허침해소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-04-15",
+     "company": "HPSP",
+     "sim": 0.3318
+    },
+    {
+     "event_id": "evt_news_c1e8da7c2fbb",
+     "name": "직무집행정지가처분 결정 인가",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-24",
+     "company": "DKME",
+     "sim": 0.3364
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "company": "한화오션",
+     "sim": 0.3358
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-13",
+     "company": "SK하이닉스",
+     "sim": 0.3358
+    },
+    {
+     "event_id": "evt_news_0a95633f77b4",
+     "name": "퇴직금 청구 소송",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-01-28",
+     "company": "삼성전자",
+     "sim": 0.3358
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_ddde6db97c29",
+    "evt_news_75e265ad0857",
+    "evt_news_1ccedf8c1e11",
+    "evt_news_77532234d5eb",
+    "evt_news_be4d2707bf8a",
+    "evt_news_a2835a45e269",
+    "evt_news_77532234d5eb",
+    "evt_news_77532234d5eb",
+    "evt_news_5c52339e8730",
+    "evt_news_7eba0cb2915a"
+   ],
+   "companies_derived": 8,
+   "company": "(global)",
+   "kind": "anchorless-rule"
+  },
+  {
+   "question": "최근 리스크 뭐가 있어?",
+   "intent": "최근 리스크 뭐가 있어?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_split_56745517fdb3",
+     "name": "2026년 전면파업 리스크",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-04-28",
+     "company": "현대모비스",
+     "sim": 0.5474
+    },
+    {
+     "event_id": "evt_news_e961688a08df",
+     "name": "레인보우로보틱스 사법 리스크",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-03-23",
+     "company": "레인보우로보틱스",
+     "sim": 0.51
+    },
+    {
+     "event_id": "evt_news_4a565807df83",
+     "name": "코미코 해킹 피해",
+     "event_type": "정보유출",
+     "is_risk": true,
+     "occurred_at": "2026-06-17",
+     "company": "코미코",
+     "sim": 0.2777
+    },
+    {
+     "event_id": "evt_news_24dea3228408",
+     "name": "어닝 쇼크",
+     "event_type": "실적",
+     "is_risk": true,
+     "occurred_at": "2025-11-24",
+     "company": "키옥시아",
+     "sim": 0.3062
+    },
+    {
+     "event_id": "evt_news_8a5be0e1fa25",
+     "name": "안전 셧다운",
+     "event_type": "사고재해",
+     "is_risk": true,
+     "occurred_at": "2026-07-27",
+     "company": "HD현대중공업",
+     "sim": 0.2626
+    },
+    {
+     "event_id": "evt_news_d9ecc2cc5005",
+     "name": "레인보우로보틱스 선행매매 의혹",
+     "event_type": "기타",
+     "is_risk": true,
+     "occurred_at": "2026-03-17",
+     "company": "레인보우로보틱스",
+     "sim": 0.2289
+    },
+    {
+     "event_id": "evt_news_817049042d67",
+     "name": "제네시스 디스플레이 오류 리콜",
+     "event_type": "품질",
+     "is_risk": true,
+     "occurred_at": "2026-01-26",
+     "company": "현대차",
+     "sim": 0.2442
+    },
+    {
+     "event_id": "evt_news_be4d2707bf8a",
+     "name": "기아 쟁의권 확보",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-08-02",
+     "company": "기아",
+     "sim": 0.2064
+    },
+    {
+     "event_id": "evt_news_b6e10d281878",
+     "name": "리노공업 노조 파업 가결",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-07-24",
+     "company": "리노공업",
+     "sim": 0.1929
+    },
+    {
+     "event_id": "evt_news_a0d5b7a02576",
+     "name": "성과급·고용보장 갈등",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-06-29",
+     "company": "카카오",
+     "sim": 0.1957
+    }
+   ],
+   "risk_kept": 10,
+   "recent_kept": 10,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_ddde6db97c29",
+    "evt_news_75e265ad0857",
+    "evt_news_1ccedf8c1e11",
+    "evt_news_77532234d5eb",
+    "evt_news_be4d2707bf8a",
+    "evt_news_a2835a45e269",
+    "evt_news_77532234d5eb",
+    "evt_news_77532234d5eb",
+    "evt_news_5c52339e8730",
+    "evt_news_7eba0cb2915a"
+   ],
+   "companies_derived": 9,
+   "company": "(global)",
+   "kind": "anchorless-risk"
+  },
+  {
+   "question": "이번 주 주요 사건 뭐야?",
+   "intent": "번 주 주요 사건 뭐야?",
+   "matched": [],
+   "selected": [
+    {
+     "event_id": "evt_news_4f921aa2c3e2",
+     "name": "제73기 정기 주주총회",
+     "event_type": "기타",
+     "is_risk": false,
+     "occurred_at": "2026-03-24",
+     "company": "DB하이텍",
+     "sim": 0.4175
+    },
+    {
+     "event_id": "evt_news_a2835a45e269",
+     "name": "임단협 장기화",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2026-07-30",
+     "company": "리노공업",
+     "sim": 0.3424
+    },
+    {
+     "event_id": "evt_news_c1e8da7c2fbb",
+     "name": "직무집행정지가처분 결정 인가",
+     "event_type": "분쟁소송",
+     "is_risk": true,
+     "occurred_at": "2026-03-24",
+     "company": "DKME",
+     "sim": 0.3346
+    },
+    {
+     "event_id": "evt_split_337dcc436d8d",
+     "name": "HD현대 2023년 부분파업",
+     "event_type": "노무",
+     "is_risk": true,
+     "occurred_at": "2023-08-31",
+     "company": "HD현대",
+     "sim": 0.3262
+    },
+    {
+     "event_id": "evt_news_866c29a93879",
+     "name": "임단협 마무리",
+     "event_type": "노무",
+     "is_risk": false,
+     "occurred_at": "2026-08-02",
+     "company": "한국GM",
+     "sim": 0.3273
+    },
+    {
+     "event_id": "evt_news_866c29a93879",
+     "name": "임단협 마무리",
+     "event_type": "노무",
+     "is_risk": false,
+     "occurred_at": "2026-08-02",
+     "company": "KG모빌리티",
+     "sim": 0.3273
+    },
+    {
+     "event_id": "evt_news_db2c0105962a",
+     "name": "ADR 발행",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-07-16",
+     "company": "SK하이닉스",
+     "sim": 0.3311
+    },
+    {
+     "event_id": "evt_news_6b50002beceb",
+     "name": "KB The Next Summit",
+     "event_type": "기타",
+     "is_risk": false,
+     "occurred_at": "2026-07-08",
+     "company": "KB증권",
+     "sim": 0.3726
+    },
+    {
+     "event_id": "evt_news_da3d3eecd340",
+     "name": "한국원자력연차대회",
+     "event_type": "기타",
+     "is_risk": false,
+     "occurred_at": "2026-04-24",
+     "company": "비에이치아이",
+     "sim": 0.3698
+    },
+    {
+     "event_id": "evt_split_f48aab8deec1",
+     "name": "P4 라인 준공 일정",
+     "event_type": "사업확장",
+     "is_risk": false,
+     "occurred_at": "2026-03-25",
+     "company": "삼성전자",
+     "sim": 0.337
+    }
+   ],
+   "risk_kept": 3,
+   "recent_kept": 9,
+   "fallback_overlap": 1,
+   "fallback": [
+    "evt_news_ddde6db97c29",
+    "evt_news_75e265ad0857",
+    "evt_news_1ccedf8c1e11",
+    "evt_news_77532234d5eb",
+    "evt_news_be4d2707bf8a",
+    "evt_news_a2835a45e269",
+    "evt_news_77532234d5eb",
+    "evt_news_77532234d5eb",
+    "evt_news_5c52339e8730",
+    "evt_news_7eba0cb2915a"
+   ],
+   "companies_derived": 10,
+   "company": "(global)",
+   "kind": "anchorless-nointent"
+  }
+ ]
+}

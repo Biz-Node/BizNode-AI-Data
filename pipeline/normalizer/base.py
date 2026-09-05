@@ -76,16 +76,6 @@ def is_total_row(name: Optional[str]) -> bool:
     """최대주주/타법인출자 리스트의 총계 행("계"/"합계") 여부."""
     return (name or "").strip() in _TOTAL_ROW_NAMES
 
-# 법인격 표기는 `normalizer/legal_forms.py` 한 곳에서만 정한다(2026-08-13).
-# 전에는 이 파일·`entities.py`·`repair/node_identity.py`에 여섯 벌로 흩어져 있었다.
-from pipeline.normalizer.legal_forms import CORP_MARKERS as _COMPANY_NAME_MARKERS
-
-def is_company_name(name: str) -> bool:
-    if any(marker in name for marker in _COMPANY_NAME_MARKERS):
-        return True
-    corp_code, _, _ = resolve_investee_corp_code(name)
-    return corp_code is not None
-
 # ---------------------------------------------------------------------------
 # 숫자 변환
 # ---------------------------------------------------------------------------

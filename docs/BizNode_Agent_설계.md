@@ -1,7 +1,43 @@
-# BizNode Agent — Architecture & Design Specification
+# BizNode Agent — 설계
 
-> **대상 코드**: `yun-phase2` · HEAD `709496a` (2026-08-28 23:08)
-> **함께 읽을 문서**: [설계서](BizNode_Search_Layer_설계.md) · [현황서](BizNode_Search_Layer_현황서.md) · [평가 명세](BizNode_Agent_Evaluation.md) · [개발 이력](BizNode_Agent_Development_History.md)
+> **`/ask` 안의 실행 그래프와 도구 루프**를 다룹니다. 그 아래 검색·재료·답변
+> 규약은 [검색·챗봇 설계](BizNode_Search_설계.md), 현재 상태·결함·실측은 [현황](BizNode_검색챗봇_현황.md) 입니다.
+>
+> **짝을 이루는 세 문서입니다.** 설계 둘과 현황 하나 —
+> [검색·챗봇 설계](BizNode_Search_설계.md) · [Agent 설계](BizNode_Agent_설계.md) · [현황](BizNode_검색챗봇_현황.md).
+> 현황은 두 계층을 함께 다룹니다. 한 커밋이 두 계층을 같이 건드리는 일이 잦아
+> 계층별로 가르면 같은 항목이 양쪽에 나뉩니다.
+
+본문은 `709496a`(2026-08-28) 기준 · 폐기 절 표시만 2026-09-05 갱신
+
+---
+
+> **본문 기준 코드**: `yun-phase2` · HEAD `709496a` (2026-08-28 23:08)
+> **폐기 절 표시 갱신**: `yun` · `6c39289` (2026-09-05) — 아래 🔴 참조
+
+> 🔴 **2026-09-01 최종 설계가 이 문서의 일부를 폐기했습니다.**
+>
+> 워크스페이스를 **검색 경계**로 보던 정책이 폐기되면서 둘이 코드에서 사라졌습니다 —
+> `guard_workspace` 게이트(그래프의 첫 노드)와 `AnchorSource.WORKSPACE`(앵커 승격).
+> 그래프의 출발점은 이제 `search` 이고(`ask_graph.py` 의 `add_edge(START, "search")`),
+> 앵커가 없는 질의는 `ANCHORLESS` 로 **정상 처리**됩니다.
+>
+> 영향받은 절 여덟에 🔴 표시를 달았습니다 — §3 그림 1 · §5 그림 2 · §5-1 · §7-1 · §7-2 ·
+> §14-1 · §16-2 · §16-3.
+> 근거는 [최종 설계 §6-1·§17-1·§17-3](BizNode_Workspace_Contextual_Agent_Final_Design.md),
+> 이력은 [현황 §8-22](BizNode_검색챗봇_현황.md) 입니다.
+>
+> ★**본문의 나머지 서술은 `709496a` 기준 그대로입니다** — 이번에 전면 재검증하지
+> 않았습니다. 값이 어긋나면 현황서가 정본입니다.
+
+> ★**이 편은 설계편의 `/ask` 위에 얹힌 층입니다.** 설계편이 「무엇을 재료로 쓰고 어떤
+> 규약으로 답하는가」를 정하고, 이 편은 **그 안에서 LLM 이 도구를 골라 재료를 더 모으는
+> 루프**를 정합니다. 현재 상태·결함·실측은 [현황편](BizNode_검색챗봇_현황.md) 이 정본입니다.
+>
+> ★**절 번호가 설계편과 겹칩니다**(둘 다 §1 부터). 제목이 달라 앵커는 안 겹치지만,
+> 헷갈릴 자리에서는 「Agent §5」처럼 편을 함께 적습니다.
+
+---
 
 ## 이 문서의 표기 규약
 
@@ -143,20 +179,23 @@ flowchart LR
 
     subgraph NEW["Agent — LangGraph"]
         direction TB
-        N1[guard_workspace] --> N2[search]
-        N2 --> N3[resolve_anchor]
+        N2[search] --> N3[resolve_anchor]
         N3 --> N4[plan_material]
         N4 --> N5{{"agent ⇄ run_tools<br/>★LLM 이 도구를 고른다"}}
         N5 --> N6[evidence_validation]
         N6 --> N7[fetch_propagation]
         N7 --> N8["build_prompt → generate"]
         N8 --> N9["verify_sources → check_claims → respond"]
-        N1 -. "워크스페이스 없음" .-> NH[halt_no_material]
-        N3 -. "UNRESOLVED" .-> NH
+        N3 -. "UNRESOLVED" .-> NH[halt_no_material]
     end
 
     OLD ==> NEW
 ```
+
+> 🔴 **`guard_workspace` 는 2026-09-01 에 제거됐습니다.** 「담아 둔 기업도 보고 있는
+> 기업도 없으면 검색조차 하지 않는다」는 게이트였는데, 워크스페이스를 검색 경계로 보는
+> 정책이 폐기되면서 함께 나갔습니다([최종 설계 §17-1](BizNode_Workspace_Contextual_Agent_Final_Design.md)).
+> 워크스페이스가 없어도 Global Search 를 하고 Global Ranking 으로 답합니다.
 
 ### 3-1. 무엇이 바뀌었나
 
@@ -216,12 +255,10 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    START([START]) --> GW[guard_workspace]
-    GW -->|has_workspace| SE[search]
-    GW -->|비었음| HALT[halt_no_material]
+    START([START]) --> SE[search]
     SE --> RA[resolve_anchor]
     RA -->|is_resolved| PM[plan_material]
-    RA -->|UNRESOLVED| HALT
+    RA -->|UNRESOLVED| HALT[halt_no_material]
 
     PM --> AG[agent]
     AG -->|"should_continue<br/>tool_calls 있음"| RT[run_tools]
@@ -246,24 +283,27 @@ flowchart TD
 - 파란색 = **LLM 이 관여하는 구간**
 - 빨간색 = **Agent 를 감싸는 결정론 방어선** (앞의 앵커 판정 · 뒤의 근거 확정)
 
+> 🔴 **입구의 `guard_workspace` 와 `has_workspace` 조건부 엣지가 없습니다**(2026-09-01).
+> `START` 는 `search` 로 바로 갑니다. 조건부 엣지는 **둘**입니다 — `is_resolved`·`should_continue`.
+
 ### 5-1. 실제 데이터 흐름
 
 ```text
 AskRequest{question, workspace_keys}
   │
-  ├─ guard_workspace   워크스페이스가 비었나                    [조건부 엣지 ①]
-  ├─ search            SearchOrchestrator.search()
+  ├─ search            SearchOrchestrator.search()   ★그래프의 출발점
   │                    └─ QueryRouter → edge_types · direction  ★여기가 라우팅이다
   │                    └─ EntityResolver → resolved_entities
   │                    └─ Graph/VectorSearcher → SearchResult
-  ├─ resolve_anchor    decide_anchor() → QUERY / WORKSPACE / UNRESOLVED
-  │                                                              [조건부 엣지 ②]
+  ├─ resolve_anchor    decide_anchor() → QUERY / CONTEXT / ANCHORLESS / UNRESOLVED
+  │                    🔴 WORKSPACE 는 폐기 · ANCHORLESS 로 대체 (2026-09-01)
+  │                                                              [조건부 엣지 ①]
   ├─ plan_material     companies · anchor_names · intent · 예산 카운터 0
   │
   ├─ agent ⇄ run_tools ★LLM 이 도구 선택 · 서버가 범위·표기·총량 강제
   │                    └─ with anchor_scope(...)  ← ToolContext 세움
   │                    └─ with collecting()       ← DTO 수집
-  │                                                              [조건부 엣지 ③]
+  │                                                              [조건부 엣지 ②]
   ├─ evidence_validation  ★결정론 — evidence_id 합집합 → Evidence
   ├─ fetch_propagation    ★결정론 — is_risk 사건 위에서 파급 계산
   ├─ build_prompt         DTO → 프롬프트 문자열
@@ -360,32 +400,36 @@ Phase 1 실측(2026-08-27): `search` 노드가 `new_trace_id()` 를 발급했더
 
 노드는 전부 **sync 함수**이고 `AskState` 조각을 돌려줍니다. 판단 로직은 `RetrieveService`·`AnswerService` 에 그대로 있습니다 — **노드는 위임하는 껍데기**입니다.
 
-### 7-1. 노드 14개
+### 7-1. 노드 13개
 
-`build_ask_graph()` 가 `add_node` 를 부르는 횟수 기준입니다 — 본선 13개 + 출구 `halt_no_material` 1개.
+`build_ask_graph()` 가 `add_node` 를 부르는 횟수 기준입니다 — 본선 12개 + 출구 `halt_no_material` 1개.
+
+> 🔴 **`guard_workspace` 가 빠져 14 → 13 이 됐습니다**(2026-09-01). 첫 노드는 `search` 입니다.
 
 | # | 노드 | 파일 | 역할 | 입력 (State) | 출력 (State) | 다음 |
 |---|---|---|---|---|---|---|
-| 1 | `guard_workspace` | `material.py` | 워크스페이스 빔을 **로그에 남김** | `request` | `{}` | 조건부 ① |
-| 2 | `search` | `material.py` | `SearchOrchestrator.search()` | `request` | `query` `result` `match_type` | `resolve_anchor` |
-| 3 | `resolve_anchor` | `material.py` | `decide_anchor()` — 3분법 | `request` `query` | `decision` | 조건부 ② |
-| 4 | `plan_material` | `material.py` | 재료 기업·의도 확정 + **예산 개시** | `request` `query` `result` `decision` | `companies` `anchor_names` `intent` `budget.initial()` | `agent` |
-| 5 | `agent` | `agent_loop.py` | ★**LLM 이 도구를 고름** | `messages` `request` `companies` | `messages` | 조건부 ③ |
-| 6 | `run_tools` | `agent_loop.py` | 도구 실행 · 범위 강제 · 예산 가산 | `messages` `query` `companies` `decision` | `messages` `tool_results` `예산` | `agent` |
-| 7 | `evidence_validation` | `agent_loop.py` | ★**결정론 마감** — dedup + 근거 합집합 | `tool_results` `result` | `relations` `events` `evidence` | `fetch_propagation` |
-| 8 | `fetch_propagation` | `material.py` | is_risk 사건 위 파급 계산 | `events` `예산` | `propagation` `예산` | `build_prompt` |
-| 9 | `build_prompt` | `answer.py` | DTO → 프롬프트 | 재료 전부 | `user_prompt` | `generate` |
-| 10 | `generate` | `answer.py` | LLM 호출 | `user_prompt` | `llm_result` | `verify_sources` |
-| 11 | `verify_sources` | `answer.py` | ★**화이트리스트 검증** | `llm_result` `evidence` `relations` | `answer` `failed` `sources` | `check_claims` |
-| 12 | `check_claims` | `answer.py` | ★**관측만** — State 무변경 | `llm_result` `evidence` `intent` | `{}` | `respond` |
-| 13 | `respond` | `answer.py` | `AskResponse` 조립 | `answer` `sources` `failed` `decision` | `response` | END |
+| 1 | `search` | `material.py` | `SearchOrchestrator.search()` | `request` | `query` `result` `match_type` | `resolve_anchor` |
+| 2 | `resolve_anchor` | `material.py` | `decide_anchor()` — 🔴 3분법 → **4분법**(§5-1) | `request` `query` | `decision` | 조건부 ② |
+| 3 | `plan_material` | `material.py` | 재료 기업·의도 확정 + **예산 개시** | `request` `query` `result` `decision` | `companies` `anchor_names` `intent` `budget.initial()` | `agent` |
+| 4 | `agent` | `agent_loop.py` | ★**LLM 이 도구를 고름** | `messages` `request` `companies` | `messages` | 조건부 ③ |
+| 5 | `run_tools` | `agent_loop.py` | 도구 실행 · 범위 강제 · 예산 가산 | `messages` `query` `companies` `decision` | `messages` `tool_results` `예산` | `agent` |
+| 6 | `evidence_validation` | `agent_loop.py` | ★**결정론 마감** — dedup + 근거 합집합 | `tool_results` `result` | `relations` `events` `evidence` | `fetch_propagation` |
+| 7 | `fetch_propagation` | `material.py` | is_risk 사건 위 파급 계산 | `events` `예산` | `propagation` `예산` | `build_prompt` |
+| 8 | `build_prompt` | `answer.py` | DTO → 프롬프트 | 재료 전부 | `user_prompt` | `generate` |
+| 9 | `generate` | `answer.py` | LLM 호출 | `user_prompt` | `llm_result` | `verify_sources` |
+| 10 | `verify_sources` | `answer.py` | ★**화이트리스트 검증** | `llm_result` `evidence` `relations` | `answer` `failed` `sources` | `check_claims` |
+| 11 | `check_claims` | `answer.py` | ★**관측만** — State 무변경 | `llm_result` `evidence` `intent` | `{}` | `respond` |
+| 12 | `respond` | `answer.py` | `AskResponse` 조립 | `answer` `sources` `failed` `decision` | `response` | END |
 | — | `halt_no_material` | `answer.py` | 재료 없이 내는 응답 (`failed=false`) | `request` `decision` | `response` | END |
 
-### 7-2. 조건부 엣지 셋
+### 7-2. 조건부 엣지 둘 — 🔴 ① 은 폐기됐습니다
+
+★**번호는 그대로 둡니다.** §7-3 · §14 가 「위 ②」처럼 이 번호를 참조하고 있어
+번호를 밀면 그 참조가 조용히 어긋납니다.
 
 | # | 함수 | 갈래 | 무엇을 막나 |
 |---|---|---|---|
-| ① | `material.has_workspace` | `search` / `halt_no_material` | 「무엇에 대한 인사이트인가」가 없으면 **검색조차 안 함** |
+| 🔴 ① | ~~`material.has_workspace`~~ | — | **폐기 (2026-09-01)** — 워크스페이스는 검색 경계가 아닙니다. 함수 자체가 없고 `tests/graph/test_conditional_edges.py` 가 `not hasattr` 로 되돌리기를 막습니다 |
 | ② | `material.is_resolved` | `plan_material` / `halt_no_material` | ★**「TSMC 를 물었는데 삼성전자로 답하는」 탐지 불가능한 오답** |
 | ③ | `agent_loop.should_continue` | `run_tools` / `evidence_validation` | 무한 루프 · 예산 초과 |
 
@@ -416,8 +460,8 @@ Phase 1 실측(2026-08-27): `search` 노드가 `new_trace_id()` 를 발급했더
 
 | 도구 | 목적 | Agent 가 정하는 인자 | 서버가 `ToolContext` 로 주는 값 | 내부 호출 | 내부 상한 |
 |---|---|---|---|---|---|
-| `get_relations` | 관계 (공급·협력·경쟁·소송·지분) | `keys` | `edge_types` `direction` `workspace_keys` `anchor_keys` | `graph_tools.get_relations` → `company_service.relations_of` | `_MAX_RELATIONS_PER_COMPANY`(10) × 기업 수 |
-| `get_events` | 사건 (규제수사·분쟁소송·사고) | `keys` | `intent` `anchor_names` | `graph_tools.get_events` → `company_service.events_of` | `_MAX_EVENTS_PER_COMPANY`(10) **기업마다 따로** |
+| `get_relations` | 관계 (공급·협력·경쟁·소송·지분) | `keys` | `edge_types` `direction` `workspace_keys` `anchor_keys` | `graph_tools.get_relations` → `company_service.relations_of` | `MAX_RELATIONS_PER_COMPANY`(10) × 기업 수 |
+| `get_events` | 사건 (규제수사·분쟁소송·사고) | `keys` | `intent` `anchor_names` | `graph_tools.get_events` → `company_service.events_of` | `MAX_EVENTS_PER_COMPANY`(10) **기업마다 따로** |
 | `search_news` | 보도 근거 의미검색 | `query` `keys` | — | `search_tools.search_news` → Chroma | `_MAX_HITS`(10) |
 | `search_dart` | 공시 근거 의미검색 | `query` `keys` | — | `search_tools.search_dart` → Chroma | `_MAX_HITS`(10) |
 | `get_business_overview` | 사업보고서 「사업의 내용」 원문 | `key` | — (연도는 최신 고정) | `company_tools` → PostgreSQL | 1건 |
@@ -660,7 +704,7 @@ SK하이닉스를 제소한 기업        SUES · incoming
 ```text
 get_propagation   ★내부 primitive — "주어진 Event 의 파급을 계산"
                   fetch_propagation 노드가 Agent 뒤에서 결정론으로 호출
-                  is_risk 사건만 · 최대 3건(_MAX_RISK_EVENTS_FOR_PROPAGATION)
+                  is_risk 사건만 · 최대 3건(MAX_RISK_EVENTS_FOR_PROPAGATION)
 
 explore_impact    ★미구현 — Phase 2-B 로 미룸
                   "그래프를 걸어 다니며 탐색"하는 도구가 될 예정
@@ -767,19 +811,25 @@ graph_tools._relation_dto() / _event_dto()   provenance="direct" (기본값)
 
 ## 14. Guard / Validation
 
-### 14-1. 방어선 5중
+### 14-1. 방어선 4중 — 🔴 ① 은 폐기됐습니다
 
 ```mermaid
 flowchart TD
-    A["① 입구 — guard_workspace<br/>워크스페이스가 비면 검색조차 안 함"]
+    A["🔴 ① 입구 — guard_workspace<br/>폐기 (2026-09-01)"]
     B["② 앵커 — resolve_anchor<br/>UNRESOLVED 면 Agent 미호출"]
     C["③ 범위 — scope.check()<br/>OutOfScopeKey · 조용히 거르지 않음"]
     D["④ 해소 — _resolve()<br/>KeyNotResolved · 조용한 0건을 실패로"]
     E["⑤ 출구 — verify_sources<br/>화이트리스트 밖 근거 제거"]
-    A --> B --> C --> D --> E
+    A -. "제거됨" .-> B
+    B --> C --> D --> E
+    style A fill:#f1f3f4,stroke:#9aa0a6,stroke-dasharray: 4 4
     style B fill:#fce8e6,stroke:#ea4335
     style E fill:#fce8e6,stroke:#ea4335
 ```
+
+> 🔴 **① 입구 게이트는 없습니다.** 워크스페이스가 비어 있어도 Global Search 로 답합니다
+> ([최종 설계 §17-1](BizNode_Workspace_Contextual_Agent_Final_Design.md)). 남은 방어선은
+> ②~⑤ **넷**이고, 그중 **②가 이 프로젝트에서 가장 중요한 방어**입니다(§14-2).
 
 ### 14-2. ② 가 막는 것 — 이 프로젝트에서 가장 중요한 방어
 
@@ -848,8 +898,8 @@ except ToolError as exc:
 | 카운터 | 상한 | 근거 | 어디서 가산 |
 |---|---:|---|---|
 | `tool_calls_used` | 12 | 도구 7종이라 한 바퀴 7번 → 「한 바퀴 돌고 한 번 더」 | `run_tools` — `len(calls)` |
-| `events_used` | 40 | `_MAX_EVENTS_PER_COMPANY`(10) × 4 (워크스페이스 4곳 관찰) | `run_tools` — `get_events` 결과 수 |
-| `propagations_used` | 12 | `_MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` |
+| `events_used` | 40 | `MAX_EVENTS_PER_COMPANY`(10) × 4 (워크스페이스 4곳 관찰) | `run_tools` — `get_events` 결과 수 |
+| `propagations_used` | 12 | `MAX_RISK_EVENTS_FOR_PROPAGATION`(3) × 4 | `fetch_propagation` — `len(risky)`(**사건 수**, 2026-08-29 정정) |
 | `hops_used` | 6 | — | ★**아무도 안 가산** (`explore_impact` 미구현) |
 
 ★**값 4개는 원래 실측 근거가 없는 잠정치였습니다.** Phase 8 평가셋이 그 근거를 처음 만들었습니다(평가 문서 §8).
@@ -866,10 +916,12 @@ def should_continue(state) -> str:
 
 `recursion_limit` 에 기대면 **예외로 끝나 답변이 아예 안 나갑니다.** 도구를 덜 불렀어도 **있는 재료로 답하게** 하는 것이 옳습니다(계약 4). 소진 여부는 State 플래그와 로그에 남습니다 — 「왜 재료가 적나」를 나중에 되짚을 수 있어야 합니다.
 
-### 15-4. ★현재 결함 — `propagations_used` 단위 불일치 (미수정 · 알려진 문제)
+### 15-4. ★**해소됨** — `propagations_used` 단위 불일치 (2026-08-29 · Phase 10)
+
+**Phase 8 이 발견하고 Phase 10 이 고쳤습니다.** 자르는 단위와 세는 단위가 갈려 있었습니다.
 
 ```python
-# fetch_propagation
+# fetch_propagation — 고치기 전
 room = budget.remaining(state)["propagations_used"]
 risky = risky[:room]                                    # ← 입력(사건 수)을 자름
 propagation = graph_tools.get_propagation(risky)
@@ -877,19 +929,43 @@ return {..., **budget.spend(state, propagations_used=len(propagation))}
                                                         # ← 출력(파급 행 수)을 씀
 ```
 
-**자르는 단위는 「사건 수」이고 세는 단위는 「파급 행 수」입니다.** 사건 하나가 수십 행을 내므로 잘라도 카운터는 상한을 훌쩍 넘습니다.
+사건 하나가 수십 행을 내므로 잘라도 카운터는 상한을 훌쩍 넘었습니다.
 
-| | |
-|---|---|
-| 상한 | 12 |
-| 실측 최대 사용 | **303** (25배) |
-| 상한에 닿은 케이스 | 20 중 **9** |
-| 실제 피해 | ★현재는 **무해** — 플래그가 루프 **뒤에** 켜지고 그 뒤로 아무도 안 읽습니다 |
-| 진짜 문제 | 「막는다」고 적힌 예산이 **실제로는 못 막고 있습니다** |
+| | Phase 8 실측 | Phase 10 이후 |
+|---|---|---|
+| 상한 | 12 | 12 |
+| 최대 사용 | **303** (25배) · 이후 측정 **92** | ★**상한 이하가 보장됨** |
+| 상한에 닿은 케이스 | 20 중 **9** | 위험 사건 12건 이상일 때만 |
+| 「막는다」가 성립하나 | ✕ | ○ |
 
-★상한값 12 의 주석이 「`_MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것을 보면 **세려던 단위는 사건 수**였습니다.
+**고친 방법 — `propagations_used=len(risky)`.** 상한값 12 의 주석이 「`MAX_RISK_EVENTS_FOR_PROPAGATION`(=3)의 4배」인 것이 보여주듯 **세려던 단위는 처음부터 사건 수**였습니다. 즉 틀린 쪽은 상한이 아니라 세는 단위였습니다.
 
-★**Phase 8 에서 일부러 고치지 않았습니다** — 현재 동작을 고정한 채 재는 단계라, 고치면 무엇을 쟀는지가 흐려집니다.
+★**기존 관례와 같습니다** — `run_tools` 도 `tool_calls_used=len(calls)` 로 「요청한 것」을 셉니다(도구가 거부해도 셉니다). 예산은 **입력을 막는 장치**이므로 자른 값과 같은 값을 세는 것이 계약에 맞습니다.
+
+★**출력에서 되짚지 않은 이유** — `len({p.event_id for p in propagation})` 는 파급이 0행인 사건을 놓쳐 또 사후 값이 됩니다.
+
+★**회귀 방어** — `tests/graph/test_propagation_budget.py` 5건이 이 계약을 묶습니다(단위를 되돌리면 5건 전부 실패). 평가셋에도 `propagations_used <= MAX_PROPAGATIONS` 단언이 들어갔습니다.
+
+#### 15-4-1. ★부수 발견 — `MAX_PROPAGATIONS = 12` 는 **죽은 상한**입니다
+
+고치면서 드러난 별개 사실입니다.
+
+```python
+# graph_tools.get_propagation:379
+for event_id in list(event_ids)[:MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
+```
+
+도구가 **목록 전체**에 자기 상한 3 을 먼저 겁니다(원칙 ③ — 상한은 도구 안에 있다). 예산의 12 는 「기업 4곳 × 3」을 가정했는데 도구는 기업별이 아닙니다.
+
+→ **예산이 자른다고 적힌 `risky[:room]` 은 한 번도 자른 적이 없습니다.** 늘 도구의 3 이 먼저 뭅니다.
+
+★**값을 바꾸는 대신 판정에서 뺐습니다**(2026-08-29 · Phase 12). `budget._CAPS`(소진 판정) 와 `budget._FIELDS`(세는 것 전부)를 가릅니다.
+
+계약 4 의 근거는 「인자 리스트 길이만 제한하면 **반복 호출**로 우회된다」인데, `fetch_propagation` 은 Agent 도구가 아니라 결정론 노드이고 `_AFTER_LOOP` 에 **한 번만** 배선됩니다 — 우회할 반복이 없습니다. 남는 상한은 도구 안의 3 하나입니다(원칙 ③).
+
+★**`hops_used` 는 `_CAPS` 에 남겼습니다** — 지금은 아무도 안 늘려 무해하지만, 빼 두면 `explore_impact`(2-B)가 들어올 때 상한이 **조용히 죽습니다.**
+
+★**부수 효과** — `budget_exhausted` 가 켜지는 자리가 `run_tools`(루프 안)뿐이 되어 「루프가 잘렸다」와 뜻이 하나가 됐습니다. §19-3 의 2분법은 **관측 장치로 남기되**, 두 값이 갈리면 그때가 조사할 신호입니다.
 
 ### 15-5. 종료 조건 정리
 
@@ -924,13 +1000,21 @@ return {..., **budget.spend(state, propagations_used=len(propagation))}
 확정   workspace_keys → ★material anchor 로도 사용 + 링(ring) 순서로 수집
 ```
 
-### 16-3. 현재 코드에서 `workspace_keys` 가 쓰이는 자리 넷
+> 🔴 **이 A-3 채택은 2026-09-01 에 폐기됐습니다.** 「Query 에 Anchor 가 없다고
+> Workspace Company 를 Query Anchor 로 승격시키지 않는다」로 확정되면서
+> `AnchorSource.WORKSPACE` 가 `ANCHORLESS` 로 바뀌었고, 앵커 없는 질의의 재료는
+> **Global Search 의 히트**가 댑니다
+> ([최종 설계 §17-3·§19-4](BizNode_Workspace_Contextual_Agent_Final_Design.md) ·
+> [설계 §3](BizNode_Search_설계.md) 의 같은 표시).
+> `workspace_keys` 는 **랭킹 문맥으로만** 남습니다.
+
+### 16-3. `workspace_keys` 가 쓰이는 자리 — 넷 중 🔴 둘이 폐기됐습니다
 
 | 자리 | 무엇 | 파일 |
 |---|---|---|
-| ① 입구 게이트 | 비면 **검색조차 안 함** | `material.has_workspace` |
-| ② 앵커 판정 | 질문이 대상을 지정 안 하면 **워크스페이스가 앵커** | `query_understanding.decide_anchor` |
-| ③ 링 계산 | 관계가 워크스페이스에서 몇 걸음인지 | `retrieve_service._ring_of` |
+| 🔴 ① 입구 게이트 | ~~비면 검색조차 안 함~~ | **폐기 (2026-09-01)** — 함수 없음 |
+| 🔴 ② 앵커 판정 | ~~대상을 안 지정하면 워크스페이스가 앵커~~ | **폐기 (2026-09-01)** — `ANCHORLESS` 로 대체 |
+| ③ 링 계산 | 관계가 워크스페이스에서 몇 걸음인지 | `retrieve_service.ring_of` |
 | ④ 랭킹 | Search Layer 의 `ResultRanker` | `search/service/result_ranker.py` |
 
 ### 16-4. ★도구 범위는 `workspace_keys` 가 아닙니다
@@ -961,7 +1045,7 @@ def _scope_keys(state):
 
 ## 17. Ring 탐색 / Ranking
 
-### 17-1. Ring 분류 — `retrieve_service._ring_of`
+### 17-1. Ring 분류 — `retrieve_service.ring_of`
 
 | Ring | 뜻 | 상수 |
 |---:|---|---|
@@ -991,7 +1075,7 @@ flowchart TD
     K["도구 인자 keys"] --> RES["_resolve() → norm_name"]
     RES --> ROW["company_service.relations_of()<br/>원본 dict"]
     ROW --> HIDE["grounding_suspect 제외<br/>(wrong_type 은 남김)"]
-    HIDE --> RING["_ring_of(row, workspace_keys)<br/>Ring 0/1/2/3 으로 분류"]
+    HIDE --> RING["ring_of(row, workspace_keys)<br/>Ring 0/1/2/3 으로 분류"]
     RING --> ORD["relation_selector.order()<br/>★링 안에서만 정렬"]
     TC -->|"edge_types · direction"| ORD
     ORD --> FLAT["ring 순 → 링 내 순서로 평탄화"]
@@ -1065,7 +1149,7 @@ R1 이 혼자 **746건**(정본 `9ae14c4`)이라 R0+R1 이 `limit` 을 다 채�
 
 `relation_selector.order()` 는 `ordered = list(rows)` 뒤 `sort()` 만 합니다 — **길이를 보존하는 순열**이라 블록 크기를 못 바꿉니다. 그래서 **링 안 순서는 링별 kept *개수*에 영향을 줄 수 없습니다.**
 
-★한때 재측정 수치의 개수 변화(`kept 126→110` 등)를 이 수정의 효과로 적었으나, **그것은 계측 오귀속이었습니다** — `observe.record_rings()` 가 도구 호출마다 `edge_id` 중복을 안 접어 「호출 × 관계」를 세고 있었고, 몇 번 부를지는 LLM 이 정합니다. 계측은 `e6c70f4` 에서 고쳤고 `tests/graph/test_observe_rings.py` 8건이 「호출 횟수가 링 수치를 못 바꾼다」를 못 박습니다. 자세한 경위는 [개발 이력 §4-9](BizNode_Agent_Development_History.md) · [평가 문서 §10-3](BizNode_Agent_Evaluation.md).
+★한때 재측정 수치의 개수 변화(`kept 126→110` 등)를 이 수정의 효과로 적었으나, **그것은 계측 오귀속이었습니다** — `observe.record_rings()` 가 도구 호출마다 `edge_id` 중복을 안 접어 「호출 × 관계」를 세고 있었고, 몇 번 부를지는 LLM 이 정합니다. 계측은 `e6c70f4` 에서 고쳤고 `tests/graph/test_observe_rings.py` 8건이 「호출 횟수가 링 수치를 못 바꾼다」를 못 박습니다. 자세한 경위는 [현황 §12 변경 이력](BizNode_검색챗봇_현황.md) 의 2026-08-29 항목입니다.
 
 **이 수정의 효과를 보려면 링별로 「어떤 `edge_id` 가 남았나」를 대조해야 합니다** — 실제로 LLM 없이 한 대조에서 **순서까지 11/11 동일**이 나왔고, 달라진 것은 어떤 엣지가 남나뿐이었습니다(§17-4).
 
@@ -1135,7 +1219,7 @@ if rows is None:
 | **임베딩** | `embed_calls` `embed_texts` `embed_cache_hits/misses` | ★빗나감 = 「실제로 계산했다」 → 그 실행은 값이 흔들림 |
 | **예산** | `agent_stopped_by_budget` | ★**루프가 잘린 것**과 「끝난 뒤 파급 예산이 찼다」 |
 | **링** | `ring_seen` `ring_kept` `relations_kept/cut` `ring_by_edge` | 자르기 전 분포와 남은 것. ★`edge_id` 로 **중복을 접습니다**(아래) |
-| **인용** | `cited_rings` `cited_without_ring` | ★**링 순서가 답변까지 살아갔나** |
+| **인용** | `cited_rings` `cited_without_ring` `cited_relation_without_ring` | ★**링 순서가 답변까지 살아갔나** · ★「링이 없다」를 **정상/결함으로 가릅니다**(2026-08-29) |
 
 ### 19-3. ★`agent_stopped_by_budget` 을 State 플래그와 가르는 이유
 
@@ -1254,7 +1338,7 @@ python -m batch.audit.ask_graph_parity --materials  # 재료 집합 대조
 | `ToolContext` 7필드 | **구현됨** |
 | 인용 규칙 (`search_news` 하나) | **구현됨** |
 | 화이트리스트 검증 | **구현됨** |
-| 누적 예산 4종 | **구현됨** — ★`propagations_used` 단위 불일치 |
+| 누적 예산 4종 | **구현됨** — ★`propagations_used` 는 단위 불일치 **해소** 후 **소진 판정에서도 제외**(2026-08-29 · §15-4). 실효 상한은 **3**(도구 안) |
 | Ring 분류 · 링 안 정렬 · 정렬 후 절단 | **구현됨** |
 | Observability 5축 | **구현됨** |
 | Agent 평가셋 20 케이스 | **구현됨** — 20/20 PASS |
@@ -1279,16 +1363,16 @@ python -m batch.audit.ask_graph_parity --materials  # 재료 집합 대조
 | 1 | `explore_impact` 를 Agent Tool 로 제공 | ★**미구현** — Phase 2-B. `get_propagation` 도 도구가 아님(금지 목록) | §11-3 |
 | 2 | `Agent Graph → Query Router → Tool` | QueryRouter 는 **Agent 앞**, Search Layer 소속, LLM 아님 | §5-2 · §10 |
 | 3 | workspace 를 hard filter → ranking signal 로 **변경** | 처음부터 랭킹 문맥. 개정 표에 **「무변경」**. 바뀐 것은 material anchor 채택(A-3) | §16-1 |
-| 4 | Phase 0~8 정의 | 실제는 **0 → 1 → 1.5 → 1.75 → 2 → 8** | 개발이력 §2 |
-| 5 | 「심텍 공급 리스크 케이스 교체」 | ★**확인되지 않음** — git·문서에 그 케이스 없음. 현 케이스는 `query-event-capital-smallcap`(자본거래) | 평가 문서 §4-4 |
+| 4 | Phase 0~8 정의 | 실제는 **0 → 1 → 1.5 → 1.75 → 2 → 8** | [현황 §12](BizNode_검색챗봇_현황.md) |
+| 5 | 「심텍 공급 리스크 케이스 교체」 | ★**확인되지 않음** — git·문서에 그 케이스 없음. 현 케이스는 `query-event-capital-smallcap`(자본거래) | `tests/agent/eval/cases.py` |
 
-## 부록 C. 관련 문서
+## 부록 C. Agent 관련 문서
 
 | 문서 | 무엇이 있나 |
 |---|---|
-| [설계서](BizNode_Search_Layer_설계.md) | 검색·재료·챗봇 전체 설계. §3 워크스페이스 · §10 flow 10단계 · §14 앵커 3분법 |
-| [현황서](BizNode_Search_Layer_현황서.md) | 구현 현황 · 알려진 결함 · 실측 기록 · `[DECIDE]` |
-| [Agent 평가 명세](BizNode_Agent_Evaluation.md) | 평가 목적·축·결과·실패 분석 |
-| [Agent 개발 이력](BizNode_Agent_Development_History.md) | Phase 타임라인 · ADR · 문제 해결 사례 |
-| [Agent 평가셋 (생성물)](BizNode_Agent_평가셋.md) | ★자동 생성 — 케이스별 실행 결과 |
+| [검색·챗봇 문서 설계편](BizNode_Search_설계.md) | 검색·재료·챗봇 전체 설계. §3 워크스페이스 · §10 flow 10단계 · §14 앵커 판정 |
+| [검색·챗봇 문서 현황편](BizNode_검색챗봇_현황.md) | 구현 현황 · 알려진 결함 · 실측 기록 · `[DECIDE]` |
+| [최종 설계](BizNode_Workspace_Contextual_Agent_Final_Design.md) | ★**이 문서의 일부를 폐기한 문서.** Workspace 는 Ranking Signal · Anchor 확장 |
+| [Agent 평가셋 (생성물)](BizNode_Agent_평가셋.md) | ★자동 생성 — 케이스별 실행 결과. 판정 기준은 `tests/agent/eval/cases.py` |
 | [CODEMAP](CODEMAP.md) | 파일별 책임 |
+---

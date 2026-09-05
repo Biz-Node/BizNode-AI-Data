@@ -1,4 +1,4 @@
-"""API 응답 계약과 스텁 예시를 **살아 있는 DB와 대조한다.**
+"""API 응답 계약과 `examples.py` 의 고정 예시를 **살아 있는 DB와 대조한다.**
 
 왜 필요한가 (2026-08-16)
 
@@ -105,7 +105,7 @@ def check_schema_examples(problems: list[str]) -> None:
 
     ★이걸 안 봐서 놓쳤다(2026-08-16). `/docs` 의 **Try it out 기본값**이
       `00121932`(없는 노드)라, 사용자가 눌러 보면 빈 그래프가 나왔다.
-      예시가 스텁 파일에만 있는 게 아니라 **계약 안에도 있다.**
+      예시가 `examples.py` 에만 있는 게 아니라 **계약 안에도 있다.**
     """
     import re
     from pathlib import Path

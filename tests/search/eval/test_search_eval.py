@@ -175,7 +175,13 @@ def test_direction_flips_with_josa(runs: dict[str, CaseRun]):
 
 
 def test_bidirectional_query_keeps_both_directions(runs: dict[str, CaseRun]):
-    """direction=None이면 방향으로 거르지 않는다 — 양방향이 모두 후보에 남는가."""
+    """direction=None 이면 방향으로 거르지 않는다 — 결과에 양방향이 함께 나오는가.
+
+    ★**여기서 보는 것은 결과이지 후보가 아니다.** 후보 집합에 양방향이 남는지는
+      검색기 레벨(`test_graph_searcher.test_investment_query_direction_none_
+      returns_both_sides`)이 본다. 이쪽은 그 뒤 랭킹까지 지나고도 한쪽이 통째로
+      사라지지 않는가를 본다 — 그래서 케이스의 `top_k` 가 관측 창이다.
+    """
     run = runs["rel-stake-bidirectional"]
     directions = {r.direction for h in run.result.hits for r in h.relations or ()}
     assert directions == {Direction.OUTGOING.value, Direction.INCOMING.value}, \

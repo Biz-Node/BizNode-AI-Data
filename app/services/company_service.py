@@ -26,7 +26,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional
+from typing import Optional, Sequence
 
 from app.core.database import neo4j_session, postgres_connection
 from pipeline.freshness import assess
@@ -200,7 +200,7 @@ def _verdict(p: dict) -> str:
     return p.get("grounding_stage1") or "unfounded"
 
 
-def _relation(src: dict, tgt: dict, etype: str, p: dict,
+def relation_row(src: dict, tgt: dict, etype: str, p: dict,
               today: Optional[date] = None, *, eid: str = "") -> Optional[dict]:
     """엣지 속성 → API 관계. **감출 것은 여기서 감춘다.** 빼야 하면 None."""
     # ★자기 자신을 잇는 엣지는 **그릴 수 없다.** 힘기반 레이아웃이 깨지고
@@ -455,7 +455,7 @@ def relations_of(key: str, *, limit: Optional[int] = None,
         me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
         other = {"key": r["okey"], "name": r["oname"], "label": r["olabel"]}
         src, tgt = (me, other) if r["outgoing"] else (other, me)
-        rel = _relation(src, tgt, r["t"], r["p"] or {}, eid=r["eid"])
+        rel = relation_row(src, tgt, r["t"], r["p"] or {}, eid=r["eid"])
         if rel:
             out.append(rel)
     out.sort(key=lambda x: -x["score"])
@@ -501,6 +501,58 @@ def _own_evidence_ids(h: dict) -> list[str]:
     return ids
 
 
+def _event_row(e: dict, h: dict, sign, company: Optional[dict] = None) -> dict:
+    """(기업, 사건) 한 쌍을 재료 행으로. **모양을 여기 한 곳에서만 정한다.**
+
+    ★`events_of()`(기업 기준)와 `global_events()`(전역)가 이 함수를 공유한다 —
+      사본을 두면 두 경로가 같은 사건을 다른 모양으로 내고, 그 차이는 DTO 가
+      `extra="ignore"` 라 **예외가 아니라 조용한 결측**으로 나타난다.
+    """
+    tl = []
+    for item in (e.get("timeline") or []):
+        parts = str(item).split("|")
+        if len(parts) >= 2:
+            tl.append({"period": parts[0], "name": parts[1]})
+    return {
+        "event_id": e.get("event_id") or "",
+        "name": e.get("name") or "",
+        "event_type": e.get("event_type") or "기타",
+        "is_risk": bool(e.get("is_risk")),
+        # ★`Event` 가 pydantic 기본값(`extra="ignore"`)이라 **API 응답에는
+        #   안 나간다.** 사건이 아닌 것으로 보이는 83건에 붙은 표시로
+        #   (ERD §「표시만 하고 안 지운다」), 도구 계층만 이걸 읽어 뺀다.
+        "eventness_suspect": bool(e.get("eventness_suspect")),
+        # ★사건의 **극성** — `IMPACTS` 엣지에 있다(negative/positive/neutral).
+        #   `HAS_EVENT` 1,062건 중 711건이 짝을 갖는다(2026-08-28 실측).
+        #   한 (기업,사건) 쌍에 `IMPACTS` 는 최대 1개라 행이 불어나지 않는다.
+        #   `Event` 가 `extra="ignore"` 라 **API 응답에는 안 나간다.**
+        "sign": sign,
+        "role": h.get("role") or "subject",
+        "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
+        "article_count": int(e.get("article_count") or 1),
+        "timeline": tl,
+        # 사건 노드가 아니라 **이 기업의 HAS_EVENT 엣지**에서 꺼낸다.
+        #
+        # 노드의 `evidence_ids` 는 그 사건에 붙은 **모든 기업의 근거 합집합**이다.
+        # 그걸 그대로 주면 챗봇이 남의 근거로 이 기업을 설명한다 —
+        # 실측(2026-08-19) 사건 「집단소송」:
+        #     파두            role=mentioned     매출 뻥튀기 의혹 주주소송
+        #     기아 조지아 법인   role=subject       美 TN비자 취업사기 합의
+        #   완전히 다른 두 소송인데 한 노드에 묶여 있어, 노드 근거를 쓰면
+        #   「파두도 TN비자 소송에 연루」로 읽힌다.
+        #
+        # 기업 2곳 이상 붙은 사건 85개 중 **71개**가 이렇게 섞일 수 있었다.
+        # `evidence_id` 가 (출처·출발노드·도착노드·유형·subtype) 해시라
+        # 엣지마다 이미 갈려 있다 — 읽는 쪽만 틀렸던 것이다.
+        "evidence_ids": _edge_evidence(h),
+        # ★**앵커 없는 경로에서만 찬다**(2026-09-02). 기업 기준 조회는 부르는
+        #   쪽이 이미 어느 기업인지 알아서 `None` 이고, 전역 조회는 행마다
+        #   다른 기업이라 행이 스스로 말해야 한다 — 안 실으면 「누구에게 난
+        #   일인지 모르는 사건」이 재료로 나간다.
+        "company": company,
+    }
+
+
 def events_of(key: str) -> list[dict]:
     """사건 목록. `timeline` 은 **펴서** 준다 — 화면이 문자열을 쪼개게 하지 않는다.
 
@@ -509,47 +561,85 @@ def events_of(key: str) -> list[dict]:
     """
     with neo4j_session() as s:
         rows = [dict(r) for r in s.run(_EVENT_Q, k=key)]
+    return [_event_row(dict(r["e"]), dict(r["h"] or {}), r.get("sign"))
+            for r in rows]
+
+
+# ── 전역 사건 후보 (2026-09-02) ──────────────────────────────────────────
+# ★앵커도 워크스페이스도 없는 질문(「최근 주요 투자 이벤트가 뭐야?」)의 재료다.
+#   최종 설계 §5 시나리오 3 · §17-2 의 Global Event Search.
+#
+# ★**새 인덱스도 새 컬렉션도 만들지 않는다.** 순위는 기존 `evidence_selector.
+#   select()` 가 그대로 매기고, 임베딩할 텍스트(`event_label()`)는 글자까지 같아
+#   `embedding_cache` 가 이미 그 벡터를 들고 있다. 전수 933행에 코사인을 도는 데
+#   1ms 다(실측 2026-09-02) — HNSW 가 필요한 규모가 아니다.
+#
+# ★**날짜 비교는 문자열이다.** `h.occurred_at` 은 STRING 이라 `date()` 캐스팅은
+#   예외 없이 **0건**이 된다(F3 에서 실제로 밟았다). 여기서는 애초에 날짜로
+#   거르지 않는다 — 「최근」은 `select(recent_since=)` 의 **티어**이지 필터가
+#   아니고(축 셋 다 hard filter 가 아니다), 날짜 없는 사건은 `select()` 가 이미
+#   「창 밖」으로 다룬다.
+#
+# ★`eventness_suspect` 는 **여기서 뺀다.** 기업 기준 경로는 행에 표시만 싣고
+#   도구 계층이 뺐는데(`graph_tools.get_events`), 전역은 후보가 900건대라
+#   조회에서 빼는 편이 왕복이 가볍다. 표시가 있는데 재료로 쓰면 표시를 한
+#   이유가 없어진다는 규칙은 같다.
+_GLOBAL_EVENT_Q = """
+MATCH (c:Company)-[h:HAS_EVENT]->(e:Event)
+WHERE coalesce(e.eventness_suspect, false) = false
+OPTIONAL MATCH (e)-[i:IMPACTS]->(c)
+RETURN properties(e) AS e, properties(h) AS h, i.sign AS sign,
+       coalesce(c.corp_code, c.norm_name) AS ckey, c.name AS cname
+ORDER BY coalesce(h.occurred_at, e.last_seen) DESC
+"""
+
+# ★쌍으로 집는다 — `event_id` 만으로는 **어느 기업의 행인지**가 안 정해진다.
+#   사건 하나에 기업이 둘 이상 붙은 것이 5.7%(실측 2026-09-02)이고, 그때
+#   `role`·`occurred_at`·`evidence_ids` 가 기업마다 다르다.
+_EVENT_PAIRS_Q = """
+UNWIND $pairs AS p
+MATCH (c:Company)-[h:HAS_EVENT]->(e:Event)
+WHERE e.event_id = p[0] AND coalesce(c.corp_code, c.norm_name) = p[1]
+OPTIONAL MATCH (e)-[i:IMPACTS]->(c)
+RETURN properties(e) AS e, properties(h) AS h, i.sign AS sign,
+       coalesce(c.corp_code, c.norm_name) AS ckey, c.name AS cname
+"""
+
+
+def global_events() -> list[dict]:
+    """전역 사건 후보 — **(기업, 사건) 쌍마다 한 행.**
+
+    ★기업 기준 조회와 달리 `event_id` 로 접지 않는다. 같은 사건이라도 기업마다
+      근거와 시점이 다르고, 앵커가 없는 질문에서는 **누구에게 난 일인가**가
+      곧 답의 일부다.
+    """
+    with neo4j_session() as s:
+        rows = [dict(r) for r in s.run(_GLOBAL_EVENT_Q)]
+    return [_event_row(dict(r["e"]), dict(r["h"] or {}), r.get("sign"),
+                       company={"key": r["ckey"], "name": r["cname"] or ""})
+            for r in rows if r["ckey"]]
+
+
+def events_by_pairs(pairs: Sequence[tuple[str, str]]) -> list[dict]:
+    """`(event_id, company_key)` 쌍으로 집어 온다. **넘긴 순서를 지킨다.**
+
+    ★`/ask` 의 도구가 쓴다 — 서버가 이미 고른 목록을 다시 고르지 않고 조회만
+      한다. 그래서 도구 계층이 랭킹 모듈을 몰라도 되고, 두 입구가 같은 사건을
+      낼 수밖에 없다.
+    """
+    wanted = [(e, c) for e, c in pairs if e and c]
+    if not wanted:
+        return []
+    with neo4j_session() as s:
+        rows = [dict(r) for r in s.run(_EVENT_PAIRS_Q, pairs=[list(p) for p in wanted])]
+    by_pair = {(r["e"]["event_id"], r["ckey"]): r for r in rows if r["ckey"]}
     out = []
-    for row in rows:
-        e, h = dict(row["e"]), dict(row["h"] or {})
-        tl = []
-        for item in (e.get("timeline") or []):
-            parts = str(item).split("|")
-            if len(parts) >= 2:
-                tl.append({"period": parts[0], "name": parts[1]})
-        out.append({
-            "event_id": e.get("event_id") or "",
-            "name": e.get("name") or "",
-            "event_type": e.get("event_type") or "기타",
-            "is_risk": bool(e.get("is_risk")),
-            # ★`Event` 가 pydantic 기본값(`extra="ignore"`)이라 **API 응답에는
-            #   안 나간다.** 사건이 아닌 것으로 보이는 83건에 붙은 표시로
-            #   (ERD §「표시만 하고 안 지운다」), 도구 계층만 이걸 읽어 뺀다.
-            "eventness_suspect": bool(e.get("eventness_suspect")),
-            # ★사건의 **극성** — `IMPACTS` 엣지에 있다(negative/positive/neutral).
-            #   `HAS_EVENT` 1,062건 중 711건이 짝을 갖는다(2026-08-28 실측).
-            #   한 (기업,사건) 쌍에 `IMPACTS` 는 최대 1개라 행이 불어나지 않는다.
-            #   `Event` 가 `extra="ignore"` 라 **API 응답에는 안 나간다.**
-            "sign": row.get("sign"),
-            "role": h.get("role") or "subject",
-            "occurred_at": str(h.get("occurred_at"))[:10] if h.get("occurred_at") else None,
-            "article_count": int(e.get("article_count") or 1),
-            "timeline": tl,
-            # 사건 노드가 아니라 **이 기업의 HAS_EVENT 엣지**에서 꺼낸다.
-            #
-            # 노드의 `evidence_ids` 는 그 사건에 붙은 **모든 기업의 근거 합집합**이다.
-            # 그걸 그대로 주면 챗봇이 남의 근거로 이 기업을 설명한다 —
-            # 실측(2026-08-19) 사건 「집단소송」:
-            #     파두            role=mentioned     매출 뻥튀기 의혹 주주소송
-            #     기아 조지아 법인   role=subject       美 TN비자 취업사기 합의
-            #   완전히 다른 두 소송인데 한 노드에 묶여 있어, 노드 근거를 쓰면
-            #   「파두도 TN비자 소송에 연루」로 읽힌다.
-            #
-            # 기업 2곳 이상 붙은 사건 85개 중 **71개**가 이렇게 섞일 수 있었다.
-            # `evidence_id` 가 (출처·출발노드·도착노드·유형·subtype) 해시라
-            # 엣지마다 이미 갈려 있다 — 읽는 쪽만 틀렸던 것이다.
-            "evidence_ids": _edge_evidence(h),
-        })
+    for pair in wanted:
+        row = by_pair.get(pair)
+        if row is None:
+            continue
+        out.append(_event_row(dict(row["e"]), dict(row["h"] or {}), row.get("sign"),
+                              company={"key": row["ckey"], "name": row["cname"] or ""}))
     return out
 
 
@@ -636,7 +726,7 @@ RETURN properties(c) AS p,
 
 # ★자기 자신을 소유할 수 없다. 노드 병합이 만드는 자기 루프를 여기서도 막는다
 #   (2026-08-17 실측: 로보티즈가 자기 자신의 자회사로 들어가 있다).
-#   워크스페이스 그래프는 `_relation()` 이 막지만 **지배구조는 다른 경로**라
+#   워크스페이스 그래프는 `relation_row()` 이 막지만 **지배구조는 다른 경로**라
 #   따로 걸러야 한다 — 방어는 한 곳에만 두면 새는 데가 생긴다.
 _OWN_Q = """
 MATCH (a:Company)-[r:OWNS_STAKE_IN]->(b:Company)
@@ -743,7 +833,7 @@ def company_detail(key: str) -> Optional[dict]:
     counts["executives"] = len(executives)
     counts["owns"] = len(owns)
     counts["owned_by"] = len(owned_by)
-    products_all, executives_all = products, executives
+    products_all = products
     owns_all, owned_by_all = owns, owned_by
     products = products[:_BLOCK_LIMIT]
     executives = executives[:_BLOCK_LIMIT]
@@ -913,7 +1003,7 @@ def company_summary(key: str, workspace_keys: list[str]) -> Optional[dict]:
             me = {"key": r["ckey"], "name": r["cname"], "label": "Company"}
             other = {"key": r["okey"], "name": r["oname"], "label": "Company"}
             src, tgt = (me, other) if r["outgoing"] else (other, me)
-            rel = _relation(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
+            rel = relation_row(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
             if rel:
                 in_ws.append(rel)
         in_ws.sort(key=lambda x: -x["score"])
@@ -1031,7 +1121,7 @@ def company_graph(key: str, depth: int = 1, max_nodes: int = 60,
     for r in rows:
         other = {"key": r["okey"], "name": r["oname"], "label": r["olabel"]}
         src, tgt = (me, other) if r["outgoing"] else (other, me)
-        rel = _relation(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
+        rel = relation_row(src, tgt, r["t"], dict(r["p"] or {}), eid=r["eid"])
         if rel:
             prepared.append((rel, r))
     prepared.sort(key=lambda x: -x[0]["score"])

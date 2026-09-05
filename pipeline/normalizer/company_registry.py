@@ -123,12 +123,3 @@ def load_aliases(conn) -> dict[str, str]:
                     "WHERE alias_key <> canonical_key")
         return dict(cur.fetchall())
 
-
-def by_block(conn, key: str) -> list[tuple[str, str]]:
-    """같은 열쇠를 쓰는 것들 — [(별칭키, 대표키)]. 후보 찾기용."""
-    if not key:
-        return []
-    with conn.cursor() as cur:
-        cur.execute("SELECT alias_key, canonical_key FROM company_aliases "
-                    "WHERE block_key = %s", (key,))
-        return list(cur.fetchall())

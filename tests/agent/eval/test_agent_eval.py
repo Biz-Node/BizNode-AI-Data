@@ -99,8 +99,16 @@ def test_case(case: AgentEvalCase, runs: dict[str, CaseRun]):
         assert not run.failed, f"답변이 실패로 끝났다{ctx}"
 
     # ── ⑦ 응답의 `anchor_source` 는 서버 값 그대로다 ──────────
+    #
+    # ★**옛 비대칭이 사라졌다**(최종 설계 §17-1). 전에는 출발점이 하나도 없으면
+    #   게이트가 `resolve_anchor` 앞에서 끊어 State 에 `decision` 이 안 생기는데
+    #   (`run.anchor_source is None`) 응답에는 `unresolved` 가 실렸다 — 「지정했는데
+    #   못 찾았다」와 「지정할 것도 없었다」를 한 값으로 말하는 자리였다.
+    #   게이트가 없어져 모든 요청이 앵커 판정을 지나므로, 지금은 둘이 늘 같다.
     assert run.response.anchor_source is case.expected_anchor_source, \
         f"응답에 실린 anchor_source 가 서버 판정과 다르다{ctx}"
+    assert run.anchor_source is case.expected_anchor_source, \
+        f"State 의 앵커 판정이 응답과 갈렸다{ctx}"
 
     # ── ⑧ 인용 — 화이트리스트 밖 근거가 나가지 않는다 ─────────
     allowed = {e.evidence_id for e in run.evidence}
@@ -208,9 +216,32 @@ def test_budget_is_never_exceeded(runs: dict[str, CaseRun]):
     for run in runs.values():
         assert run.tool_calls <= budget.MAX_TOOL_CALLS, \
             f"[{run.case.id}] 도구 호출 상한 초과{run.describe()}"
+        # ★**카운터가 자기 상한을 넘으면 자르는 단위와 세는 단위가 갈린 것이다**
+        #   (2026-08-29 · Phase 10). 상한이 낮다는 뜻이 아니다 —
+        #   `propagations_used` 가 사건 수로 자르고 파급 행 수로 세어 12 에 92 가
+        #   찍혔던 결함이 그것이다.
+        assert int(run.state.get("propagations_used") or 0) \
+            <= budget.MAX_PROPAGATIONS, \
+            f"[{run.case.id}] 파급 상한 초과 — 세는 단위가 갈렸다{run.describe()}"
         if run.budget_exhausted:
             assert run.response is not None, \
                 f"[{run.case.id}] 예산이 소진됐는데 응답이 없다 — 예외로 끝났다는 뜻"
+
+
+def test_a_cited_relation_never_loses_its_ring(runs: dict[str, CaseRun]):
+    """★**관계를 인용했으면 링이 되짚혀야 한다**(2026-08-29 · Phase 11).
+
+    `get_relations` 가 돌려준 관계는 전부 `ring_by_edge` 에 담기므로, 인용된
+    edge_id 가 거기 없다는 것은 위쪽 규칙이 바뀌었다는 뜻이다.
+
+    ★`cited_without_ring`(사건·검색히트·뉴스 근거)은 **여기서 안 본다** — 그건
+      링이 없는 것이 정상이라 0 을 요구할 수 없다. 둘을 한 통에 두면 이 단언을
+      아예 쓸 수가 없어서 갈랐다.
+    """
+    for run in runs.values():
+        assert run.observed.cited_relation_without_ring == 0, \
+            (f"[{run.case.id}] 관계를 인용했는데 링을 못 찾았다 "
+             f"{run.observed.cited_relation_without_ring}건{run.describe()}")
 
 
 def test_context_only_material_never_becomes_a_citation(runs: dict[str, CaseRun]):

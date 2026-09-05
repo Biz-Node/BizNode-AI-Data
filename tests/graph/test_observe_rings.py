@@ -90,16 +90,74 @@ def test_ring_of_a_relation_is_remembered_from_the_first_sighting():
 
     assert seen.cited_rings[1] == 1
     assert seen.cited_without_ring == 0
+    assert seen.cited_relation_without_ring == 0
 
+
+# ══════════════════════════════════════════════════════════════════
+#  ★「링이 없다」는 두 가지 다른 사건이다 (2026-08-29 · Phase 11)
+# ══════════════════════════════════════════════════════════════════
 
 def test_citation_without_a_known_relation_is_not_ring_zero():
-    """★링을 못 찾은 인용을 **Ring 0 으로 뭉뚱그리지 않는다** — 사건·뉴스 근거에는
-    링이 없고, 0 으로 세면 「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다."""
+    """★링을 못 찾은 인용을 **Ring 0 으로 뭉뚱그리지 않는다** — 0 으로 세면
+    「워크스페이스 안쪽이 인용됐다」는 거짓 신호가 된다."""
     with observe.observing() as seen:
         observe.record_cited_relations(["모르는edge"])
 
     assert seen.cited_rings == {}
-    assert seen.cited_without_ring == 1
+    assert 0 not in seen.cited_rings
+
+
+def test_a_relation_that_lost_its_ring_is_counted_apart_from_normal_ones():
+    """★**관계인데 링을 못 찾은 것**은 결함 신호다 — 정상과 같은 통에 넣지 않는다.
+
+    `record_rings` 는 `get_relations` 가 돌려준 관계를 전부 `ring_by_edge` 에
+    담으므로, 인용된 edge_id 가 거기 없다는 것은 위쪽 규칙이 바뀌었다는 뜻이다.
+    """
+    with observe.observing() as seen:
+        observe.record_cited_relations(["모르는edge"])
+
+    assert seen.cited_relation_without_ring == 1
+    assert seen.cited_without_ring == 0, "관계가 아닌 근거를 세는 통은 안 는다"
+
+
+def test_non_relation_citations_go_to_the_normal_bucket():
+    """★사건·검색히트·뉴스 근거는 **링이 없는 것이 정상**이다.
+
+    부르는 쪽(`answer.verify_sources`)이 「관계가 아니다」로 판정해 `without_ring`
+    으로 넘긴다 — 그 수는 결함 통을 늘리지 않는다.
+    """
+    with observe.observing() as seen:
+        observe.record_cited_relations([], without_ring=3)
+
+    assert seen.cited_without_ring == 3
+    assert seen.cited_relation_without_ring == 0
+
+
+def test_the_two_buckets_never_absorb_each_other():
+    """★**섞이면 `cited_rings {}` 를 읽을 수가 없다.**
+
+    「인용이 전부 사건·뉴스 근거였다」(정상)와 「관계를 인용했는데 되짚기가
+    끊겼다」(결함)가 같은 값으로 보이기 때문이다. 한 번에 둘 다 일어나도
+    각자의 통에만 담긴다.
+    """
+    with observe.observing() as seen:
+        observe.record_rings({2: [_row("known")]}, [_row("known")], cut_count=0)
+        observe.record_cited_relations(["known", "잃어버린edge"], without_ring=5)
+
+    assert seen.cited_rings == {2: 1}
+    assert seen.cited_relation_without_ring == 1
+    assert seen.cited_without_ring == 5
+
+
+def test_summary_carries_both_buckets():
+    """★보고서·로그가 읽는 dict 에 **둘 다** 실린다 — 하나만 실으면 갈라 둔
+    뜻이 문서에서 다시 합쳐진다."""
+    with observe.observing() as seen:
+        observe.record_cited_relations(["모르는edge"], without_ring=2)
+
+    summary = seen.summary()
+    assert summary["cited_without_ring"] == 2
+    assert summary["cited_relation_without_ring"] == 1
 
 
 def test_observation_is_a_noop_when_no_bucket_is_open():
@@ -108,3 +166,51 @@ def test_observation_is_a_noop_when_no_bucket_is_open():
     observe.record_rings({1: [_row("q")]}, [_row("q")], cut_count=0)
     observe.record_tool("get_relations", 3)
     observe.record_cited_relations(["q"])      # 죽지 않는다
+
+
+# ══════════════════════════════════════════════════════════════════
+#  ★배열 근거 2차 조회는 **두지 않는다** (Phase 13 → 15 에서 되돌림)
+# ══════════════════════════════════════════════════════════════════
+
+def test_array_evidence_is_not_attributed_to_the_edges_ring():
+    """★엣지의 `evidence_ids` **배열**로 링을 되짚지 **않는다.** 계약이다.
+
+    `app/tools/dto.py` 의 `RelationDTO.evidence_id` 가 못 박는다 — 「배열은 여러
+    근거의 합집합이라 **이 관계 하나의 출처가 아니다**」. 이 저장소는 **수집은 넓게,
+    귀속은 좁게** 로 일관돼 있고(수집: `graph_searcher._evidence_refs` ·
+    `relation_service._evidence` / 귀속: `RelationDTO` · `prompt.about` ·
+    `prompt._edge_id_for`), 관측만 배열로 되짚으면 **응답과 갈린다** —
+    `Source.edge_id` 는 `None` 인데 여기서만 링이 붙는다.
+
+    ★한 번 넣었다가 뺐다(2026-08-29). 되돌린 이유가 평가셋 0건이 아니라 **계약**
+      이라는 것을 이 테스트가 남긴다 — 다시 넣으려는 사람이 여기서 멈추도록.
+    """
+    row = {"edge_id": "e1", "evidence_id": "ev_single",
+           "evidence_ids": ["ev_single", "ev_array"]}
+    with observe.observing() as seen:
+        observe.record_rings({2: [row]}, [row], cut_count=0)
+        # 부르는 쪽은 배열 id 를 관계로 못 알아본다 → 「관계가 아니다」로 넘어온다
+        observe.record_cited_relations([], without_ring=1)
+
+    assert seen.cited_rings == {}, "★배열 근거에 링을 붙이지 않는다"
+    assert seen.cited_without_ring == 1, "정상 통으로 간다 — 응답의 edge_id=None 과 같다"
+    assert seen.cited_relation_without_ring == 0, "결함 신호는 아니다"
+
+
+def test_a_cut_relations_ring_never_enters_the_citation_distribution():
+    """★**잘린 관계의 링이 인용 분포에 들어가면 안 된다.**
+
+    `ring_by_edge` 는 자르기 **전**(`by_ring` 전체)을 담는다. 근거 id 로 2차 조회를
+    하면 잘린 관계까지 걸려, 보고서의 「본 것 / kept / 인용」 세 열이 같은 모집단이라는
+    전제가 깨진다 — kept 0 인데 인용 > 0 이 나온다(평가 문서 §9-3 오염).
+    """
+    kept_row = {"edge_id": "keep", "evidence_id": "ev_keep"}
+    cut_row = {"edge_id": "cut", "evidence_id": "ev_cut"}
+    with observe.observing() as seen:
+        observe.record_rings({1: [kept_row], 2: [cut_row]}, [kept_row], cut_count=1)
+        # 잘린 관계의 근거가 검색 히트로 인용됐다고 하자
+        observe.record_cited_relations([], without_ring=1)
+
+    assert seen.ring_kept == {1: 1}, "R2 는 잘렸다"
+    assert 2 not in seen.cited_rings, "★kept 0 인 링이 인용 분포에 나타나지 않는다"
+    assert seen.cited_without_ring == 1

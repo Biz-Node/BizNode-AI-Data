@@ -8,15 +8,13 @@
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
 
-import openai
+from pipeline.llm import get_client
 
-from app.core.config import ETF_LIST_PATH, OPENAI_API_KEY
+from app.core.config import ETF_LIST_PATH
 
 _FILTER_MODEL = "gpt-4o-mini"   # 대량 처리 — 저렴한 모델
 _ROUTER_WORKERS = 8             # 라우터 동시 호출 수 (I/O 대기라 스레드로 충분)
@@ -182,22 +180,13 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_client: Optional[openai.OpenAI] = None
-
-
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
 
 def llm_router(title: str, body: str, *, track: str = "relation") -> tuple[bool, str]:
     """2차 제로샷 라우터 — 트랙 기준에 맞는 기사만 통과. 실패 시 보수적으로 통과시킨다
     (추출 단계에서 다시 걸러지므로 누락보다 낫다)."""
     system = _SYSTEM_RISK if track == "risk" else _SYSTEM_RELATION
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_FILTER_MODEL,
             temperature=0,
             messages=[

@@ -27,26 +27,25 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from app.core import observe
+from app.core import observe, querylog
 from app.core.trace import trace_logger
 from app.services import (company_service, evidence_selector, relation_selector,
                           relation_service)
 from app.services.company_service import _HIDE
-from app.services.retrieve_service import _ring_of
-from app.tools import scope
+from app.services.retrieve_service import ring_of
+from app.tools import keys as keys_module, scope
 from app.tools.dto import (CAUTION_NEWS_DEVELOPS, DIRECTION_NOTE, FRESHNESS_WEIGHT,
                            ROLE_NOTE, SOURCE_NOTE, STATED_NOTE,
-                           SYMMETRIC_EDGE_TYPES, EventDTO, EventPhaseDTO,
-                           PropagationDTO, RelationDTO)
-from app.tools.errors import KeyNotResolved
+                           SYMMETRIC_EDGE_TYPES, EventCompanyDTO, EventDTO,
+                           EventPhaseDTO, PropagationDTO, RelationDTO)
 
 log = trace_logger(__name__)
 
 # ★상한은 **값을 그대로** 가져온다. 새로 쓰면 두 벌이 되어 조용히 갈린다 —
 #   `retrieve_service` 의 그 상수를 그대로 import 한다(같은 객체다).
 from app.services.retrieve_service import (  # noqa: E402  (상한 출처를 붙여 둔다)
-    _MAX_EVENTS_PER_COMPANY, _MAX_RELATIONS_PER_COMPANY,
-    _MAX_RISK_EVENTS_FOR_PROPAGATION)
+    MAX_EVENTS_PER_COMPANY, MAX_RELATIONS_PER_COMPANY,
+    MAX_RISK_EVENTS_FOR_PROPAGATION)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -55,28 +54,8 @@ from app.services.retrieve_service import (  # noqa: E402  (상한 출처를 붙
 
 
 def _resolve(keys: Sequence[str]) -> list[str]:
-    """입력 key → **그래프가 아는 `norm_name`.** 못 찾으면 `KeyNotResolved`.
-
-    ★왜 필요한가 — `company_service.events_of()` 는 `corp_code` 든 `norm_name`
-      이든 받지만(`WHERE c.corp_code = $k OR c.norm_name = $k`), **틀린 값을
-      주면 예외가 아니라 조용히 0건**이다. 그러면 「이 기업에 사건이 없다」와
-      구별이 안 된다. 여기서 한 번 확인하고 넘긴다.
-
-    ★`norm_name` 으로 바꿔 넘겨도 **재료가 안 바뀐다**(실측 2026-08-28):
-      Company 3,432곳의 `norm_name` 은 **전부 유일**하고(겹치는 이름 0종),
-      `corp_code` 와 같은 문자열인 `norm_name` 도 0건이다. 표본 400곳에서
-      `corp_code` 로 부를 때와 `norm_name` 으로 부를 때 매칭 노드 수가 갈리는
-      기업이 0곳이었다. 겹치는 이름이 생기면 이 전제가 깨지므로
-      `tests/tools/test_graph_tools.py` 가 그 불변식을 묶어 둔다.
-    """
-    wanted = scope.check(keys)          # ① 범위 밖이면 여기서 `OutOfScopeKey`
-    if not wanted:
-        return []
-    found = company_service.norm_names_by_keys(wanted)
-    missing = [k for k in wanted if k not in found]
-    if missing:
-        # ★0건으로 넘어가지 않는다. 「해소됐다 ≠ 그래프에 있다」다.
-        raise KeyNotResolved(f"그래프에서 Company 를 못 찾은 key: {missing}")
+    """입력 key → **그래프가 아는 `norm_name`.** 판정은 `app/tools/keys.py` 가 한다."""
+    wanted, found = keys_module.resolved(keys)
     return [found[k] for k in wanted]
 
 
@@ -142,7 +121,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
         원시 `grounding_suspect` 로 거르면 이 58건이 함께 지워진다.
 
       ★실측(2026-08-28): 이 제외로 **추가로 빠지는 관계는 0건**이다.
-        `company_service._relation()` 이 이미 같은 `_HIDE` 를 적용해서
+        `company_service.relation_row()` 이 이미 같은 `_HIDE` 를 적용해서
         suspect 507건 중 449건이 Service 에서 빠지고 `wrong_type` 58건만
         남는다. **그래도 여기서 다시 본다** — 위쪽 규칙이 느슨해지면 이 도구가
         조용히 따라 느슨해지면 안 되기 때문이다.
@@ -165,7 +144,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                 #   0 이 아니면 위쪽 규칙이 바뀐 것이다.
                 suspect_dropped += 1
                 continue
-            by_ring.setdefault(_ring_of(row, set(ctx.workspace_keys)), []).append(row)
+            by_ring.setdefault(ring_of(row, set(ctx.workspace_keys)), []).append(row)
     if suspect_dropped:
         log.info("tools.relations grounding_suspect 제외 %d건 "
                  "(Service 가 이미 빼는 것이 정상 — 0 이 아니면 위쪽 규칙이 바뀐 것)",
@@ -185,7 +164,7 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                for row in relation_selector.order(
                    by_ring[ring], matched=matched, direction=direction,
                    anchor_keys=set(ctx.anchor_keys))]
-    limit = _MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)   # ③ 인자가 아니다
+    limit = MAX_RELATIONS_PER_COMPANY * max(len(norms), 1)   # ③ 인자가 아니다
     kept, cut = ordered[:limit], ordered[limit:]
     # ★관측만 한다 — **자르는 규칙도 순서도 건드리지 않는다.** 이 줄을 지워도
     #   `kept` 는 한 건도 안 바뀐다. Phase 8 은 ranking 을 고정한 채 재는 단계다.
@@ -229,6 +208,8 @@ def _event_dto(row: dict[str, Any]) -> EventDTO:
         #   0 이나 "neutral" 로 메우면 **모르는 것을 아는 척**하는 것이 된다.
         role=role, role_note=ROLE_NOTE[role], sign=row.get("sign"),
         timeline=phases, timeline_summary=_timeline_summary(phases),
+        # ★전역 경로에서만 찬다 — 기업 기준 조회는 `None` 을 싣는다.
+        company=(EventCompanyDTO(**row["company"]) if row.get("company") else None),
     )
 
 
@@ -255,6 +236,21 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
       「관련 없어서」가 아니라 「다른 기업이라서」 버린 것이다.
     """
     ctx = scope.context()
+    # ★**앵커 없는 질문에서는 고르지 않고 조회만 한다**(2026-09-02).
+    #   서버가 `plan_material` 에서 전역 사건 검색을 이미 돌렸고, 그 결과가
+    #   `scope.event_pairs` 로 와 있다. 여기서 기업별로 다시 고르면 기업당
+    #   10건 × 최대 10곳이 되어 `/retrieve` 의 전역 10건과 **재료가 갈린다** —
+    #   앵커 없는 경로의 `companies` 는 애초에 그 사건에서 역산된 것이다.
+    #
+    #   ★`keys` 를 보지 않는다. Agent 가 그 중 일부만 넘겨도 재료는 서버가 정한
+    #     목록 그대로다 — 범위를 부르는 쪽이 좁히는 것도 넓히는 것과 같은
+    #     종류의 재량이다(4원칙 ①). 다만 범위 밖 key 는 여전히 거부한다.
+    if ctx is not None and ctx.event_pairs:
+        scope.check(keys)
+        rows = company_service.events_by_pairs(ctx.event_pairs)
+        log.info("tools.events anchorless 쌍=%d 조회=%d", len(ctx.event_pairs), len(rows))
+        return [_event_dto(r) for r in rows]
+
     norms = _resolve(keys)
     if not norms:
         return []
@@ -275,6 +271,12 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     #   떼는데, 안 넘기면 「기업명이 든 라벨이 상위를 먹는」 실험 ② 로 되돌아간다
     #   (현황서 §5-23). 넘길 이름은 **서버가 정한 앵커**에서만 온다.
     matched = evidence_selector.matched_event_types(intent)
+    # ★`event_type` 과 **다른 축**이다(ERD: 별개 축). `retrieve_service` 와 **같은
+    #   자리에서 같은 함수**로 정한다 — 갈리면 `/retrieve` 와 `/ask` 가 같은 질문에
+    #   다른 재료를 낸다(`ask_graph_parity.py --materials`).
+    risk_wanted = evidence_selector.risk_intent(intent)
+    recent_since = (evidence_selector.recent_window()
+                    if evidence_selector.recent_intent(intent) else None)
     flat = [_Row(r) for _, rows in by_company for r in rows]
     sims = evidence_selector.similarities(
         flat, intent=intent, embed=_embed(), anchor_names=list(ctx.anchor_names))
@@ -284,7 +286,8 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     for _norm, rows in by_company:
         kept, _cut = evidence_selector.select(
             [_Row(r) for r in rows], matched=matched, sims=sims,
-            limit=_MAX_EVENTS_PER_COMPANY)             # ③ 인자가 아니다
+            limit=MAX_EVENTS_PER_COMPANY,             # ③ 인자가 아니다
+            risk_wanted=risk_wanted, recent_since=recent_since)
         for wrapped in kept:
             row = wrapped.raw
             previous = seen.get(row["event_id"])
@@ -306,6 +309,12 @@ def get_events(keys: Sequence[str], intent: str) -> list[EventDTO]:
     if suspect_dropped:
         log.info("tools.events eventness_suspect 제외=%d kept=%d",
                  suspect_dropped, len(out))
+    # ★Phase 6 의 재료. 앵커 없는 경로는 `select_global_events` 가 이미 남겼으므로
+    #   여기는 **기업별 경로만** 남는다 — 한 요청이 두 줄로 세어지지 않는다.
+    querylog.record(question=intent, intent=intent, matched=matched,
+                    selected_types=[r.get("event_type") or "기타" for r in out],
+                    anchor_source="anchored", n_events=len(out),
+                    n_companies=len(norms), path="per_company")
     return [_event_dto(r) for r in out]
 
 
@@ -356,10 +365,10 @@ class _Row:
 
 def _embed():
     """`retrieve_service` 와 **같은 임베더**를 늦게 읽는다 — 테스트가
-    `_default_embed` 를 monkeypatch 해서 끌 수 있어야 한다."""
+    `default_embed` 를 monkeypatch 해서 끌 수 있어야 한다."""
     from app.services import retrieve_service
 
-    return retrieve_service._default_embed
+    return retrieve_service.default_embed
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -376,7 +385,7 @@ def get_propagation(event_ids: Sequence[str]) -> list[PropagationDTO]:
       던지면 사건 하나가 없다고 나머지 파급이 통째로 사라져 재료가 달라진다.
     """
     out: list[PropagationDTO] = []
-    for event_id in list(event_ids)[:_MAX_RISK_EVENTS_FOR_PROPAGATION]:   # ③
+    for event_id in list(event_ids)[:MAX_RISK_EVENTS_FOR_PROPAGATION]:   # ③
         rows = relation_service.event_impact(event_id)
         if rows is None:
             # 사건 노드를 못 찾음 — 조용히 0건으로 두지 않는다

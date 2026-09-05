@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
-from app.api.schemas import AnchorSource, Evidence, MatchType, Source
+from datetime import date
+
+from app.api.schemas import AnchorSource, Evidence, MatchType
+from app.core import clock
 from app.llm import prompt as sut
 from app.llm.prompt import EventRef, RelationRef
 
@@ -267,10 +270,29 @@ def test_unresolved_carries_no_target_note():
                                 AnchorSource.UNRESOLVED) == "검색 방식: EXACT"
 
 
-def test_assemble_lays_out_question_facts_evidence():
+def test_assemble_lays_out_question_facts_evidence(monkeypatch):
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
     got = sut.assemble("질문내용", "사실줄", [_ev("ev_1")], {"ev_1": "삼성전자"})
 
-    assert got.startswith("질문: 질문내용\n\n[사실]\n사실줄\n\n[근거]\n")
+    assert got.startswith(
+        "질문: 질문내용\n오늘: 2026-08-30\n\n[사실]\n사실줄\n\n[근거]\n")
+
+
+def test_assemble_carries_today_so_the_model_can_judge_recency(monkeypatch):
+    """★그전에는 프롬프트 어디에도 날짜 기준이 없었다 — 재료에 2026년 사건이
+    실려 있어도 모델이 「최근」을 **무엇과 견줄지** 몰랐다."""
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 1, 2))
+    got = sut.assemble("질문", "사실", [], {})
+    assert "오늘: 2026-01-02" in got
+
+
+def test_today_sits_before_the_facts_header(monkeypatch):
+    """★`[사실]` 앞머리는 `with_target_note()` 의 자리이고 규칙 7·13 이 그
+    **위치를 참조**한다 — 거기에 줄을 끼우면 두 규칙이 어긋난다."""
+    monkeypatch.setattr(clock, "today", lambda: date(2026, 8, 30))
+    got = sut.assemble("질문", "검색 방식: EXACT\n사실줄", [], {})
+    assert got.index("오늘:") < got.index("[사실]")
+    assert "[사실]\n검색 방식: EXACT\n" in got
 
 
 def test_match_type_note_is_exhaustive():
@@ -288,3 +310,27 @@ def test_event_types_by_evidence_maps_only_event_sourced_evidence():
     assert got["ev_a"] == frozenset({"사고재해", "노무"})
     assert got["ev_b"] == frozenset({"사고재해"})
     assert "ev_rel" not in got
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  시스템 프롬프트 — ★답변의 **모양**을 지시하는 규칙들
+# ══════════════════════════════════════════════════════════════════════
+
+
+def test_system_prompt_tells_the_model_how_to_shape_each_answer():
+    """★목록형 지시는 남는다 — 앵커가 없을 때 기업들을 하나의 서사로 엮는 것이
+    가장 나쁜 실패다. 절 이름만 [워크스페이스] → [대상 지정 없음] 으로 바뀌었다."""
+    assert "답변 대상" in sut.SYSTEM_PROMPT
+    assert "독립적으로 설명" in sut.SYSTEM_PROMPT
+    assert "하나의 이야기로" in sut.SYSTEM_PROMPT
+
+
+def test_system_prompt_does_not_make_the_workspace_the_subject():
+    """★**뒤집힌 규칙이다**(최종 설계 §6-2·§19-3).
+
+    전에는 「인사이트는 워크스페이스 기업이 직접 주체이거나 영향 대상이어야
+    한다」고 지시했다. 그건 프롬프트 층의 hard filter다 — 워크스페이스 밖 사실을
+    답변에서 지우게 만든다. 지금은 **닿으면 밝히고, 밖이라고 빼지 않는다.**
+    """
+    assert "워크스페이스 밖이라는 이유로 재료를 빼지 않습니다" in sut.SYSTEM_PROMPT
+    assert "직접 주체이거나 직접적인 영향 대상이어야" not in sut.SYSTEM_PROMPT

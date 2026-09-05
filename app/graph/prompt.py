@@ -1,8 +1,8 @@
 """그래프 경로의 프롬프트 조립 — **DTO 를 읽는다.**
 
-★`answer_service._fact_lines()` 를 **고치지 않고 여기 따로 둔다.** 저쪽은
-  `AnswerService.ask()` 가 쓰는 대조 기준선이라, 표기를 붙이려고 손대면 기준선이
-  같이 움직여 「무엇 때문에 달라졌나」를 못 가린다(현황서 §5-28).
+★**`[사실]` 렌더러는 여기 하나뿐이다**(2026-09-04). 한동안 1차
+  (`answer_service._fact_lines`)가 대조 기준선으로 함께 있었는데, 표기가 붙어
+  두 벌이 갈린 뒤로는 대조가 성립하지 않아 1차를 폐기했다.
 
 ★1차와 달라지는 것은 **표기뿐**이다. 재료 집합(기업·사건·관계·근거)은 그대로다
   (`batch/audit/ask_graph_parity.py --materials`). 달라지는 줄:
@@ -54,11 +54,18 @@ def fact_lines(*, match_type: MatchType, companies, events: Sequence[EventDTO],
                relations: Sequence[RelationDTO],
                propagation: Sequence[PropagationDTO],
                evidence: Sequence[Evidence], workspace_keys: set[str],
-               workspace_names: Optional[dict[str, str]] = None) -> str:
+               workspace_names: Optional[dict[str, str]] = None,
+               context_names: Optional[dict[str, str]] = None) -> str:
     lines: list[str] = []
     # ★집합 확인(설계서 §12)을 하려면 LLM 이 그 집합을 봐야 한다.
     if workspace_names:
         lines.append("워크스페이스: " + " · ".join(workspace_names.values()))
+    # ★**`workspace_keys` 에 섞지 않는다.** 저 집합은 `membership()` 과
+    #   `evidence_about()` 이 「안이냐 바깥이냐」를 판정하는 데 쓰는데, 보고 있는
+    #   기업을 거기 넣으면 담지도 않은 기업이 「=워크스페이스」로 표기된다.
+    #   여기서 하는 일은 **머리말 한 줄**뿐이다 — 링도 표기도 안 건드린다.
+    if context_names:
+        lines.append("보고 있는 기업: " + " · ".join(context_names.values()))
     if companies:
         lines.append("기업: " + ", ".join(f"{c.name}({c.key})" for c in companies))
 
@@ -156,12 +163,16 @@ def build_user_prompt(question: str, *, match_type: MatchType, companies,
                       propagation: Sequence[PropagationDTO],
                       evidence: Sequence[Evidence],
                       anchor_source: AnchorSource,
-                      workspace_names: dict[str, str]) -> str:
+                      workspace_names: dict[str, str],
+                      context_names: Optional[dict[str, str]] = None) -> str:
+    # ★`context_names` 는 **여기 안 더한다.** 워크스페이스 소속 표기(§12)와
+    #   근거 귀속이 이 집합을 읽는다 — 넓히면 「담긴 기업」의 뜻이 바뀐다.
     workspace_keys = set(workspace_names or ())
     facts = fact_lines(match_type=match_type, companies=companies, events=events,
                        relations=relations, propagation=propagation,
                        evidence=evidence, workspace_keys=workspace_keys,
-                       workspace_names=workspace_names)
+                       workspace_names=workspace_names,
+                       context_names=context_names)
     facts = shared.with_target_note(facts, anchor_source)
     about = evidence_about(relations, events, evidence, workspace_keys)
     return shared.assemble(question, facts, evidence, about)

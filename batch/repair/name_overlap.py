@@ -120,7 +120,7 @@ _ALIAS_PAREN = re.compile(r"^\(?[A-Za-z][A-Za-z0-9 .,&'-]{3,}\)?$")
 
 def _classify(p: dict) -> tuple[str, str]:
     """(분류, 사유). 분류가 '조치'면 사람이 봐야 한다."""
-    an, bn, apo, bpo = p["an"], p["bn"], p["apo"], p["bpo"]
+    an, bn, bpo = p["an"], p["bn"], p["bpo"]
     tail_raw = bn[len(an):].strip() if bn.startswith(an) else ""
     tail = tail_raw.strip(" ·-()（）")
 

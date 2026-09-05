@@ -78,14 +78,6 @@ def record(conn, **fields) -> None:
         cur.execute(_INSERT, payload)
 
 
-def done_corp_codes(conn) -> set[str]:
-    """한 번이라도 추출한 기업."""
-    ensure_table(conn)
-    with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT corp_code FROM extraction_runs")
-        return {r[0] for r in cur.fetchall()}
-
-
 def summary(conn) -> list[dict]:
     ensure_table(conn)
     with conn.cursor() as cur:

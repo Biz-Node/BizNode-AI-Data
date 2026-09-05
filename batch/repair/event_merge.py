@@ -50,6 +50,29 @@ Event 노드가 있는 이유는 **전파 구조**다.
 ★확신 없으면 합치지 않는다. 서로 다른 사건을 합치면 영향 기업이 뒤섞이고
   `timeline`으로도 되돌릴 수 없다.
 
+★★2026-08-29 — **모델에 이름밖에 안 넘기고 있었다.**
+
+  `_FIND`가 `corps`·`dates`를 가져와 놓고도 프롬프트에 넣는 것은 이름 두 개뿐이라
+  모델이 회사도 날짜도 못 봤다. 위의 「시점이 멀어도 같은 사건일 수 있다」는
+  판단을 모델에 맡긴 것인데, 정작 판단할 재료를 안 줬다. 결과(실측):
+
+      기업 혼재    「자사주 소각」이 한미반도체·NAVER·삼성전자에 걸렸다  66건
+      반복 융합    2022년 파업과 2026년 파업이 한 노드              75건
+
+  셋을 고쳤다.
+      ① 주체 기업(`role='subject'`)을 따로 받아 **서로소면 후보에서 뺀다**.
+         영향받은 기업(IMPACTS)만 겹치는 것은 같은 기업이 아니다.
+      ② **되풀이형**(화재·사망·파업·리콜·제재·실적)이 12개월 넘게 벌어지면
+         후보에서 뺀다. 장기전개형(착공→준공·투자→양산·제소→확정)은 그대로 둔다.
+      ③ 프롬프트에 `이름 [주체기업 · 연월]`을 넣는다.
+
+  ①②는 모델을 부르기 전에 거르므로 **비용도 줄어든다**. 그리고 이 날 이전의
+  캐시 판정은 재료 없이 내린 것이라 기본적으로 **버리고 다시 묻는다**
+  (`_CONTEXT_SINCE`).
+
+  이미 섞여 버린 노드를 되찾는 것은 이 파일이 아니라
+  `batch/audit/event_merge.py`(찾기) + `batch/repair/event_split.py`(가르기)다.
+
     python -m batch.repair.event_merge --dry-run
     python -m batch.repair.event_merge
 """
@@ -80,7 +103,16 @@ CREATE TABLE IF NOT EXISTS event_merge_verdicts (
     PRIMARY KEY (id_a, id_b)
 )
 """
-_LOAD = "SELECT id_a, id_b, verdict FROM event_merge_verdicts"
+# ★이 시각 **이전**의 판정은 이름 두 개만 보고 내린 것이다. 주체 기업도 연월도
+#   모델에 안 보여 주던 때라 「자사주 소각」 셋을 same 으로 묶는 판정이 들어
+#   있다. 기본적으로 **다시 묻는다**(2,208쌍 ≈ 550원). 굳이 재사용하려면
+#   `--use-old-verdicts`.
+_CONTEXT_SINCE = "2026-08-29"
+
+_LOAD = """
+SELECT id_a, id_b, verdict FROM event_merge_verdicts
+WHERE %s OR decided_at >= %s::timestamptz
+"""
 _SAVE = """
 INSERT INTO event_merge_verdicts (id_a, id_b, verdict, reason) VALUES (%s,%s,%s,%s)
 ON CONFLICT (id_a, id_b) DO UPDATE SET verdict = EXCLUDED.verdict,
@@ -90,12 +122,29 @@ ON CONFLICT (id_a, id_b) DO UPDATE SET verdict = EXCLUDED.verdict,
 _SYSTEM = """당신은 기업 지식그래프에서 **같은 사건이 두 이름으로 갈린 것**을
 가려내는 도구입니다.
 
-두 사건 이름은 「같은 기업에 붙어 있고 낱말이 하나라도 겹친다」는 이유로 후보에
+두 사건은 「같은 기업에 붙어 있고 낱말이 하나라도 겹친다」는 이유로 후보에
 올랐을 뿐, 실제로는 다른 사건인 경우가 많습니다.
 
-★**시점이 멀어도 같은 사건일 수 있습니다.** 후보에 시간 제한이 없습니다.
-   "HBM4 생산 투자"(2025-09) / "HBM4 양산 일정 연기"(2026-06)
-   → 9개월 떨어져 있어도 한 사업의 국면입니다 → phase
+각 줄은 다음 형식입니다 — **주체 기업과 연월을 반드시 보고 판단하십시오.**
+
+    이름 [주체기업 · 연월]  |  이름 [주체기업 · 연월]
+
+★**주체 기업이 다르면 다른 사건입니다.**
+   "자사주 소각 [한미반도체 · 2026-02]" / "자사주 소각 [naver · 2025-09]"
+   → 이름이 같아도 각자 자기 자사주를 소각한 별개 사건입니다 → different
+
+★**시점이 멀 때는 사건 성격을 보십시오.** 두 갈래입니다.
+
+   길게 이어지는 하나의 일 — 멀어도 같은 사건입니다 → phase
+     "HBM4 생산 투자"(2025-09) / "HBM4 양산 일정 연기"(2026-06)
+     "세종 신사옥 착공"(2022-03) / "세종 신사옥 준공"(2025-11)
+     투자→양산 · 착공→준공 · 제소→확정 은 한 일의 국면입니다.
+
+   해마다 되풀이되는 일 — 멀면 **다른 사건**입니다 → different
+     "임단협 교섭 난항"(2023-07) / "임단협 교섭 난항"(2025-08)
+     "중대재해 사망사고"(2024-03) / "중대재해 사망사고"(2026-05)
+     파업·사고·리콜·제재·실적은 내년에 **또** 납니다. 1년 넘게 벌어져
+     있으면 같은 사건이 이어진 게 아니라 다시 일어난 것입니다.
 
 【same — 같은 사건을 다르게 부른 것】
    "삼성전자 본사 압수수색" / "삼성전자 압수수색"
@@ -120,8 +169,14 @@ _SYSTEM = """당신은 기업 지식그래프에서 **같은 사건이 두 이�
    확신이 없으면 **different**로 하세요. 다른 사건을 합치면 영향받은 기업이
    한 노드에 뒤섞여 되돌릴 수 없습니다. 못 합친 건 나중에 다시 볼 수 있습니다.
 
+각 줄 앞의 번호 `n`을 **그대로** 돌려주십시오. 한 줄도 빠뜨리지 마십시오.
 reason은 5~20자로 짧게."""
 
+# ★쌍을 **번호**로 주고받는다(2026-08-29). 전에는 모델이 두 이름을 그대로
+#   돌려주면 그것으로 쌍을 되찾았는데, 프롬프트에 주체·연월을 넣어 줄이 길어지자
+#   모델이 조금씩 다르게 적어 되찾기가 실패했다. 실측: 797쌍을 묻고 **227쌍만**
+#   저장됐다 — 570쌍의 답이 조용히 버려졌다(돈은 다 쓰고).
+#   번호는 모델이 바꿔 적을 여지가 없다.
 _SCHEMA = {
     "type": "object",
     "properties": {
@@ -130,13 +185,12 @@ _SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "a": {"type": "string"},
-                    "b": {"type": "string"},
+                    "n": {"type": "integer"},
                     "verdict": {"type": "string",
                                 "enum": ["same", "phase", "different"]},
                     "reason": {"type": "string"},
                 },
-                "required": ["a", "b", "verdict", "reason"],
+                "required": ["n", "verdict", "reason"],
                 "additionalProperties": False,
             },
         }
@@ -145,12 +199,18 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
+# ★`subs`(주체 기업)를 따로 받는다(2026-08-29). 전에는 `corps` 하나만 받아
+#   「하나라도 겹치면 같은 기업」으로 봤는데, 영향받은 기업(IMPACTS)만 겹쳐도
+#   후보가 됐다. 「자사주 소각」이 한미반도체·NAVER·삼성전자에 걸린 원인이다.
+#   ※`observed_at`은 그래프에 없는 속성이라 뺐다(수집만 하고 늘 비어 있었다).
 _FIND = """
 MATCH (e:Event)
 OPTIONAL MATCH (e)-[r]-(c:Company)
 WITH e, collect(DISTINCT c.norm_name) AS corps,
-     collect(DISTINCT r.occurred_at) + collect(DISTINCT r.observed_at) AS dates
+     collect(DISTINCT CASE WHEN r.role = 'subject' THEN c.norm_name END) AS subs_raw,
+     collect(DISTINCT r.occurred_at) AS dates
 RETURN e.name AS name, e.event_id AS id, corps, dates,
+       [x IN subs_raw WHERE x IS NOT NULL] AS subs,
        size([(e)-[]-() | 1]) AS deg
 """
 
@@ -170,6 +230,82 @@ YIELD node RETURN node.event_id AS id
 def _period(dates) -> str:
     v = sorted(str(d)[:7] for d in (dates or []) if d and len(str(d)) >= 7)
     return v[0] if v else ""
+
+
+# ★**해를 넘겨 되풀이되는** 사건 유형(2026-08-29). `event_er.UNIQUE_TYPE_WORDS`와
+#   축이 다르다 — 저쪽은 「같은 달에 두 번 나기 어렵다」이고, 이쪽은 「해마다
+#   또 난다」다. 화재는 같은 달에 두 번 안 나지만 내년에는 또 난다.
+#
+#   실측(2026-08-29): 이 구분이 없어서 2024년 사망사고와 2026년 사망사고가,
+#   2022년 파업과 2026년 파업이 한 노드가 됐다(「삼성전자노조 파업」 51개월,
+#   「파업 리스크」 50개월). 「최근 리스크」 검색에서 4년 전 사고가 최근 것으로
+#   딸려 나온다.
+_RECURRENT_WORDS = (
+    "화재", "폭발", "붕괴", "누출", "정전", "침수",
+    "사망", "중대재해", "산업재해", "안전사고",
+    "파업", "노동쟁의", "쟁의", "직장폐쇄", "임단협", "단체협약", "교섭",
+    "리콜", "결함", "불량",
+    "과징금", "제재", "압수수색", "세무조사", "행정처분", "담합",
+    "실적", "적자", "어닝쇼크", "배당", "자사주",
+)
+
+# 되풀이형이 이보다 벌어지면 **다른 사건으로 본다**. 1년을 넘기면 「작년 그
+# 사건」이 아니라 「올해 또 난 사건」이다.
+_RECURRENT_MONTH_CAP = 12
+
+
+def _is_recurrent(name: str) -> bool:
+    compact = re.sub(r"\s+", "", name or "")
+    return any(w in compact for w in _RECURRENT_WORDS)
+
+
+def _mk(p: str):
+    """YYYY-MM → 월 일련번호."""
+    try:
+        return int(p[:4]) * 12 + int(p[5:7])
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
+def _months_apart(p1: str, p2: str) -> int:
+    """두 연월(YYYY-MM)이 몇 개월 떨어져 있나. 하나라도 없으면 크게 본다."""
+    try:
+        return abs((int(p1[:4]) * 12 + int(p1[5:7]))
+                   - (int(p2[:4]) * 12 + int(p2[5:7])))
+    except (ValueError, IndexError, TypeError):
+        return 99
+
+
+def _label(e: dict) -> str:
+    """모델에 보여 줄 한 줄 — 이름만으로는 가를 수 없다."""
+    who = ", ".join((e.get("subs") or e.get("corps") or [])[:3]) or "-"
+    return f"{e['name']} [{who} · {e.get('period') or '?'}]"
+
+
+def _blocked(a: dict, b: dict) -> str:
+    """구조만 보고 **합치면 안 되는** 쌍을 걸러 낸다. 모델을 부르기 전에.
+
+    ★2026-08-29에 넣었다. 그전에는 이 두 검사가 **어디에도 없었다** — 후보
+      규칙은 시간을 안 봤고(일부러 뺐다), 모델에는 이름 두 개만 넘겼다.
+      「날짜 판단은 모델이 하겠지」였는데 정작 날짜를 안 보여 줬다.
+
+    걸러 낸 쌍은 모델에 묻지 않으므로 **비용도 줄어든다.**
+    """
+    sa, sb = set(a.get("subs") or []), set(b.get("subs") or [])
+    if sa and sb and not (sa & sb):
+        return "주체기업 서로소"
+
+    # ★**합친 뒤의 폭**을 본다(2026-08-29). 처음엔 두 노드의 가장 이른 달끼리
+    #   비교했는데, 이미 폭이 넓은 노드는 옛 사건과 gap이 0으로 보여 계속
+    #   빨아들였다 — 「삼성전자 노조 파업」이 2022년 것을 흡수해 50개월이 됐다.
+    #   판단해야 할 것은 「둘이 얼마나 떨어졌나」가 아니라 「합치면 얼마나
+    #   벌어지나」다.
+    months = (a.get("months") or []) + (b.get("months") or [])
+    span = (max(months) - min(months)) if months else 0
+    if span >= _RECURRENT_MONTH_CAP and (_is_recurrent(a["name"])
+                                         or _is_recurrent(b["name"])):
+        return f"되풀이형 {span}개월"
+    return ""
 
 
 def _roots(name: str) -> set[str]:
@@ -218,6 +354,8 @@ def _candidates(evs: list[dict]) -> list[tuple[dict, dict]]:
     by_corp: dict[str, list[dict]] = defaultdict(list)
     for e in evs:
         e["period"] = _period(e["dates"])
+        e["months"] = sorted({m for m in (_mk(str(d)[:7]) for d in (e["dates"] or []))
+                              if m})
         e["toks"] = _roots(e["name"]) - corp_tokens
         for c in e["corps"]:
             if c:
@@ -225,6 +363,7 @@ def _candidates(evs: list[dict]) -> list[tuple[dict, dict]]:
 
     seen: set[tuple[str, str]] = set()
     out: list[tuple[dict, dict]] = []
+    blocked: dict[str, int] = defaultdict(int)
     for group in by_corp.values():
         if len(group) < 2:
             continue
@@ -236,7 +375,14 @@ def _candidates(evs: list[dict]) -> list[tuple[dict, dict]]:
                 if key in seen or not (a["toks"] & b["toks"]):
                     continue
                 seen.add(key)
+                why = _blocked(a, b)
+                if why:
+                    blocked[why.split()[0]] += 1
+                    continue
                 out.append((a, b) if a["deg"] >= b["deg"] else (b, a))
+    if blocked:
+        print("  구조로 걸러 낸 쌍: "
+              + " · ".join(f"{k} {v}쌍" for k, v in sorted(blocked.items())))
     return out
 
 
@@ -245,16 +391,39 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, help="판정할 쌍 수 상한(비용 통제)")
+    ap.add_argument("--use-old-verdicts", action="store_true",
+                    help=f"{_CONTEXT_SINCE} 이전의 이름만 보고 내린 판정도 재사용")
+    # ★`pipeline.llm`의 기본값은 gpt-4o-mini다. 그대로 썼더니 「테슬라와의
+    #   대규모 공급 계약」과 「대규모 충당금 설정」을 same 으로, 「삼성전자의
+    #   레인보우로보틱스 인수」와 「플랙트 인수」를 한 사건으로 판정했다.
+    #   합치기는 되돌릴 수 없으므로(`mergeNodes`는 노드를 없앤다) 감사
+    #   (`batch/audit/event_merge.py`)와 같은 등급을 쓴다.
+    ap.add_argument("--model", default="gpt-4o")
     args = ap.parse_args()
 
     with neo4j_session() as s:
         evs = [dict(r) for r in s.run(_FIND)]
     pairs = _candidates(evs)
 
+    # ★일부러 가른 쌍은 다시 합치지 않는다(2026-08-29). `event_split`이 근거를
+    #   보고 갈라 놓은 것을 여기서 되붙이면 작업이 원점으로 돌아간다. 구조
+    #   검사만으로는 8쌍이 다시 후보로 올라왔다 — 같은 기업의 1년 이내
+    #   사건이라 `_blocked`가 잡을 수 없는 것들이다.
+    with postgres_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('event_splits')")
+        if cur.fetchone()[0]:
+            cur.execute("SELECT orig_id, new_id FROM event_splits WHERE undone_at IS NULL")
+            split = {tuple(sorted(r)) for r in cur.fetchall()}
+            before = len(pairs)
+            pairs = [p for p in pairs
+                     if tuple(sorted((p[0]["id"], p[1]["id"]))) not in split]
+            if before - len(pairs):
+                print(f"  일부러 가른 쌍이라 뺀 것: {before - len(pairs)}쌍")
+
     with postgres_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(_CREATE)
-            cur.execute(_LOAD)
+            cur.execute(_LOAD, (args.use_old_verdicts, _CONTEXT_SINCE))
             cached = {(a, b): v for a, b, v in cur.fetchall()}
 
         todo = [p for p in pairs if (p[0]["id"], p[1]["id"]) not in cached]
@@ -270,20 +439,31 @@ def main() -> int:
         if todo and not args.dry_run:
             for i in range(0, len(todo), 20):
                 chunk = todo[i:i + 20]
-                body = "\n".join(f"- {a['name']} | {b['name']}" for a, b in chunk)
-                got = ask_json(_SYSTEM, body, schema=_SCHEMA,
+                # ★이름만 넘기던 것을 고쳤다(2026-08-29). `corps`·`dates`를 이미
+                #   조회해 놓고도 모델에는 이름 두 개만 주고 있었다 — 회사도
+                #   날짜도 안 보여 주니 모델이 가를 방법이 없었다.
+                body = "\n".join(f"{n}. {_label(a)} | {_label(b)}"
+                                 for n, (a, b) in enumerate(chunk, 1))
+                got = ask_json(_SYSTEM, body, schema=_SCHEMA, model=args.model,
                                name="event_merge", fallback={"items": []})
-                by_name = {(a["name"], b["name"]): (a, b) for a, b in chunk}
+                answered = 0
                 with conn.cursor() as cur:
                     for it in got.get("items", []):
-                        pair = by_name.get((it["a"], it["b"]))
-                        if not pair:
+                        n = it.get("n", 0)
+                        if not 1 <= n <= len(chunk):
                             continue
-                        ia, ib = pair[0]["id"], pair[1]["id"]
+                        a, b = chunk[n - 1]
+                        ia, ib = a["id"], b["id"]
                         cached[(ia, ib)] = it["verdict"]
+                        answered += 1
                         cur.execute(_SAVE, (ia, ib, it["verdict"],
                                             (it.get("reason") or "")[:60]))
-                print(f"     … {min(i + 20, len(todo))}/{len(todo)}")
+                conn.commit()
+                # ★답이 빈 쌍이 있으면 **말한다.** 전에는 조용히 버려서 570쌍이
+                #   사라진 줄도 몰랐다(비용은 다 쓰고 다음 실행에 또 묻는다).
+                lost = len(chunk) - answered
+                print(f"     … {min(i + 20, len(todo))}/{len(todo)}"
+                      + (f"  ⚠ 답이 없는 쌍 {lost}개" if lost else ""))
 
         merge = [(a, b, cached.get((a["id"], b["id"])))
                  for a, b in pairs

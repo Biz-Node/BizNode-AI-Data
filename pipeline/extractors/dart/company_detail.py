@@ -22,9 +22,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-import openai
-
-from app.core.config import OPENAI_API_KEY
+from pipeline.llm import get_client
 
 _MODEL = "gpt-4o-mini"      # 요약·표 정리라 상위 모델이 필요 없다
 
@@ -95,15 +93,6 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_client: Optional[openai.OpenAI] = None
-
-
-def _get_client() -> openai.OpenAI:
-    global _client
-    if _client is None:
-        _client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    return _client
-
 
 def extract_detail(corp_name: str, overview_text: str,
                    segment_text: str) -> Optional[dict]:
@@ -114,7 +103,7 @@ def extract_detail(corp_name: str, overview_text: str,
             f"[사업의 개요]\n{overview_text[:6000]}\n\n"
             f"[주요 제품 및 서비스]\n{segment_text[:6000]}")
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=_MODEL, temperature=0,
             messages=[{"role": "system", "content": _SYSTEM},
                       {"role": "user", "content": user}],

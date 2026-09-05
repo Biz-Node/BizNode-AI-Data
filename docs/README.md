@@ -4,6 +4,8 @@
 
 > 2026 한이음 드림업 · 금융/핀테크 · 팀 쑥부르스도나스
 > 문서: 이 파일(개요·서비스 구성) · [코드 지도](CODEMAP.md) ·
+> [백엔드 연동 가이드](BizNode_백엔드_연동_가이드.md)(라우트 21개의 계약) ·
+> [검색·챗봇 설계](BizNode_Search_설계.md) · [Agent 설계](BizNode_Agent_설계.md) · [현황](BizNode_검색챗봇_현황.md) ·
 > [데이터 수집 방법서](BizNode_데이터수집_방법서.md)(설계·실측·운영 규칙) ·
 > [데이터베이스 ERD](BizNode_데이터베이스_ERD.md)(스키마와 교차 키) ·
 > [연동 계획](BizNode_연동_계획.md)(다음에 무엇을 만드나)
@@ -658,6 +660,8 @@ python -m batch.ops.lookup <검색어>              # 근거 원문 조회 CLI
 **`batch/`는 동사로 나뉜다** — 만든다 / 고친다 / 검사한다 / 돌린다.
 파일 이름에 `build_`·`fix_`·`audit_` 접두어를 붙이지 않는다. 디렉터리가 그 역할이다.
 
+아래는 **줄거리**다. 파일 하나하나가 무엇을 하는지는 [코드 지도](CODEMAP.md)에 있다.
+
 ```
 batch/
   build/     수집·적재 — 데이터를 **만든다**
@@ -688,9 +692,21 @@ pipeline/    라이브러리 (CLI 없음)
   freshness.py 관계 신선도 판정
 
 app/
-  core/        설정 · DB 커넥션
-  services/    graph_service.py — 신선도·근거 필터 조회 · 파급 계산
-  api/         (미구현)
+  core/        설정 · DB 커넥션 · 「오늘」 단일 출처 · trace · 관측
+  services/    조회 — graph_service(신선도·근거 필터 · 파급) · company · workspace
+                      search · insight · relation · news
+               챗봇 — retrieve(재료 조립) · query_understanding(앵커 판정)
+                      evidence_selector · claim_check · material_consistency
+  graph/       `/ask` 실행 그래프 (LangGraph) — 노드·State·예산
+  tools/       Agent 가 부르는 도구 7종 + 반환 계약(dto.py) + 범위 강제(scope.py)
+  llm/         LLM 어댑터 · 두 답변 경로가 공유하는 프롬프트 조립
+  api/         라우트 21개 + 응답 계약 61종 (schemas.py) — **전부 실제 DB**
+
+search/        검색 계층 — orchestrator 가 지휘
+  service/     anchor_extractor · entity_resolver · query_router
+               graph_searcher · vector_searcher · result_ranker · factory
+  repository/  postgres · chroma
+  dto/ model/  SearchRequest·SearchQuery·SearchHit·SearchResult · 공용 Enum
 
 data/
   company_list/ 시드 64개사

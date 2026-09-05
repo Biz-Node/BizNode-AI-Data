@@ -1,7 +1,7 @@
 """`anchor_source`·`anchors[]` 계약 — 스키마만 본다(설계서 §5 계약 변경).
 
 ★**판정 로직은 여기 없다.** 값을 누가 채우는가는 `query_understanding` 이
-  생긴 뒤의 일이고([현황서 §6-2](../../docs/BizNode_Search_Layer_현황서.md) ② 단계),
+  생긴 뒤의 일이고([현황 §6-2](../../docs/BizNode_검색챗봇_현황.md) ② 단계),
   이 파일은 「계약이 그 값을 담을 수 있는가」와 「기존 호출이 안 깨지는가」만 본다 —
   `tests/search/test_example_queries.py` 가 DTO 에 대해 하는 것과 같은 성격이다.
 """
@@ -15,11 +15,29 @@ from app.api.schemas import (Anchor, AnchorSource, AskResponse, MatchType,
                              RelationEndpoint, RetrieveResponse)
 
 
-# ── AnchorSource — 설계서 §14-3 의 세 값 ────────────────────────────────
-def test_anchor_source_has_exactly_three_values():
+# ── AnchorSource — 설계서 §14-3 의 세 값 + `context` ────────────────────
+def test_anchor_source_has_exactly_four_values():
     """★값이 늘면 답변 형태 분기(§14-6)와 `unresolved` 처리(§14-4)가 함께
-    바뀌어야 한다 — 조용히 늘어나지 않게 못 박는다."""
-    assert {s.value for s in AnchorSource} == {"query", "workspace", "unresolved"}
+    바뀌어야 한다 — 조용히 늘어나지 않게 못 박는다.
+
+    ★**`context` 가 늘어난 것은 2026-08-29 이고, 이 테스트가 그것을 잡았다.**
+      함께 바뀐 자리를 여기 적어 둔다 — 다음에 값이 늘 때 무엇을 따라 고쳐야
+      하는지가 이 목록이다:
+
+          Anchor.source              Literal 에 추가 (안 하면 pydantic 이 막는다)
+          TARGET_NOTE_BY_SOURCE      표기 문구 (전수 분기 dict — 빠뜨리면 KeyError)
+          _SYSTEM_PROMPT             그 대상일 때의 지시. ★[대상 지정 없음] 절의
+                                     범위와 최종검증 12번을 함께 좁혀야 한다
+          decide_anchor()            판정 분기와 **순서**
+          hits_reflect_the_anchor() 그 대상일 때 검색 히트를 재료로 쓰나
+          halt_no_material()         문구 분기
+
+    ★**`workspace` 가 `anchorless` 로 바뀌었다**(최종 설계 §17-3). 이름만 바뀐
+      것이 아니라 뜻이 뒤집혔다 — 전에는 「워크스페이스 기업을 대상으로 삼았다」
+      였고 지금은 「대상이 없다」다. 그래서 `Anchor` 객체가 아예 안 붙는다.
+    """
+    assert {s.value for s in AnchorSource} == {
+        "query", "context", "anchorless", "unresolved"}
 
 
 # ── Anchor — 재료 앵커 한 건 ─────────────────────────────────────────────
@@ -53,7 +71,7 @@ def test_retrieve_response_anchors_defaults_to_empty():
 
 
 def test_retrieve_response_carries_anchors():
-    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.WORKSPACE)]
+    anchors = [Anchor(key="00126380", name="삼성전자", source=AnchorSource.CONTEXT)]
     assert _retrieved(anchors=anchors).anchors == anchors
 
 
@@ -61,7 +79,7 @@ def test_companies_and_anchors_are_separate_fields():
     """★`companies` 는 「재료가 된 기업」이고 `anchors` 는 「그 재료를 모은 출발점」이다
     (설계서 §5·현황서 §5-7). 둘이 달라질 수 있어야 한다."""
     retrieved = _retrieved(
-        anchors=[Anchor(key="00126380", name="삼성전자", source=AnchorSource.WORKSPACE)],
+        anchors=[Anchor(key="00126380", name="삼성전자", source=AnchorSource.CONTEXT)],
         companies=[RelationEndpoint(key="01095722", name="심텍")])
     assert [a.key for a in retrieved.anchors] != [c.key for c in retrieved.companies]
 
