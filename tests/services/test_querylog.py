@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from app.core.config import PROJECT_ROOT
 from app.core import querylog
 
 
@@ -112,3 +113,21 @@ def test_batch_runs_are_separable_from_real_traffic(sink):
     assert rows[0]["trace_id"] == "-"
     assert rows[1]["trace_id"] != "-"
     assert [r["question"] for r in rows if r["trace_id"] != "-"] == ["실사용"]
+
+
+def test_the_repository_log_is_untouched_during_a_test_run():
+    """★이 그물이 없으면 B-1 의 측정 표본이 다시 오염된다(§6-0 B-1).
+
+    `tests/conftest.py` 의 autouse 픽스처가 살아 있는지 본다. 걷어내면 이 검사가
+    깨진다 — 「나중에 갈라 보자」로 미루면 그 사이에 쌓인 것은 되돌릴 수 없다.
+    """
+    repo_log = PROJECT_ROOT / "logs" / "queries.jsonl"
+    before = repo_log.stat().st_size if repo_log.exists() else 0
+
+    querylog.record(question="q", intent="q", matched=[], selected_types=[],
+                    anchor_source="anchorless", n_events=0, n_companies=0,
+                    path="global")
+
+    after = repo_log.stat().st_size if repo_log.exists() else 0
+    assert querylog._DISABLED is True
+    assert after == before
