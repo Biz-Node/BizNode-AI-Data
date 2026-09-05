@@ -7,7 +7,20 @@
 > 서비스 전체 개요는 [README](README.md), 데이터 스키마는 [ERD](BizNode_데이터베이스_ERD.md),
 > 코드 위치는 [코드 지도](CODEMAP.md) 입니다.
 
-마지막 갱신 **2026-08-25** · 기준 커밋 `8416d80`(브랜치 `yun`)
+마지막 갱신 **2026-09-05** · 기준 커밋 `6c39289`(브랜치 `yun`)
+· 본문 대부분은 `8416d80`(2026-08-23) 기준으로 쓰였고, 이번에는 **폐기된 서술만** 손봤습니다.
+
+> 🔴 **2026-09-04 에 1차 답변 경로(`AnswerService`)가 폐기됐습니다.**
+>
+> `/ask` 는 2026-08-27 에 이미 LangGraph 로 넘어갔고, 09-04 에 `AnswerService` 클래스와
+> `app/services/answer_service.py` 가 **삭제**됐습니다(`d679e87`). 지금 `/ask` 는
+> `app/api/main.py` 가 `app.graph.ask_graph.run_ask()` 를 부릅니다.
+>
+> 그 커밋이 손댄 문서는 [코드 지도](CODEMAP.md) 하나뿐이라 **이 문서에는 반영되지
+> 않았습니다.** 이번에 정리했습니다 — **그림과 배선은 현재 사실로 고쳤고**(§1-2 · §1-3),
+> **흐름 서술은 기록으로 남기고 🔴 만 달았습니다**(§9-1 · §15-1). 그래프의 노드·엣지
+> 구조는 [Agent 아키텍처](BizNode_Agent_Architecture_Design.md), 실행 이력은
+> [현황서 §12](BizNode_Search_Layer_현황서.md) 가 정본입니다.
 
 > 📌 **파일 이름이 `Search_Layer` 지만 내용은 검색 + 챗봇 둘 다입니다.** 챗봇(`/ask`)이
 > 같은 파이프라인 위에 얹혀 있어 따로 떼면 경계가 안 보입니다. 파일명은 다른 문서들이
@@ -152,8 +165,8 @@ AskResponse   answer · sources · anchor_source
 └──────────────────────┬────────────────────────────┘
                        │  RetrieveResponse
 ┌──────────────────────▼────────────────────────────┐
-│  Answer Layer  (AnswerService · POST /ask)         │
-│  재료 → LLM 답변 + evidence_id 화이트리스트 검증     │
+│  Answer Layer  (ask_graph · LangGraph · POST /ask) │
+│  재료 → Agent 도구 → LLM 답변 + 화이트리스트 검증    │
 │  「재료 밖은 인용하지 못하게 가둔다」                 │
 └───────────────────────────────────────────────────┘
 ```
@@ -166,8 +179,12 @@ AskResponse   answer · sources · anchor_source
 ```text
 백엔드   ──HTTP──→  POST /retrieve  ──→  RetrieveService.retrieve()
 추론담당 ──직접 import──────────────────↗
-백엔드   ──HTTP──→  POST /ask       ──→  AnswerService.ask()
+백엔드   ──HTTP──→  POST /ask       ──→  ask_graph.run_ask()
 ```
+
+★**`/ask` 의 실행 주체는 LangGraph 그래프입니다**(2026-08-27 이식 · 09-04 1차 경로 삭제).
+노드 13개와 조건부 엣지 둘로 되어 있고, 그 안에서 Agent 가 도구를 골라 재료를 더 모읍니다.
+구조는 [Agent 아키텍처 §5](BizNode_Agent_Architecture_Design.md) 를 보세요.
 
 `/retrieve`·`/ask` 라우트에는 로직이 없습니다 — **어댑터**입니다. 로직을 라우트에 넣으면
 두 입구가 다르게 동작합니다.
@@ -184,7 +201,7 @@ flowchart TD
     BE["백엔드"] -->|HTTP| ASK["POST /ask<br/>(어댑터)"]
     BE -->|HTTP| RT["POST /retrieve<br/>(어댑터)"]
     INF["추론 계층"] -.->|직접 import| RS
-    ASK --> AS["AnswerService"]
+    ASK --> AS["ask_graph<br/>(LangGraph · Agent 루프)"]
     AS --> RS["RetrieveService"]
     RT --> RS
 
@@ -400,10 +417,14 @@ SearchRequest   query · workspace_keys · …      ★Search Layer. 무수정
 [규칙 3](#1-4-이-문서-전체를-관통하는-규칙-여섯)(실패를 통과와 구별한다) 위반입니다 —
 처리는 [16-2](#16-2-workspace_keys-가-비어-있을-때)입니다.
 
-★**강제는 서비스에서 합니다** (2026-08-26 구현). 코드의 `AskRequest` 는 `workspace_keys`
+> 🔴 **이 항목은 폐기됐습니다 (2026-09-01).** 빈 `workspace_keys` 를 **거부하지 않고**
+> Global Search + Global Ranking 으로 답합니다([16-2](#16-2-workspace_keys-가-비어-있을-때)).
+> 거부하던 `guard_workspace` 노드는 코드에서 제거됐고, 거부를 수행하던 `AnswerService` 도
+> 2026-09-04 에 삭제됐습니다.
+
+~~★**강제는 서비스에서 합니다** (2026-08-26 구현). 코드의 `AskRequest` 는 `workspace_keys`
 를 `default_factory=list` 로 받아 **스키마에서는 빈 값이 통과**하지만, `AnswerService.ask()`
-가 **검색 전에** 거부합니다([16-2](#16-2-workspace_keys-가-비어-있을-때)). 스키마 레벨
-422 로 올릴지는 아직 정하지 않았습니다.
+가 **검색 전에** 거부합니다. 스키마 레벨 422 로 올릴지는 아직 정하지 않았습니다.~~
 
 ### ★Query anchor 와 Workspace context 는 **다른 것**이다 (2026-08-23 확정)
 
@@ -595,7 +616,7 @@ SearchMode.RELATIONSHIP  ─┴─→  MatchType.EXACT
 SearchMode.SEMANTIC      ────→  MatchType.SEMANTIC
 ```
 
-`AnswerService` 가 이 값을 읽어 프롬프트 맨 앞에 「검색 방식」 줄을 찍고, SEMANTIC 이면
+`app/llm/prompt.py` 가 이 값을 읽어 프롬프트 맨 앞에 「검색 방식」 줄을 찍고, SEMANTIC 이면
 LLM 에게 조심해서 말하라고 지시합니다([15-2](#15-2-답변-규약--지키게-하려는-것)).
 
 ### ★계약 변경 — `anchors[]` 와 `anchor_source` (2026-08-25 확정)
@@ -760,7 +781,7 @@ Event '노조 설립'   e.evidence_ids = [현대오토에버 ×2, SK하이닉스
 
 ★**순서를 바꾸면 안 되는 이유** — Insight 를 먼저 하고 근거를 나중에 찾으면 「결론을 정해
 놓고 근거를 고르는 것」이 됩니다. 지금 구조가 이미 이 순서를 강제합니다
-(`AnswerService.ask()` 가 `retrieve()` 를 **먼저** 부릅니다) — **유지 대상**입니다.
+(그래프의 `search`·`plan_material` 노드가 Agent 앞에 있습니다) — **유지 대상**입니다.
 
 ---
 
@@ -773,7 +794,7 @@ Event '노조 설립'   e.evidence_ids = [현대오토에버 ×2, SK하이닉스
 | **Graph** — 「어떤 기업과 어떤 기업 사이에 어떤 관계가 있는가」 | Neo4j 엣지 12종 · 11,060건 · **근거 보유율 100%** · `graph_service._relation()` 이 신선도·근거검증·점수를 적용해 거른다 | ✅ **일치.** 관계는 그래프에만 있고 다른 곳에서 만들어지지 않는다 |
 | **Event** — 「기업과 관련해 어떤 사건이 발생했는가」 | `Event` 1,058개 · `event_type` 12종 · `is_risk` 별개 축 · **여러 기업이 공유**(2곳 이상 85건) · 기업별 연결은 `HAS_EVENT` | ✅ **일치** |
 | **Evidence** — 「Graph Fact 또는 Event 를 무엇이 뒷받침하는가」 | ChromaDB `evidence` 10,510건 + PG `news_articles`·`documents`. id 가 세 저장소에서 같은 값 | ✅ **일치.** 원문은 우리가 요약하지 않은 것이다 |
-| **LLM** — 「검색된 구조와 근거로 설명한다」 | `AnswerService` 가 `RetrieveResponse` 만 재료로 받고 새 조회를 하지 않는다 | ✅ **일치** |
+| **LLM** — 「검색된 구조와 근거로 설명한다」 | 🔴 **2026-09-04 개정.** `AnswerService` 는 삭제됐고, 그래프 안에서 **Agent 가 도구 7종으로 재료를 더 모읍니다**(`get_relations`·`get_events`·`search_news` 등) | 🔴 **부분 불일치** — 「새 조회를 하지 않는다」는 더 이상 참이 아닙니다. 대신 `scope` 가 **재료 기업 밖 조회를 거부**해 경계를 지킵니다 |
 
 ### 9-2. 노드·엣지별 책임 — 확정
 
@@ -1565,8 +1586,15 @@ anchor_source  "unresolved"
 
 ### 15-1. 조립
 
+> 🔴 **이 흐름은 폐기됐습니다 (2026-09-04).** `AnswerService.ask()` 는 삭제됐고 `/ask` 는
+> `ask_graph.run_ask()` 로 돕니다. **아래를 그때의 설계 기록으로 남깁니다** — 답변 규약과
+> 화이트리스트 검증(15-2 이하)은 그대로 살아 있고, 바뀐 것은 **누가 그 순서를 실행하는가**
+> 입니다. 현재 노드 배선은
+> [Agent 아키텍처 §5](BizNode_Agent_Architecture_Design.md), 폐기 경위는
+> [현황서 §12](BizNode_Search_Layer_현황서.md) 2026-09-04 항목입니다.
+
 ```text
-AnswerService.ask(request)
+AnswerService.ask(request)          🔴 폐기 (2026-09-04)
     │
     ├─ workspace_keys 확인 (16절)                  비어 있으면 거부
     │     고정 문구 + sources=[] + anchor_source="unresolved" (16-2)
@@ -1818,7 +1846,7 @@ anchor_source  "unresolved"
 | 엣지 12종 정의 | `pipeline/ontology.EDGE_TYPES` | `SearchRequest` 검증 · QueryRouter |
 | 노드 5종 정의 | `pipeline/validators/matrix.NODE_TYPES` | `EntityType` (assert 로 일치 강제) |
 | 벡터 저장소 추상화 | `pipeline/vectorstore/` | ChromaRepository |
-| LLM 호출 | `pipeline/llm.ask_json()` — 스키마 강제 + **실패를 통과와 구별** | AnswerService |
+| LLM 호출 | `pipeline/llm.ask_json()` — 스키마 강제 + **실패를 통과와 구별** | `app/llm/adapter.py` 가 감싼다 |
 | 낱말 겹침 | `pipeline/token_overlap.overlap()` · `sentence_tokens()` | `claim_check` · `batch/audit/grounding.py` |
 
 ★`token_overlap.tokens()`(기본 토크나이저)의 **동작을 바꾸면 안 됩니다** —
