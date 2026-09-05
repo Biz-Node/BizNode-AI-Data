@@ -1,45 +1,64 @@
-"""수동 시험 — 만든 것을 손으로 돌려 본다.
+"""수동 시험 — 만든 것을 손으로 돌려 본다. **서버 실행도 여기 있다.**
 
-★**모드마다 비용이 다르다.** LLM 을 부르는 것은 `ask` **하나뿐**이다.
+╔══════════════════════════════════════════════════════════════════════╗
+║  PY=.venv-wsl/bin/python        ← ★이것부터. 다른 파이썬으로는 안 된다  ║
+╚══════════════════════════════════════════════════════════════════════╝
 
-    PY=.venv-wsl/bin/python          ← ★**이것부터 읽으세요** (아래 설명)
+    $PY run_test.py check                    ★먼저 이것 — 돌 수 있는 상태인가   1초
+    $PY run_test.py serve                    API 서버 (/docs · /preview)
 
-    $PY run_test.py                          모드 목록
-    $PY run_test.py anchor "질문"             앵커가 어느 갈래로 가나      무료
-    $PY run_test.py search "질의"             검색 계층만                  무료
-    $PY run_test.py global "질문"             ★전역 사건 검색만            무료
-    $PY run_test.py retrieve "질문"           ★재료 조립 끝까지            무료
-    $PY run_test.py tools 삼성전자             도구 7종을 직접 부른다        무료
-    $PY run_test.py ask "질문"                ★Agent 루프 끝까지           LLM 호출
+    $PY run_test.py anchor   "질문"           앵커가 어느 갈래로 가나     무료  20초
+    $PY run_test.py search   "질의"           검색 계층만                무료  20초
+    $PY run_test.py global   "질문"           전역 사건 검색만            무료  15초
+    $PY run_test.py retrieve "질문"           재료 조립 끝까지            무료  25초
+    $PY run_test.py tools    삼성전자          도구 7종을 직접 부른다       무료  17초
+    $PY run_test.py ask      "질문"           Agent 루프 끝까지        ★LLM  1~2분
 
-★**얼마나 걸리나 — 빈 화면은 고장이 아닙니다**(2026-09-05 실측).
+  앞의 다섯이 **무료**인 것이 중요하다 — 도구가 무엇을 돌려주는지, 앵커가 어디로
+  가는지, 앵커 없는 질문에 무슨 사건이 잡히는지는 LLM 없이 전부 확인된다.
+  `ask` 는 「Agent 가 그 도구들을 **실제로 골라 부르는가**」를 볼 때만 쓴다.
 
-    모듈 적재     10초쯤   kiwipiepy 모델 105MB + chromadb  ← 첫 실행이 특히 느리다
-    anchor        20초     search        20초
-    global        15초     retrieve      25초
-    ask         1~2분      Agent 루프 + LLM
+──────────────────────────────────────────────────────────────────────
+  ★빈 화면은 고장이 아니다 — 무엇이 얼마나 걸리나 (2026-09-05 실측)
+──────────────────────────────────────────────────────────────────────
 
-  진행은 `…` 줄과 INFO 로그로 나갑니다(둘 다 `stderr`). **아무 표시도 없이 멈춰
-  있으면** 그때가 진짜 이상한 것이고, 예외로 끝나면 `_diagnose()` 가 어느
-  컨테이너가 죽었는지 짚어 줍니다.
+    모듈 적재   10초쯤   kiwipiepy 모델 105MB + chromadb   ← 첫 실행이 특히 느리다
+    그 뒤       위 표    저장소 왕복과 LLM
 
-★**`python run_test.py` 로는 안 돕니다** — 셋 다 막힙니다(2026-09-05 실측).
+  진행은 `… ` 줄과 INFO 로그로 **`stderr` 에** 나간다. 그래서
 
-    python  …   command not found            그런 명령이 없다
-    python3 …   ModuleNotFoundError: dotenv  시스템 파이썬엔 의존성이 없다
-    .venv/  …   PE32+ MS Windows 실행파일     WSL 에서 실행 자체가 안 된다
+      $PY run_test.py retrieve "질문" > 결과.txt     ← 결과만 파일로, 진행은 화면에
 
-  `.venv-wsl` 하나만 됩니다(현황서 §13-2 — 프로젝트 `.venv` 는 Windows 네이티브라
-  WSL 에서 Docker DB 에 붙으면 핸드셰이크에서 리셋된다). 없으면 만듭니다:
+  가 된다. **아무 표시도 없이 멈춰 있으면** 그때가 진짜 이상한 것이다.
+  예외로 끝나면 `_diagnose()` 가 **어느 컨테이너가 죽었는지** 짚어 준다.
 
-      uv venv .venv-wsl --python 3.10
-      uv pip install --python .venv-wsl/bin/python -r requirements.txt pytest
+──────────────────────────────────────────────────────────────────────
+  ★안 될 때 — 순서대로 (오늘 실제로 다 겪은 것들)
+──────────────────────────────────────────────────────────────────────
 
-  앞의 다섯이 무료인 것이 중요하다 — 도구가 무엇을 돌려주는지, 앵커가 어디로
-  가는지, **앵커 없는 질문에 무슨 사건이 잡히는지**는 LLM 없이 전부 확인된다.
-  `ask` 는 「Agent 가 그 도구들을 실제로 골라 부르는가」를 볼 때만 쓰면 된다.
+  ① 명령 자체가 없다      `python` 은 이 환경에 없다. `python3` 는 의존성이 없다.
+                         `.venv` 는 **PE32+ Windows 실행파일**이라 WSL 에서 안 돈다.
+                         → `.venv-wsl` 하나만 된다. 없으면:
 
-★**앵커 없는 질문**(「최근 주요 투자 이벤트가 뭐야?」)을 볼 때의 순서 (2026-09-02)
+                             uv venv .venv-wsl --python 3.10
+                             uv pip install --python .venv-wsl/bin/python \
+                                 -r requirements.txt pytest ruff
+
+  ② 저장소가 죽었다       `$PY run_test.py check` 가 1초에 알려 준다.
+                         재시작 **직후**에도 몇 초는 거부한다 — `check` 로 확인.
+
+                             docker compose up -d
+                             docker ps --filter name=biznode
+
+  ③ 한글이 깨진다        `stdout`·`stderr` 를 둘 다 utf-8 로 돌린다(아래 코드).
+                         전에는 `stdout` 만 돌려서 **traceback 이 통째로** 안 보였다.
+
+  ④ 로그가 안 보인다      `configure_logging()` 을 여기서 부른다(아래 코드).
+                         전에는 `app/api/main.py` 만 불러서 수동 실행에는 안 나왔다.
+
+──────────────────────────────────────────────────────────────────────
+  ★앵커 없는 질문을 볼 때의 순서 (2026-09-02)
+──────────────────────────────────────────────────────────────────────
 
     ① anchor    → `anchor_source` 가 `anchorless` 로 나오나
                   ★여기서 `query` 가 나오면 그 아래는 볼 것도 없다 —
@@ -134,6 +153,89 @@ def _step(text: str) -> None:
       `> out.txt` 로 결과만 받을 때 진행 표시가 섞이지 않는다.
     """
     print(f"  … {text}", file=sys.stderr, flush=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  check — ★**돌리기 전에 1초 만에** 되는 상태인지 본다 (무료)
+# ══════════════════════════════════════════════════════════════════
+
+
+_PROBES = [
+    ("Neo4j",      "NEO4J_URI",     "bolt://localhost:7687", 7687),
+    ("PostgreSQL", "POSTGRES_HOST", "localhost",             5432),
+    ("Chroma",     "CHROMA_HOST",   "localhost",             8001),
+    ("Redis",      "REDIS_HOST",    "localhost",             6379),
+]
+
+
+def cmd_check(args) -> None:
+    """저장소 넷과 API 키가 있는지만 본다. ★**무거운 import 를 하지 않는다.**
+
+    ★이 모드가 생긴 이유(2026-09-05). 컨테이너가 재시작하는 중에 `ask` 를 돌려
+      24초를 기다렸다가 예외로 끝나는 일이 실제로 있었다. 그때 알고 싶은 것은
+      「내 코드가 깨졌나」가 아니라 **「지금 돌릴 수 있는 상태인가」** 하나였다.
+
+    ★`app.services` 를 부르지 않는다 — 그쪽을 import 하는 순간 kiwipiepy 모델
+      105MB 를 읽느라 10초가 든다. 여기서는 **소켓만 두드린다.**
+    """
+    import os
+    import socket
+    from urllib.parse import urlparse
+
+    _head("환경 점검  (무거운 import 없음 · 1초)")
+    bad = []
+    for label, env, default, port in _PROBES:
+        raw = os.getenv(env, default)
+        host = urlparse(raw).hostname if "://" in raw else raw
+        if env == "NEO4J_URI":
+            port = urlparse(raw).port or port
+        else:
+            port = int(os.getenv(env.replace("_HOST", "_PORT"), port))
+        try:
+            with socket.create_connection((host, port), timeout=1.5):
+                print(f"  ✅ {label:12} {host}:{port}")
+        except OSError as exc:
+            bad.append(label)
+            print(f"  ❌ {label:12} {host}:{port}  — {exc.__class__.__name__}")
+
+    print()
+    for label, env in (("OpenAI", "OPENAI_API_KEY"), ("DART", "DART_KEY")):
+        got = os.getenv(env)
+        print(f"  {'✅' if got else '❌'} {label:12} {env}"
+              f"{' (…' + got[-4:] + ')' if got else ' — .env 에 없다'}")
+
+    if bad:
+        print(f"\n  ★{' · '.join(bad)} 가 응답하지 않는다. 컨테이너부터 보라:")
+        print("      docker ps --filter name=biznode")
+        print("      docker compose up -d")
+        raise SystemExit(1)
+    print("\n  ★전부 정상 — 아래 수동 시험이 돌 수 있는 상태다.")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  serve — ★API 서버를 로그와 함께 띄운다
+# ══════════════════════════════════════════════════════════════════
+
+
+def cmd_serve(args) -> None:
+    """`app.api.main:app` 을 띄운다. **저장소에 서버 실행법이 없어서** 여기 둔다
+    (2026-09-05) — `app/api/main.py` 머리말의 `uvicorn …` 한 줄이 전부였다.
+
+    ★`--reload` 를 기본으로 켜지 않는다. 켜면 uvicorn 이 프로세스를 하나 더
+      띄우고, 그 자식이 모듈을 다시 import 하느라 **기동이 두 배**로 든다
+      (kiwipiepy 10초 × 2). 코드를 고치며 볼 때만 `--reload` 로 켠다.
+    """
+    import uvicorn
+
+    _head(f"API 서버 — http://127.0.0.1:{args.port}")
+    print(f"  문서      http://127.0.0.1:{args.port}/docs")
+    print(f"  미리보기   http://127.0.0.1:{args.port}/preview")
+    print(f"  헬스체크   http://127.0.0.1:{args.port}/health")
+    print("\n  ★기동에 10초쯤 걸린다 — kiwipiepy 모델(105MB)을 읽는다.")
+    print("    `Application startup complete.` 가 뜨면 준비된 것이다.")
+    print("    멈추려면 Ctrl+C.\n")
+    uvicorn.run("app.api.main:app", host=args.host, port=args.port,
+                reload=args.reload, log_level="info")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -627,6 +729,16 @@ def main() -> None:
     context_opt.add_argument("--context", nargs="*", default=[],
                              help="지금 보고 있는 기업 corp_code (기업 상세 화면이 넘기는 값)")
 
+    p = sub.add_parser("check", help="★환경 점검 — 저장소 넷과 키 (무료 · 1초)")
+    p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("serve", help="★API 서버를 띄운다 (/docs · /preview)")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--reload", action="store_true",
+                   help="코드를 고치며 볼 때. 기동이 두 배 든다")
+    p.set_defaults(func=cmd_serve)
+
     p = sub.add_parser("anchor", parents=[workspace_opt, context_opt],
                        help="앵커가 어느 갈래로 가나 (무료)")
     p.add_argument("question")
@@ -668,7 +780,9 @@ def main() -> None:
         return
     # ★여기서 알려야 한다 — 아래 `args.func()` 안의 첫 줄이 **12초짜리
     #   import** 라, 이 줄이 없으면 그동안 화면이 통째로 빈다.
-    _step("모듈 적재 — kiwipiepy 모델(105MB)과 chromadb 를 읽는다 · 10초쯤")
+    if args.mode not in ("check", "serve"):
+        # ★`check` 는 소켓만 두드리고 `serve` 는 자기 안내를 따로 찍는다.
+        _step("모듈 적재 — kiwipiepy 모델(105MB)과 chromadb 를 읽는다 · 10초쯤")
     try:
         args.func(args)
     except Exception as exc:
