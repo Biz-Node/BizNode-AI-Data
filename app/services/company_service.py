@@ -421,8 +421,31 @@ def market_of(key: str, days: int = 30) -> dict:
 
 # ★상세의 관계 목록에 나가는 유형과 상한. **그래프도 이걸 그대로 쓴다** —
 #   목록과 그림이 각자 기준으로 뽑으면 어긋난다.
+#
+# ★계약은 **「`EdgeType` 에서 사건 축 둘(HAS_EVENT·IMPACTS)을 뺀 전부」**다.
+#   사건은 관계 목록이 아니라 `events_of()` 가 받으므로 그 둘만 빠진다.
+#   `tests/services/test_relation_types.py` 가 여집합으로 묶어 둔다 — 열거로만
+#   두면 새 `EdgeType` 이 생겼을 때 아무도 여기를 안 고치고, 그 유형은 **어느
+#   경로로도 재료에 못 들어온다.**
+#
+# ★`IS_EXECUTIVE_OF`·`DEVELOPS` 가 실제로 그렇게 빠져 있었다(2026-09-06 실측 ·
+#   현황서 §6-0 A-8 §13①). 둘이 엣지 2,837건 = **그래프의 25.4%** 이고, 하필
+#   Person 의 정의 엣지와 Product 의 정의 엣지다. 증상은 앵커와 무관했다 —
+#   앵커가 완벽히 잡힌 질의에서도 이랬다:
+#
+#       "삼성전자 임원이 누구야?"      → relations = OWNS_STAKE_IN ×10.  임원 0건
+#       "삼성전자가 개발하는 제품은?"  → relations = OWNS_STAKE_IN ×10.  제품 0건
+#
+#   ★**그래프는 이미 그리고 있었다** — `company_graph` 가 삼성전자에서
+#     `IS_EXECUTIVE_OF ×5`·`DEVELOPS ×5` 를 그리는데 목록은 담을 수가 없어,
+#     바로 위 「목록과 그림이 어긋나면 안 된다」가 그 두 유형에서만 깨져 있었다.
+#   ★**품질을 이유로 뺀 것이 아니다** — 필터 통과율이 이미 편입된 유형과 같다
+#     (DEVELOPS 85.3% · SUPPLIES_TO 85.8%). 뉴스 `DEVELOPS` 의 오추출은
+#     `graph_tools._caution_of` 가 경고로 표시한다 — 그 분기가 지금까지
+#     **한 번도 안 돌던** 죽은 코드였다.
 _REL_TYPES = ('SUPPLIES_TO', 'PARTNERS_WITH', 'COMPETES_WITH', 'ACQUIRES',
-              'SUES', 'DEPENDS_ON', 'OWNS_STAKE_IN', 'REGULATES')
+              'SUES', 'DEPENDS_ON', 'OWNS_STAKE_IN', 'REGULATES',
+              'IS_EXECUTIVE_OF', 'DEVELOPS')
 _REL_LIMIT = 30
 
 _REL_Q = f"""
