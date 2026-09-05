@@ -245,7 +245,18 @@ class Evidence(BaseModel):
         examples=["공급 관계 — 공급자: SFA반도체 / 수요자: 삼성전자(주) "
                   "계약유형: 공급계약 / 체결: 1999-01 "
                   "목적·내용: BOC 등 계약제품에 대한 안정적인 생산 공급"])
-    source_doc: str = Field(description="DART 접수번호 또는 기사 URL. **되짚을 수 있는 값**",
+    # ★**화면이 링크를 만드는 규칙**(2026-09-05). 두 형식이 섞여 오므로 그대로
+    #   `href` 에 넣으면 공시가 깨진 링크가 된다. 실측 — 엣지 10,970건 중
+    #   URL 8,294(75.6%) · 접수번호 2,676(24.4%)이고, **관계 종류마다 비율이 다르다**:
+    #       IMPACTS·HAS_EVENT·COMPETES_WITH   URL 100%
+    #       PARTNERS_WITH 97% · SUPPLIES_TO 83% · DEPENDS_ON 81%
+    #       OWNS_STAKE_IN **28%** ← 지분은 공시에서 오므로 대부분 접수번호다
+    #
+    #       숫자만이면   → https://dart.fss.or.kr/dsaf001/main.do?rcpNo={값}
+    #       그 밖        → `news:` 접두를 떼고 그대로 연다
+    source_doc: str = Field(description="DART 접수번호 또는 기사 URL. **되짚을 수 있는 값.** "
+                                        "숫자만이면 공시 접수번호이므로 화면이 "
+                                        "`dart.fss.or.kr/dsaf001/main.do?rcpNo=` 를 붙여 연다",
                             examples=["20260323000826"])
     # ★`Relation.source_type` 과 **같은 3값**이다. 여기만 2값이면 엣지에 실재하는
     #   `dart_filing` 113건이 근거로 올라올 때 검증에서 튕긴다.
@@ -277,6 +288,14 @@ class Propagation(BaseModel):
     channel: Optional[str] = Field(
         None, description="무엇을 타고 왔나 — `supply`(공급 차질) · `demand`(매출 상실)",
         examples=["supply"])
+    # ★`path` 는 **사람이 읽는 설명**이고 `edge_ids` 는 **되짚을 수 있는 열쇠**다.
+    #   경로를 문자열로만 주면 화면이 「그래프에서 이 선 보기」를 만들 수 없다 —
+    #   말로만 「마이크론을 거쳐 왔다」고 하고 확인은 못 하게 되는 셈이다.
+    #   1홉이면 IMPACTS 하나, 2홉이면 IMPACTS + SUPPLIES_TO 둘이 들어온다.
+    edge_ids: list[str] = Field(
+        default_factory=list,
+        description="이 경로를 이루는 관계들의 `edge_id`. `/relations/{edge_id}` 로 연다",
+        examples=[["5:abc:11", "5:abc:42"]])
     path: list[str] = Field(
         default_factory=list, description="어떤 관계를 타고 닿았는지. **화면이 그대로 보여 준다**",
         examples=[["모트라스 파업", "IMPACTS(negative)", "현대차",
@@ -806,6 +825,15 @@ class InsightKind(str, Enum):
     sector_concentration = "sector_concentration"  # 업종 쏠림
     no_overlap = "no_overlap"                      # 겹치는 게 없다
 
+    # ── 2026-09-04 신설 — **시점이 있는** 카드들
+    #
+    # ★위 8종 중 6종이 «구조»라 어제와 오늘이 같았다. 홈 화면인데 매일 같은
+    #   카드가 나온다. 아래 넷은 전부 날짜가 붙어 화면이 실제로 움직인다.
+    inbound_risk = "inbound_risk"                  # ★담지 «않은» 곳의 사건이 담은 곳까지
+    event_ongoing = "event_ongoing"                # 국면이 진행 중인 사건
+    bottleneck = "bottleneck"                      # 여럿이 한 중간 노드를 거친다
+    contract_expiring = "contract_expiring"        # 관계 만료가 다가온다
+
 
 # ★`why` 를 반드시 함께 보낸다. **왜 그렇게 봤는지 없이 결론만 주면
 #   사용자가 검증할 방법이 없다.**
@@ -870,6 +898,25 @@ class InsightCard(BaseModel):
     stated: Optional[bool] = Field(
         None, description="`false` 면 **기사에 없고 우리가 계산한 것**이다")
     path: list[str] = Field(default_factory=list, description="어느 관계를 타고 닿았나")
+
+    # ── 카드를 눌렀을 때 어디로 가나 (2026-09-03 신설)
+    #
+    # ★**결론만 주면 사용자가 검증할 수 없다**는 `why` 의 취지를 화면까지 잇는다.
+    #   `why` 는 숫자로 된 근거고, 이 필드들은 **원문으로 가는 열쇠**다.
+    #   새 엔드포인트를 만들지 않는다 — 이미 있는 것을 가리키기만 한다:
+    #
+    #       edge_ids  → GET /relations/{edge_id}   근거 원문 · 기사 · 파급
+    #       event_id  → GET /events/{event_id}/impact
+    #       keys      → GET /companies/{key}/graph  서브그래프에서 강조
+    #
+    # ★`edge_ids` 가 비어 있는 카드도 있다(`sector_concentration`·`no_overlap`).
+    #   그건 관계가 아니라 **속성·부재**에서 나온 카드라 원문이 없다. 빈 배열이
+    #   맞고, 화면은 그때 「근거 보기」를 감춘다.
+    edge_ids: list[str] = Field(
+        default_factory=list,
+        description="**근거로 가는 열쇠.** `GET /relations/{edge_id}` 에 그대로 넣으면 "
+                    "이 카드가 선 원문·기사·파급이 나온다. 관계에서 나온 카드만 채워진다",
+        examples=[["4:9f2c:1821", "4:9f2c:1902"]])
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -17,7 +17,7 @@
 docker compose up -d
 
 # 2) 가상환경 세팅 후 API 를 띄운다
-python -m uvicorn app.api.main:app --port 8100
+python -m uvicorn app.api.main:app --port 8100 --reload
 ```
 
 ```
@@ -104,6 +104,104 @@ POST /insights  {keys: [...]}           인사이트 카드 (워크스페이스�
 ```
 
 「최근 활동」은 백엔드 것입니다(사용자 데이터).
+
+### 인사이트 카드 — 눌러서 근거까지 (2026-09-05 개정)
+
+카드는 **한 번의 호출로 완성**됩니다. 추가 호출은 **누를 때만** 합니다.
+
+```
+POST /insights {keys, limit}            ← 카드 12장. 이 응답만으로 목록이 그려집니다
+      ↓ 카드를 누르면
+GET  /relations/{edge_id}               ← 기사·공시 원문 (카드의 edge_ids 개수만큼)
+GET  /events/{event_id}/impact          ← 영향받는 기업 (사건 카드만)
+      ↓ 기업 이름을 누르면
+GET  /companies/{key}                   ← 유일한 «페이지 이동»
+```
+
+★**새 엔드포인트는 없습니다.** 카드에 `edge_ids` 가 생겨서 기존 상세 라우트로
+이어지는 것뿐입니다.
+
+#### 카드 종류 12개 — 축 다섯
+
+| 축 | `kind` | 문안 예시 |
+|---|---|---|
+| 사건 | `inbound_risk` ★신설 | 레인보우로보틱스에 악재로 작용했습니다 |
+| | `cascade_risk` | SK하이닉스에서 한미반도체로 번질 수 있습니다 |
+| | `shared_risk` | 8곳 중 2곳이 걸려 있습니다 |
+| 진행 | `event_ongoing` ★신설 | 3단계까지 진행됐습니다 |
+| 예정 | `contract_expiring` ★신설 | 뉴로메카–포스코 거래가 3개월 뒤 끝납니다 |
+| 구조 | `bottleneck` ★신설 | 8곳 중 4곳이 엔비디아를 통해 납품합니다 |
+| | `shared_customer` · `shared_supplier` · `shared_owner` | 8곳 중 5곳이 납품합니다 — 반도체 장비 |
+| | `internal_competition` · `sector_concentration` | 워크스페이스 안에서 4쌍이 서로 경쟁합니다 |
+| 공백 | `no_overlap` | 이 8곳은 서로 겹치는 것이 없습니다 |
+
+★신설 넷은 **전부 시점이 있습니다.** 기존 카드가 구조 위주라 홈이 어제와
+오늘이 같았습니다. `kind` 를 모르는 값으로 받아도 죽지 않게 기본 렌더러를
+두세요 — 종류는 앞으로도 늘어납니다.
+
+#### `edge_ids` — 근거로 가는 열쇠
+
+```jsonc
+{ "kind": "bottleneck", "subject": "엔비디아",
+  "headline": "8곳 중 4곳이 엔비디아를 통해 납품합니다 — TC본더 · HBM",
+  "why": "마이크론, 코닝으로 가는 거래가 모두 엔비디아를 지납니다 · 거래 상대 34곳",
+  "keys": ["00161383", "01105153"],      // 걸린 기업. 눌러서 기업 상세로
+  "edge_ids": ["5:...:1", "5:...:2"],    // ★GET /relations/{edge_id} 에 그대로
+  "event_id": null }
+```
+
+★**`edge_ids` 가 빈 카드가 있습니다** — `sector_concentration` · `no_overlap` ·
+`event_ongoing`. 관계가 아니라 **분류·부재·국면**에서 나온 카드라 인용할 원문이
+없습니다. 「근거 없음」이 아니라 **근거의 종류가 다른 것**이므로, 「원문이
+없습니다」로 쓰지 말고 **어떻게 셌는지**를 보여 주세요:
+
+```
+sector_concentration → 표준산업분류(KSIC) 중분류로 묶어 셌습니다 · 8곳 중 8곳 일치
+no_overlap           → 거래·지분·사건·업종 네 축으로 찾았고 겹치는 대상이 없습니다
+cascade_risk         → 공급 관계를 따라 계산 · 점수 0.066 · 기사에 없는 추정
+```
+
+#### 출처 링크는 두 형식입니다
+
+`evidence[].source_doc` 이 **URL 이거나 DART 접수번호**입니다. 그대로 `href` 에
+넣으면 공시가 깨진 링크가 됩니다.
+
+```js
+/^\d+$/.test(v) ? `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${v}`
+                : v.replace(/^news:/, '')
+```
+
+실측(2026-09-05): 엣지 10,970건 중 URL 75.6% · 접수번호 24.4%. **관계 종류마다
+다릅니다** — `IMPACTS`·`HAS_EVENT` 는 URL 100%, `OWNS_STAKE_IN`(지분)은 **28%**.
+지분 카드에서 바로 걸립니다.
+
+#### 파급 경로를 **그래프에서 보기**
+
+`Propagation.path` 는 사람이 읽는 설명이고, 같이 오는 `edge_ids` 가 **되짚을
+수 있는 열쇠**입니다. `path` 는 `[노드, 관계, 노드, 관계, 노드]` 꼴이라
+**홀수 자리가 관계**이고, `edge_ids` 가 그 순서로 옵니다.
+
+```
+사건 → IMPACTS(negative) → 마이크론 → SUPPLIES_TO(공급 차질) → 한미반도체
+        edge_ids[0]                    edge_ids[1]
+```
+
+★**엣지 하나를 그래프에서 보려고 새 API 를 만들 필요가 없습니다.**
+`POST /workspace/graph` 를 **그 엣지의 양 끝 두 곳**으로 부르면 됩니다 —
+캔버스 규칙이 「담긴 기업끼리 직접 이어진 엣지는 언제나 포함」이라 반드시
+그려집니다(실측: 양끝이 기업인 엣지 46/46 포함).
+
+```js
+const { relation } = await get(`/relations/${edgeId}`);
+await post('/workspace/graph', { keys: [relation.source.key, relation.target.key] });
+```
+
+워크스페이스 전체 키로 부르면 **안 담깁니다**(실측 50개 중 23개). 캔버스는
+담은 기업끼리만 그리므로 엔비디아·국민연금공단 같은 바깥 상대는 빠집니다.
+`max_nodes` 를 올려도 소용없습니다.
+
+★한계 — `IMPACTS`(사건→기업)는 출발이 Event 라 이 방법이 안 됩니다.
+사건의 확산은 `/events/{id}/impact` 가 담당합니다.
 
 ### 워크스페이스 — 핵심 화면
 
@@ -317,6 +415,14 @@ stated = false   우리가 공급망을 타고 계산했다
 ```
 모트라스 파업 → IMPACTS(negative) → 현대차 → SUPPLIES_TO(공급 차질) → 현대차증권
 ```
+
+★**추정을 기본으로 펼치지 마세요.** 실측(2026-09-05, 「삼성전자 본사 압수수색」):
+94곳 = 보도 2 + 추정 92이고 추정의 **점수 중앙값이 0.13**입니다. 전량을 뿌리면
+목록이지 인사이트가 아닙니다. 보도는 먼저 펼치고, 추정은 접어서 상위 8곳
+정도만 보여 주세요.
+
+★`edge_ids`(2026-09-05 신설)로 **경로의 각 관계를 열 수 있습니다.** 「마이크론을
+거쳐 왔다」고 해놓고 확인할 길이 없으면 사용자가 계산을 믿지 못합니다.
 
 ### ⑥ `freshness` — 오래된 관계를 지우지 않습니다
 

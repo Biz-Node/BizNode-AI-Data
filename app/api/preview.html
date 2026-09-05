@@ -86,6 +86,30 @@
             background: #0f1115; color: #d7dbe0; padding: 10px; border-radius: 6px; }
   .bar { height: 6px; background: #eef1f5; border-radius: 99px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent); }
+
+  /* ── 인사이트 모달 — 카드를 누르면 열린다 ────────────────────── */
+  .modal { position: fixed; inset: 0; background: rgba(16,18,22,.45); z-index: 100;
+           display: none; align-items: flex-start; justify-content: center; padding: 40px 16px; }
+  .modal.on { display: flex; }
+  .sheet { background: var(--card); border-radius: 10px; width: min(760px, 100%);
+           max-height: calc(100vh - 80px); overflow: auto; box-shadow: 0 18px 50px rgba(0,0,0,.25); }
+  .sheet > header { position: sticky; top: 0; background: var(--card); padding: 16px 20px 12px;
+                    border-bottom: 1px solid var(--line); display: block; }
+  .sheet .x { position: absolute; right: 14px; top: 12px; border: 0; background: none;
+              font-size: 22px; cursor: pointer; color: var(--dim); line-height: 1; }
+  .sheet section { padding: 14px 20px 18px; border-bottom: 1px solid var(--line); }
+  .sheet section:last-child { border-bottom: 0; }
+  .sheet h4 { margin: 0 0 10px; font-size: 12px; color: var(--dim); letter-spacing: .04em; }
+  /* ★보도와 계산을 **눈으로 갈라야** 한다 — 섞으면 추론을 사실로 팔게 된다 */
+  .said { border-left: 3px solid var(--accent); padding-left: 10px; }
+  .calc { border-left: 3px dashed var(--dim); padding-left: 10px; }
+  .quote { background: var(--bg); border-radius: 6px; padding: 10px 12px; margin-top: 8px;
+           font-size: 13px; line-height: 1.65; }
+  .imp { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 10px; font-size: 13px;
+         padding: 5px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .imp:last-child { border-bottom: 0; }
+  .imp .p { grid-column: 1 / -1; color: var(--dim); font-size: 11px; font-family: var(--mono); }
+  .sc { font-variant-numeric: tabular-nums; font-family: var(--mono); color: var(--dim); }
 </style>
 
 <header>
@@ -153,13 +177,24 @@
   <!-- ══ 인사이트 ═══════════════════════════════════════════ -->
   <section class="pane" id="p-ins">
     <div class="row">
-      <textarea id="ik">01095722
-00164779
-00126380
-00161383</textarea>
-      <label class="chk">카드 <input type="text" id="ilim" value="5" style="min-width:50px"></label>
+      <textarea id="ik" style="min-height:110px">00161383
+01261644
+01105153
+01336461
+01686427
+01784914
+00105961
+00164779</textarea>
+      <label class="chk">카드 <input type="text" id="ilim" value="12" style="min-width:50px"></label>
       <button class="go" id="i-go">뽑기</button>
       <span class="muted" id="i-stat"></span>
+    </div>
+    <div class="hint" style="margin:-6px 0 12px">
+      기본값은 <b>로봇·반도체 장비 8곳</b>(한미반도체 · 레인보우로보틱스 · 두산로보틱스 ·
+      뉴로메카 · 에스오에스랩 · 클로봇 · LG이노텍 · SK하이닉스) —
+      2026-09-04 신설 카드(밖에서 온 위험 · 진행 중 · 병목 · 만료 임박)가 함께 나옵니다.
+      대형 허브만 보려면 <code>00126380 00164779 00401731</code>.
+      <b>카드를 눌러 근거 원문까지</b> 펼칠 수 있습니다.
     </div>
     <div id="i-body"></div>
   </section>
@@ -180,6 +215,8 @@
     <div id="n-body"></div>
   </section>
 </main>
+
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -761,7 +798,272 @@ const IKIND = {
   internal_competition: ['내부 경쟁',        'var(--person)'],
   sector_concentration: ['업종 쏠림',        'var(--product)'],
   no_overlap:           ['겹치는 것 없음',    'var(--dim)'],
+  // ★2026-09-04 신설 — **시점이 있는** 넷. 위 여섯은 구조라 어제와 오늘이 같다.
+  inbound_risk:         ['밖에서 온 위험',    'var(--event)'],
+  event_ongoing:        ['진행 중',          'var(--warn)'],
+  bottleneck:           ['병목',            'var(--trade)'],
+  contract_expiring:    ['만료 임박',        'var(--org)'],
 };
+// 시점이 있는 카드는 화면에서도 갈라 보여 준다.
+const IFRESH = new Set(['inbound_risk', 'event_ongoing', 'contract_expiring', 'bottleneck']);
+
+// ★카드 아래 「근거 보기」 줄. **새 엔드포인트를 만들지 않았다** — 카드가 들고
+//   있는 열쇠로 이미 있는 곳을 가리킬 뿐이다:
+//       edge_ids  → GET /relations/{edge_id}    근거 원문 · 기사 · 파급
+//       event_id  → GET /events/{event_id}/impact
+//   ★열쇠가 없는 카드도 있다(업종 쏠림 · 겹침 없음). 그건 관계가 아니라
+//     속성·부재에서 나온 카드라 원문이 없다 — 그때는 버튼을 감춘다.
+function drill(x, ci) {
+  // ★근거가 «없는» 카드는 없다. 인용이냐 산출이냐가 다를 뿐이라 모두 열 수 있다.
+  const bits = [];
+  if (x.edge_ids?.length) bits.push(`인용 ${x.edge_ids.length}건`);
+  else bits.push('산출 근거');
+  if (x.event_id) bits.push('영향받는 기업');
+  return `<div class="hint" style="color:var(--accent);cursor:pointer" data-open="${ci}">
+            자세히 — ${bits.join(' · ')} ▸</div>`;
+}
+
+// ★`source_doc` 은 **두 형식**이다. 그대로 href 에 넣으면 공시가 깨진 링크가 된다.
+//   실측(2026-09-05): 엣지 10,970건 중 URL 75.6% · 접수번호 24.4%.
+//   특히 `OWNS_STAKE_IN`(지분)은 URL 이 28%뿐이라 지분 카드에서 바로 걸린다.
+function srcLink(doc) {
+  if (!doc) return '';
+  const v = String(doc).replace(/^news:/, '');
+  return /^\d+$/.test(v)
+    ? `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(v)}"
+         target="_blank" rel="noopener">공시 원문 ↗</a>`
+    : `<a href="${esc(v)}" target="_blank" rel="noopener">기사 원문 ↗</a>`;
+}
+
+// 파급에서 한 번에 펼쳐 보여 줄 «추정» 개수. 나머지는 접는다.
+//   ★실측(2026-09-05) 「삼성전자 본사 압수수색」: 94곳 = 보도 2 + 추정 92.
+//     score 중앙값 0.133 으로 대부분 약하다. 전량을 뿌리면 목록이지 인사이트가 아니다.
+const CALC_TOP = 8;
+
+// ★경로를 **말로만** 두지 않는다. 경로는 실제 엣지로 이뤄져 있으니 그 자리를
+//   눌러 그래프의 그 선으로 갈 수 있어야 한다 — 「마이크론을 거쳐 왔다」고
+//   해놓고 확인할 길이 없으면 사용자는 계산을 믿을 수 없다.
+//   `path` 는 [사건, IMPACTS(...), 중간, SUPPLIES_TO(...), 도착] 꼴이고
+//   홀수 자리(1·3…)가 관계다. `edge_ids` 가 그 순서로 온다.
+function pathHtml(x) {
+  const ids = x.edge_ids || [];
+  let k = 0;
+  return (x.path || []).map((seg, i) => {
+    if (i % 2 === 0) return esc(seg);                       // 노드 이름
+    const id = ids[k++];
+    return id
+      ? `<span data-graph="${esc(id)}" style="color:var(--accent);cursor:pointer"
+              title="이 관계를 그래프에서 봅니다">${esc(seg)}</span>`
+      : esc(seg);
+  }).join(' → ');
+}
+
+function impRow(x, cls) {
+  return `<div class="imp ${cls}">
+    <span ${x.key ? `data-goto="${esc(x.key)}" style="cursor:pointer;color:var(--accent)"` : ''}>
+      ${esc(x.target)}</span>
+    <span class="tag">${x.channel === 'supply' ? '공급 차질'
+                      : x.channel === 'demand' ? '매출 상실' : `${x.hops}홉`}</span>
+    <span class="sc">${x.score.toFixed(2)}</span>
+    ${x.path?.length ? `<span class="p">${pathHtml(x)}</span>` : ''}
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  카드 모달 — 자세한 내용 · 근거 뉴스 · 영향받는 기업
+// ══════════════════════════════════════════════════════════════════
+//
+// ★세 구역을 **한 화면**에 둔다. 카드가 답하는 질문이 셋이기 때문이다:
+//     무엇이 · 왜 그렇게 봤나 · 그래서 누가 걸리나
+//
+// ★영향받는 기업은 **보도와 추정을 갈라 그린다.** 실측에서 94곳 중 92곳이
+//   우리 계산이다. 섞어 뿌리면 「압수수색이 토요타에 영향」으로 읽혀
+//   추론을 사실로 파는 셈이 된다(`Propagation.stated` 주석).
+// ★인용할 원문이 없는 카드의 근거 — **없는 게 아니라 종류가 다르다.**
+//   기사에서 따온 문장이 아니라 우리가 «어떻게 셌나»가 근거다. 그래서
+//   방법 · 입력값 · 한계를 밝힌다. 「원문이 없습니다」로 끝내면 자료가
+//   빠진 것처럼 읽혀 카드 전체의 신뢰를 깎는다.
+function basis(card) {
+  const row = (k, v) => `<div style="display:grid;grid-template-columns:88px 1fr;
+    gap:4px 12px;font-size:13px;padding:3px 0"><span class="muted">${k}</span><span>${v}</span></div>`;
+
+  if (card.kind === 'cascade_risk') {
+    return row('방법', '관계망 전파 계산 — 공급 관계를 따라 확산 경로를 찾는다')
+      + row('경로', `<span style="font-family:var(--mono);font-size:12px">
+              ${pathHtml(card)}</span>`)
+      + row('점수', `${card.score ?? '—'} <span class="muted">(허브를 지나면 약해진다)</span>`)
+      + row('판정', card.stated
+            ? '<b>기사가 직접 보도한 전파</b>'
+            : '<b>추정</b> — 기사에 없고 관계망으로 계산했다')
+      + `<div class="hint">지분·임원 관계는 위험을 실어 나르지 않는다고 보아
+           계산에서 뺍니다. 공급 관계만 씁니다.</div>`;
+  }
+  if (card.kind === 'event_ongoing') {
+    return row('방법', '같은 사건으로 판정돼 합쳐진 국면들을 시점 순으로 편다')
+      + row('국면', esc(card.why.split(' · 최근')[0]))
+      + row('최근', esc((card.why.match(/최근\s(\S+)/) || [])[1] ?? '—'))
+      + `<div class="hint">국면마다 원 기사가 있습니다. 아래 「영향받는 기업」에서
+           사건 단위로 이어집니다.</div>`;
+  }
+  if (card.kind === 'sector_concentration') {
+    return row('방법', '표준산업분류(KSIC) 중분류 2자리로 묶어 센다')
+      + row('분류', esc(card.subject ?? '—'))
+      + row('결과', `${card.of}곳 중 <b>${card.shared}곳</b> 일치`)
+      + `<div class="hint">분류 출처는 DART 기업개황입니다.
+           수집되지 않은 기업은 분류가 없어 셈에서 빠집니다.</div>`;
+  }
+  if (card.kind === 'no_overlap') {
+    return row('방법', '거래·지분·사건·업종 네 축으로 공통점을 찾는다')
+      + row('범위', `${card.of}곳의 모든 직접 관계`)
+      + row('결과', '네 축 모두에서 <b>겹치는 대상이 없다</b>')
+      + `<div class="hint">관계가 없다는 뜻이 아니라, <b>둘 이상이 함께 걸리는</b>
+           대상이 없다는 뜻입니다. 관련 기업을 더 담으면 드러납니다.</div>`;
+  }
+  return row('방법', '그래프 집계')
+    + row('결과', esc(card.why))
+    + `<div class="hint">이 카드는 관계에서 인용할 문장이 아니라
+         집계값을 근거로 합니다.</div>`;
+}
+
+function closeModal() { $('#modal').classList.remove('on'); }
+
+// ★엣지를 그래프에서 본다 — **새 엔드포인트도 새 화면도 필요 없다.**
+//
+//   처음엔 워크스페이스 캔버스로 보냈는데 대부분 안 담겼다. 캔버스는 「담은
+//   기업끼리」만 그리기 때문이다(실측 2026-09-05: 인사이트 엣지 50개 중 23개.
+//   `max_nodes` 를 올려도 21노드·64선 그대로다).
+//
+//   ★그런데 같은 엔드포인트를 **엣지의 양 끝 두 곳으로** 부르면 그 엣지는
+//     「담은 기업끼리 직접 이어진 선」이 되어 **반드시 포함된다.**
+//     실측: 양끝이 기업인 엣지 46개 전부 포함(46/46).
+//
+//   그래서 `/workspace/graph` 를 그대로 쓰되 keys 만 바꾼다. `GraphResponse` 가
+//   같으므로 그리는 코드도 그대로다.
+//
+//   ★한계 — IMPACTS(사건→기업)는 출발이 Event 라 이 방법이 안 된다(실측 4건).
+//     사건의 확산은 모달의 「영향받는 기업」 구역이 이미 담당하므로 그쪽으로 둔다.
+async function gotoEdge(edgeId) {
+  let r = null;
+  try { r = (await api(`/relations/${encodeURIComponent(edgeId)}`)).data.relation; }
+  catch { /* 아래에서 처리 */ }
+
+  const a = r?.source, b = r?.target;
+  if (!a || !b || a.label !== 'Company' || b.label !== 'Company') {
+    // 사건에서 뻗은 선 — 그래프로는 못 그린다. 닿는 기업으로 내려보낸다.
+    const key = b?.label === 'Company' ? b.key : a?.key;
+    if (key) { closeModal(); $('#ck').value = key; go('company'); loadCompany(); }
+    return;
+  }
+  closeModal();
+  $('#wk').value = `${a.key} ${b.key}`;
+  go('ws');
+  await loadWs();
+  const e = (wsGraph?.edges || []).find(x => x.edge_id === edgeId);
+  if (e) onPick('edge', e);
+}
+
+async function openCardModal(card) {
+  const [label, color] = IKIND[card.kind] ?? [card.kind, 'var(--dim)'];
+  const box = $('#modal');
+  box.classList.add('on');
+  $('#sheet').innerHTML = `
+    <header>
+      <button class="x" onclick="closeModal()">×</button>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <span style="font-size:19px;font-weight:600">${esc(card.subject ?? label)}</span>
+        <span class="tag" style="color:${color};border-color:${color}">${esc(label)}</span>
+      </div>
+      <div style="font-size:15px;margin-top:8px">${esc(card.headline)}</div>
+      <div class="muted" style="font-size:13px;margin-top:3px">${esc(card.why)}</div>
+      <div class="row" style="margin:10px 0 0">
+        ${card.names.map((n, i) => `<span class="tag" data-goto="${esc(card.keys[i])}"
+          style="cursor:pointer">${esc(n)}</span>`).join('')}
+      </div>
+    </header>
+    <section id="m-ev"><h4>근거</h4><div class="muted">불러오는 중…</div></section>
+    ${card.event_id ? `<section id="m-imp"><h4>영향받는 기업</h4>
+      <div class="muted">불러오는 중…</div></section>` : ''}`;
+  $('#sheet').querySelectorAll('[data-goto]').forEach(el => el.onclick = () => {
+    closeModal(); $('#ck').value = el.dataset.goto; go('company'); loadCompany();
+  });
+
+  // ── 근거 ──────────────────────────────────────────────────
+  const evBox = $('#m-ev');
+  if (!card.edge_ids?.length) {
+    // ★「원문이 없습니다」로 쓰면 **자료가 빠진 것처럼** 읽힌다. 실제로는 근거의
+    //   **종류**가 다르다 — 인용이 아니라 계산이다. 그래서 「무엇을 어떻게 셌나」를
+    //   밝힌다. 방법과 입력값을 대는 것이 곧 근거다.
+    evBox.innerHTML = `<h4>산출 근거</h4>${basis(card)}`;
+  } else {
+    const ids = card.edge_ids.slice(0, 4);
+    const got = await Promise.all(ids.map(async id => {
+      try { return { id, d: (await api(`/relations/${encodeURIComponent(id)}`)).data }; }
+      catch (e) { return { id, err: e.message }; }
+    }));
+    const head = card.kind === 'cascade_risk'
+      ? `<h4>산출 근거</h4>${basis(card)}<h4 style="margin-top:16px">
+           경로를 이루는 관계 ${card.edge_ids.length}건</h4>`
+      : `<h4>인용 출처 ${card.edge_ids.length}건</h4>`;
+    evBox.innerHTML = head + got.map(({ id, d, err }) => {
+      if (err) return `<div class="err">${esc(String(err).slice(0, 140))}</div>`;
+      const r = d.relation || {}, ev = d.evidence || [];
+      return `<div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+        <div style="font-size:14px">
+          <b>${esc(r.source?.name ?? '?')}</b>
+          <span class="tag" style="margin:0 6px">${esc(r.type ?? '')}</span>
+          <b>${esc(r.target?.name ?? '?')}</b>
+          ${r.subtype ? `<span class="muted"> · ${esc(r.subtype)}</span>` : ''}
+        </div>
+        <div class="hint" style="margin-top:3px">
+          출처 ${r.corroboration ?? 1}곳 · 신뢰도 ${r.score ?? '—'}
+          ${r.last_seen ? ` · ${esc(r.last_seen)} 관측` : ''}
+          ${r.days_since != null ? ` (${r.days_since}일 전)` : ''}
+          · <span data-graph="${esc(id)}"
+              style="color:var(--accent);cursor:pointer">그래프에서 보기 ▸</span>
+        </div>
+        ${ev.length ? ev.slice(0, 2).map(e => `<div class="quote">${esc(e.text)}
+            <div class="hint">${esc(e.press ?? '')} ${esc(e.published_at ?? '')}
+              ${srcLink(e.source_doc)}</div></div>`).join('')
+          : ''}
+      </div>`;
+    }).join('') + (card.edge_ids.length > 4
+      ? `<div class="hint">외 ${card.edge_ids.length - 4}건</div>` : '');
+    evBox.querySelectorAll('[data-graph]').forEach(el =>
+      el.onclick = () => gotoEdge(el.dataset.graph));
+  }
+
+  // ── 영향받는 기업 ─────────────────────────────────────────
+  if (!card.event_id) return;
+  const impBox = $('#m-imp');
+  try {
+    const { data } = await api(`/events/${encodeURIComponent(card.event_id)}/impact`);
+    const said = data.filter(x => x.stated);
+    const calc = data.filter(x => !x.stated).sort((a, b) => b.score - a.score);
+    impBox.innerHTML = `<h4>영향받는 기업 ${data.length}곳</h4>
+      <div class="said">
+        <div style="font-size:12px;color:var(--accent);margin-bottom:4px">
+          기사가 말한 것 · ${said.length}곳</div>
+        ${said.length ? said.map(x => impRow(x, '')).join('')
+                      : `<div class="muted" style="font-size:13px">없습니다</div>`}
+      </div>
+      ${calc.length ? `<div class="calc" style="margin-top:14px">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:4px">
+          공급망으로 <b>추정</b>한 것 · ${calc.length}곳
+          <span class="muted">(상위 ${Math.min(CALC_TOP, calc.length)}곳)</span></div>
+        ${calc.slice(0, CALC_TOP).map(x => impRow(x, '')).join('')}
+        <div class="hint">★추정은 기사에 없습니다. 공급 관계를 타고 우리가 계산한
+          것이라 <b>사실이 아니라 가능성</b>입니다. 점수가 낮을수록 멉니다
+          (중앙값 ${calc.length ? calc[Math.floor(calc.length / 2)].score.toFixed(2) : '—'}).</div>
+      </div>` : ''}`;
+    impBox.querySelectorAll('[data-goto]').forEach(el => el.onclick = () => {
+      closeModal(); $('#ck').value = el.dataset.goto; go('company'); loadCompany();
+    });
+    impBox.querySelectorAll('[data-graph]').forEach(el =>
+      el.onclick = () => gotoEdge(el.dataset.graph));
+  } catch (e) {
+    impBox.innerHTML = `<h4>영향받는 기업</h4><div class="err">${esc(e.message)}</div>`;
+  }
+}
 
 async function loadIns() {
   const keys = $('#ik').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
@@ -776,7 +1078,7 @@ async function loadIns() {
         <div class="muted">담은 곳이 1곳이면 「겹친다」가 성립하지 않아 빈 배열이 정상입니다.</div></div>`;
       return;
     }
-    $('#i-body').innerHTML = cards.map(x => {
+    $('#i-body').innerHTML = cards.map((x, ci) => {
       const [label, color] = IKIND[x.kind] ?? [x.kind, 'var(--dim)'];
       // ★대상을 카드 제목으로 올린다. 대상이 없는 카드(내부 경쟁·겹침 없음)는
       //   종류 이름이 그 자리를 대신한다.
@@ -804,17 +1106,23 @@ async function loadIns() {
             style="cursor:pointer">${esc(n2)}</span>`).join('')}
         </div>
         ${x.path?.length ? `<div class="hint">${x.path.map(esc).join(' → ')}</div>` : ''}
-        ${x.event_id ? `<div class="hint"><code>/events/${esc(x.event_id)}/impact</code>
-          로 파급을 봅니다</div>` : ''}
+        ${drill(x, ci)}
       </div>`;
     }).join('') + `<div class="card"><h3>원본 JSON</h3>
       <pre class="raw">${esc(JSON.stringify(cards, null, 1))}</pre></div>`;
     $('#i-body').querySelectorAll('[data-goto]').forEach(el => el.onclick = () => {
       $('#ck').value = el.dataset.goto; go('company'); loadCompany();
     });
+    // ★카드를 눌러 **근거 원문**까지 간다. `why` 가 숫자로 된 근거라면
+    //   여기는 기사에 실제로 쓰여 있는 문장이다 — 우리가 요약한 것이 아니다.
+    $('#i-body').querySelectorAll('[data-open]').forEach(el =>
+      el.onclick = () => openCardModal(cards[Number(el.dataset.open)]));
   } catch (e) { $('#i-stat').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 }
 $('#i-go').onclick = loadIns;
+// 배경을 누르거나 ESC 로 닫는다 — 모달에 갇히면 안 된다
+$('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 // ══════════════════════════════════════════════════════════════════
 //  뉴스 — 축 셋을 겹쳐 쓴다
