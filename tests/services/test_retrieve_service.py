@@ -680,3 +680,35 @@ def test_relations_do_not_grow_with_the_derived_companies(stub_services):
 
     ceiling = rs_module.MAX_RELATIONS_PER_COMPANY * rs_module._MAX_COMPANIES
     assert len(got.relations) <= ceiling
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ★앵커끼리를 잇는 관계 — 질문이 물은 바로 그것 (§6-0 A-7)
+# ══════════════════════════════════════════════════════════════════════
+
+def _row(src, tgt, *, label="Company"):
+    return {"source": {"key": src, "label": label},
+            "target": {"key": tgt, "label": label}}
+
+
+def test_an_edge_between_two_anchors_outranks_every_workspace_ring():
+    """★질문이 **명시적으로 지목한** 두 대상 사이의 관계가 곧 질문이 물은 것이다.
+    워크스페이스는 관심 영역이고 앵커는 대상이라, 앵커 축이 위다."""
+    both_anchor = rs_module.ring_of(_row("A", "B"), set(), {"A", "B"})
+    ws_inside = rs_module.ring_of(_row("W1", "W2"), {"W1", "W2"}, set())
+    assert both_anchor < ws_inside
+
+
+def test_one_anchor_end_is_not_the_anchor_ring():
+    """한쪽만 앵커면 앵커 링이 아니다 — 그건 앵커의 이웃일 뿐이다."""
+    assert rs_module.ring_of(_row("A", "X"), set(), {"A", "B"}) > \
+           rs_module.ring_of(_row("A", "B"), set(), {"A", "B"})
+
+
+def test_without_anchor_keys_the_ring_is_unchanged():
+    """★불변식 — 앵커를 안 넘기면 링 값이 지금과 글자까지 같다."""
+    for row, ws in ((_row("W1", "W2"), {"W1", "W2"}),
+                    (_row("W1", "X"), {"W1"}),
+                    (_row("W1", "P"), {"W1"}),
+                    (_row("X", "Y"), {"W1"})):
+        assert rs_module.ring_of(row, ws) == rs_module.ring_of(row, ws, frozenset())

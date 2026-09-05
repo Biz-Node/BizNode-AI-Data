@@ -111,6 +111,37 @@ def _name_hit(question: str, names: dict[str, str]) -> Optional[str]:
     return None
 
 
+def _second_anchor(tokens: list[str], primary_name: str,
+                   primary_key: str) -> Optional[dict]:
+    """질문이 **또 다른 기업**을 지목했나 (§6-0 A-7).
+
+    ★**1차 앵커 이름의 부분 문자열인 토큰은 뺀다.** Kiwi 가 「SK하이닉스」를
+      `SK`·`하이닉스` 로 쪼개는데 `SK` 는 **SK주식회사(00144155)로 실제로
+      해소된다**(실측 2026-09-05). 조각이 별개 기업으로 앵커가 되면 묻지 않은
+      대상이 재료에 들어온다 — §14-3 이 막으려는 그 오답이다.
+
+    ★**§5-15 를 전면 해결하지 않는다.** 막는 것은 「이미 잡은 앵커 이름의 조각」
+      하나뿐이고, 합성 사명(「TSMC반도체홀딩스코리아」)은 그대로 남는다. 그쪽은
+      토큰 병합이 후보인데 오탐/미탐을 다시 재기 전에는 규칙을 얹지 않는다.
+
+    ★**남는 토큰이 없으면 조회를 안 한다.** 단일 대상 질의(41건 중 33건 · §8-5)의
+      그래프 조회가 하나로 유지된다 —
+      `test_a_single_target_question_still_costs_one_graph_lookup` 이 묶어 둔다.
+
+    ★**2차까지만이다.** 「A와 B」가 실측에서 잡은 형태이고, 셋 이상은 재 본 적이
+      없다. 재료 기업 상한은 `retrieve_service.anchor_companies()` 의 기존
+      `_MAX_COMPANIES` 가 그대로 맡는다 — 새 숫자를 만들지 않는다.
+    """
+    leftover = [t for t in tokens if t and t not in primary_name]
+    if not leftover:
+        return None
+    found = company_service.find_by_names(leftover)
+    if found is None or found["key"] == primary_key:
+        return None
+    log.info("anchor.second key=%s name=%r from=%s", found["key"], found["name"], leftover)
+    return found
+
+
 def _primary(resolved_entities: list[Resolution]) -> Resolution:
     """★`GraphSearcher._primary_resolution()` 과 **같은 규칙**(점수 최대)이다 —
     실제로 재료를 모은 앵커와 응답에 싣는 앵커가 어긋나면 안 된다."""
@@ -163,7 +194,8 @@ def decide_anchor(
         best = _primary(resolved_entities)
         if company_service.names_by_keys([best.corp_code]):
             return _query(best.corp_code, best.corp_name, "corp_code",
-                          workspace_names, context_names)
+                          workspace_names, context_names,
+                          extra=_second_anchor(tokens, best.corp_name, best.corp_code))
         # ★떨어뜨리지 않고 **아래로 흘린다.** 2단이 이름으로 다시 찾고, 그래도
         #   없으면 ①a·④ 가 「못 찾았다」와 「대상이 없다」를 가른다.
         log.info("anchor.not_in_graph key=%s name=%r — 해소는 됐으나 그래프에 없다",
@@ -178,7 +210,8 @@ def decide_anchor(
     found = company_service.find_by_names(candidates)
     if found is not None:
         return _query(found["key"], found["name"], "norm_name",
-                      workspace_names, context_names)
+                      workspace_names, context_names,
+                      extra=_second_anchor(tokens, found["name"], found["key"]))
 
     # ── ①a — 그래서, 대상을 명시하기는 했나 ─────────────────────────────
     named = tokens
@@ -234,10 +267,17 @@ def decide_anchor(
 
 def _query(key: str, name: str, via: str,
            workspace_names: dict[str, str],
-           context_names: Optional[dict[str, str]] = None) -> AnchorDecision:
-    log.info("anchor.source=query key=%s name=%r via=%s", key, name, via)
+           context_names: Optional[dict[str, str]] = None,
+           *, extra: Optional[dict] = None) -> AnchorDecision:
+    """★`extra` 는 질문이 함께 지목한 **둘째 기업**이다(§6-0 A-7). 1차와 같은
+    `source=query` 다 — 둘 다 질문이 지목한 것이라 가를 이유가 없다."""
+    anchors = [Anchor(key=key, name=name, source=AnchorSource.QUERY)]
+    if extra is not None:
+        anchors.append(Anchor(key=extra["key"], name=extra["name"],
+                              source=AnchorSource.QUERY))
+    log.info("anchor.source=query key=%s name=%r via=%s anchors=%d",
+             key, name, via, len(anchors))
     return AnchorDecision(
-        source=AnchorSource.QUERY,
-        anchors=[Anchor(key=key, name=name, source=AnchorSource.QUERY)],
+        source=AnchorSource.QUERY, anchors=anchors,
         workspace_names=workspace_names,
         context_names=context_names or {})

@@ -260,3 +260,74 @@ def test_partial_token_of_a_made_up_name_should_not_anchor(graph):
     graph["companies"]["TSMC"] = {"key": "tsmc", "name": "TSMC", "corp_code": None}
     decision = qu.decide_anchor("TSMC반도체홀딩스코리아는 어떤가?", [], _WS)
     assert decision.source is AnchorSource.UNRESOLVED
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ★두 기업을 물으면 둘 다 앵커다 (§6-0 A-7)
+#
+#  실측(2026-09-05) — 「삼성전자와 SK하이닉스는 무슨 관계야?」에서 앵커가
+#  SK하이닉스 하나뿐이라 재료 기업도 1곳이었다. 그래프에는 두 기업을 **직접 잇는
+#  엣지가 3건**(공급·경쟁·소송) 있는데, 앵커 기업의 관계 225~566건 중 상한 10 에
+#  밀려 하나도 안 실렸다. 네 쌍을 재서 4/4 가 같았다.
+# ══════════════════════════════════════════════════════════════════════
+
+def test_a_second_named_company_becomes_an_anchor_too(graph):
+    graph["companies"]["삼성전자"] = {"key": _SAMSUNG, "name": "삼성전자",
+                                   "corp_code": _SAMSUNG}
+    decision = qu.decide_anchor("삼성전자와 SK하이닉스는 무슨 관계야?",
+                                [_resolution(_HYNIX, "SK하이닉스")], {})
+    assert decision.source is AnchorSource.QUERY
+    assert [a.key for a in decision.anchors] == [_HYNIX, _SAMSUNG]
+    assert all(a.source is AnchorSource.QUERY for a in decision.anchors)
+
+
+def test_a_partial_token_of_the_first_anchor_is_not_a_second_anchor(graph):
+    """★실측 — `SK` 는 **SK주식회사**(00144155)로 실제로 해소된다. 「SK하이닉스」를
+    쪼갠 조각이 별개 기업으로 앵커가 되면 묻지 않은 대상이 재료에 들어온다.
+
+    ★§5-15 를 전면 해결하지는 않는다 — **이미 잡은 앵커 이름의 부분 문자열**만
+      막는다. 합성 사명(「TSMC반도체홀딩스코리아」)은 그대로 남는다.
+    """
+    graph["companies"]["SK"] = {"key": "00144155", "name": "SK", "corp_code": "00144155"}
+    decision = qu.decide_anchor("SK하이닉스 소송 상황",
+                                [_resolution(_HYNIX, "SK하이닉스")], {})
+    assert [a.key for a in decision.anchors] == [_HYNIX]
+
+
+def test_a_leftover_token_that_is_no_company_adds_no_anchor(graph):
+    decision = qu.decide_anchor("삼성전자와 반도체 업황",
+                                [_resolution(_SAMSUNG, "삼성전자")], {})
+    assert [a.key for a in decision.anchors] == [_SAMSUNG]
+
+
+def test_a_single_target_question_still_costs_one_graph_lookup(monkeypatch):
+    """★불변식 — 남는 토큰이 없으면 **2차 조회 자체가 안 일어난다.** 41건 중 33건이
+    이 경로다(§8-5). 여기가 늘면 종단 지연이 전 질의에서 는다."""
+    calls = []
+    monkeypatch.setattr(qu.company_service, "names_by_keys",
+                        lambda keys: calls.append(("exists", tuple(keys)))
+                        or {k: k for k in keys})
+    monkeypatch.setattr(qu.company_service, "find_by_names",
+                        lambda n: calls.append(("find", tuple(n))) or None)
+    monkeypatch.setattr(qu.company_service, "non_company_labels",
+                        lambda n: calls.append("label") or {})
+
+    qu.decide_anchor("삼성전자 실적", [_resolution(_SAMSUNG, "삼성전자")], _WS)
+
+    assert calls == [("exists", (_SAMSUNG,))]
+
+
+def test_a_second_target_costs_exactly_one_more_lookup(monkeypatch):
+    calls = []
+    monkeypatch.setattr(qu.company_service, "names_by_keys",
+                        lambda keys: calls.append(("exists", tuple(keys)))
+                        or {k: k for k in keys})
+    monkeypatch.setattr(qu.company_service, "find_by_names",
+                        lambda n: calls.append(("find", tuple(n))) or None)
+    monkeypatch.setattr(qu.company_service, "non_company_labels",
+                        lambda n: calls.append("label") or {})
+
+    qu.decide_anchor("삼성전자와 SK하이닉스는 무슨 관계야?",
+                     [_resolution(_HYNIX, "SK하이닉스")], {})
+
+    assert calls == [("exists", (_HYNIX,)), ("find", ("삼성전자",))]

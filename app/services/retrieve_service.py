@@ -158,18 +158,40 @@ def companies_from(result: SearchResult) -> list[RelationEndpoint]:
 #   0/1/2/3 을 그대로 쓴다 — 저쪽은 `SearchHit` 을, 여기는 `RetrieveResponse.
 #   Relation` 을 보므로 DTO 모양이 달라 함수를 공유할 수 없을 뿐이다. 값이
 #   갈라지면 순서가 조용히 어긋나므로 `test_ring_values_match_the_ranker` 가 묶어 둔다.
+# ★앵커 축은 **음수**다 — 0~3 을 로그와 평가셋 문구가 이미 쓰고 있어
+#   (「전부 R3」) 번호를 밀면 그쪽이 조용히 어긋난다.
+_RING_BOTH_ANCHOR = -1     # 앵커 ↔ 앵커 — 질문이 지목한 두 대상 사이
 _RING_BOTH_INSIDE = 0      # 양끝이 둘 다 워크스페이스 안
 _RING_OUTSIDE_COMPANY = 1  # 워크스페이스 ↔ 바깥 기업
 _RING_OUTSIDE_OTHER = 2    # 워크스페이스 ↔ 비-Company (사건·인물·기관·제품)
 _RING_UNRELATED = 3        # 워크스페이스와 닿지 않음 — ★버리지 않는다
 
 
-def ring_of(row: dict, workspace_keys: set[str]) -> int:
+def ring_of(row: dict, workspace_keys: set[str],
+            anchor_keys: Optional[set[str]] = None) -> int:
     """이 관계가 워크스페이스에서 몇 링 떨어져 있나. **작을수록 안쪽.**
 
     ★`Relation` 을 만들기 **전에** 원본 dict 로 판정한다 — 삼성전자 관계가 526건이라
       전부 pydantic 으로 만들면 버릴 것까지 만들게 된다.
+
+    ★**앵커끼리를 잇는 관계가 맨 위다**(§6-0 A-7 · 2026-09-05). 질문이 두 대상을
+      **명시적으로 지목**했으면 그 사이의 관계가 곧 질문이 물은 것이다. 워크스페이스는
+      「관심 영역」이고 앵커는 「대상」이라 앵커 축이 위다.
+
+      실측 — 「삼성전자와 SK하이닉스는 무슨 관계야?」에서 두 기업을 직접 잇는 엣지가
+      그래프에 3건 있는데 재료에는 **0건**이었다. 앵커 기업 관계 225~566건 중 상한
+      10 에 밀린다. 네 쌍을 재서 4/4 가 같았다.
+
+    ★**사건·파급 경로는 안 바뀐다** — `ring_of` 를 부르는 곳은 관계 선정 두 곳뿐이고
+      (여기와 `graph_tools.get_relations`), 사건은 `evidence_selector.select`,
+      파급은 `llm/prompt.select_propagation` 이 따로 정한다.
+
+    ★**앵커를 안 넘기면 값이 지금과 같다.** 두 호출부를 **함께** 고쳤다 — 한쪽만
+      고치면 두 입구가 다른 관계를 낸다(계약 6 파리티).
     """
+    anchors = anchor_keys or set()
+    if anchors and row["source"]["key"] in anchors and row["target"]["key"] in anchors:
+        return _RING_BOTH_ANCHOR
     source_in = row["source"]["key"] in workspace_keys
     target_in = row["target"]["key"] in workspace_keys
     if source_in and target_in:
@@ -642,17 +664,18 @@ class RetrieveService:
         """
         by_ring: dict[int, list[dict]] = {}
         seen: set[str] = set()
+        anchor_keys = {a.key for a in decision.anchors}
         for company in companies:
             for row in company_service.relations_of(company.key):
                 if row["edge_id"] in seen:
                     continue
                 seen.add(row["edge_id"])
-                by_ring.setdefault(ring_of(row, workspace_keys), []).append(row)
+                by_ring.setdefault(
+                    ring_of(row, workspace_keys, anchor_keys), []).append(row)
 
         # ★질문이 무슨 관계를 물었나 — 지금까지 `SearchQuery` 에 와 있는데도 한
         #   번도 참조되지 않던 신호다(현황서 §5-4).
         matched = relation_selector.matched_edge_types(query)
-        anchor_keys = {a.key for a in decision.anchors}
         # 링 안에서는 의도 → 입력 순서(=점수순)가 남는다 — 같은 질문에 매번 다른
         # 순서가 나오면 안 된다(`evidence_selector.select` 와 같은 규약).
         ordered = [row

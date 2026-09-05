@@ -144,7 +144,11 @@ def get_relations(keys: Sequence[str], edge_types: Optional[Sequence[str]] = Non
                 #   0 이 아니면 위쪽 규칙이 바뀐 것이다.
                 suspect_dropped += 1
                 continue
-            by_ring.setdefault(ring_of(row, set(ctx.workspace_keys)), []).append(row)
+            # ★앵커 축을 함께 넘긴다 — `retrieve_service` 와 **같은 값**을 내야
+            #   한다(계약 6 파리티). 한쪽만 고치면 두 입구가 다른 관계를 낸다.
+            by_ring.setdefault(
+                ring_of(row, set(ctx.workspace_keys), set(ctx.anchor_keys)),
+                []).append(row)
     if suspect_dropped:
         log.info("tools.relations grounding_suspect 제외 %d건 "
                  "(Service 가 이미 빼는 것이 정상 — 0 이 아니면 위쪽 규칙이 바뀐 것)",
