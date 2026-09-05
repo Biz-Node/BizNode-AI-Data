@@ -161,10 +161,10 @@ def _step(text: str) -> None:
 
 
 _PROBES = [
-    ("Neo4j",      "NEO4J_URI",     "bolt://localhost:7687", 7687),
-    ("PostgreSQL", "POSTGRES_HOST", "localhost",             5432),
-    ("Chroma",     "CHROMA_HOST",   "localhost",             8001),
-    ("Redis",      "REDIS_HOST",    "localhost",             6379),
+    ("Neo4j",      "NEO4J_URI",     "bolt://127.0.0.1:7687", 7687),
+    ("PostgreSQL", "POSTGRES_HOST", "127.0.0.1",             5432),
+    ("Chroma",     "CHROMA_HOST",   "127.0.0.1",             8001),
+    ("Redis",      "REDIS_HOST",    "127.0.0.1",             6379),
 ]
 
 

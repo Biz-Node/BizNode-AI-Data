@@ -121,13 +121,22 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 BIGKINDS_ACCESS_KEY = os.getenv("BIGKINDS_ACCESS_KEY")
 
 # ── Graph DB (Neo4j) ───────────────────────────────────────────
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+# ★`localhost` 가 아니라 `127.0.0.1` 이다(2026-09-05 실측 — Windows 네이티브
+#   `.venv` 로 돌릴 때). `getaddrinfo("localhost")` 가 `::1`(IPv6)을 `127.0.0.1`
+#   보다 먼저 주는데, Docker Desktop 은 이 포트를 IPv4 로만 내보낸다. 그러면
+#   연결마다 Windows 기본 TCP 연결 시도가 `::1` 에서 **21초** 타임아웃을 다
+#   채우고서야 IPv4 로 넘어간다 — Postgres·Neo4j·Chroma 세 곳 모두 마찬가지라
+#   `/ask` 한 번에 이 지연이 수십 번 겹쳐 **총 18분**이 걸렸다(정상 쿼리 자체는
+#   수 ms~1초). `127.0.0.1` 을 직접 쓰면 `getaddrinfo` 를 안 거치므로 지연이
+#   사라진다. `.env` 에 `NEO4J_URI`·`POSTGRES_HOST`·`CHROMA_HOST` 를 두면
+#   이 기본값을 덮으므로, 원격 호스트를 쓰는 환경은 그대로 영향 없다.
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "biznode_dev_pw")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # ── RDBMS (PostgreSQL) ─────────────────────────────────────────
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_DB = os.getenv("POSTGRES_DB", "biznode")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "biznode")
@@ -141,7 +150,8 @@ POSTGRES_DSN = os.getenv(
 
 # ── Vector DB (ChromaDB) ───────────────────────────────────────
 # compose에서 8000(FastAPI)과 겹치지 않도록 8001로 노출
-CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+# ★`127.0.0.1` — 위 Neo4j 항목의 주석 참고(IPv6 `::1` 21초 타임아웃).
+CHROMA_HOST = os.getenv("CHROMA_HOST", "127.0.0.1")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8001"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
