@@ -2,13 +2,27 @@
 
 ★**모드마다 비용이 다르다.** LLM 을 부르는 것은 `ask` **하나뿐**이다.
 
-    python run_test.py                          모드 목록
-    python run_test.py anchor "질문"             앵커가 어느 갈래로 가나      무료
-    python run_test.py search "질의"             검색 계층만                  무료
-    python run_test.py global "질문"             ★전역 사건 검색만            무료
-    python run_test.py retrieve "질문"           ★재료 조립 끝까지            무료
-    python run_test.py tools 삼성전자             도구 7종을 직접 부른다        무료
-    python run_test.py ask "질문"                ★Agent 루프 끝까지           LLM 호출
+    PY=.venv-wsl/bin/python          ← ★**이것부터 읽으세요** (아래 설명)
+
+    $PY run_test.py                          모드 목록
+    $PY run_test.py anchor "질문"             앵커가 어느 갈래로 가나      무료
+    $PY run_test.py search "질의"             검색 계층만                  무료
+    $PY run_test.py global "질문"             ★전역 사건 검색만            무료
+    $PY run_test.py retrieve "질문"           ★재료 조립 끝까지            무료
+    $PY run_test.py tools 삼성전자             도구 7종을 직접 부른다        무료
+    $PY run_test.py ask "질문"                ★Agent 루프 끝까지           LLM 호출
+
+★**`python run_test.py` 로는 안 돕니다** — 셋 다 막힙니다(2026-09-05 실측).
+
+    python  …   command not found            그런 명령이 없다
+    python3 …   ModuleNotFoundError: dotenv  시스템 파이썬엔 의존성이 없다
+    .venv/  …   PE32+ MS Windows 실행파일     WSL 에서 실행 자체가 안 된다
+
+  `.venv-wsl` 하나만 됩니다(현황서 §13-2 — 프로젝트 `.venv` 는 Windows 네이티브라
+  WSL 에서 Docker DB 에 붙으면 핸드셰이크에서 리셋된다). 없으면 만듭니다:
+
+      uv venv .venv-wsl --python 3.10
+      uv pip install --python .venv-wsl/bin/python -r requirements.txt pytest
 
   앞의 다섯이 무료인 것이 중요하다 — 도구가 무엇을 돌려주는지, 앵커가 어디로
   가는지, **앵커 없는 질문에 무슨 사건이 잡히는지**는 LLM 없이 전부 확인된다.
@@ -38,10 +52,10 @@
 ★**옵션은 모드 뒤에 쓴다** — 앞에 쓰면 모드 이름까지 옵션 값으로 먹힌다.
 
     # 보고 있는 기업이 있다 (워크스페이스는 기본값 그대로)
-    python run_test.py ask "이 회사 최근 리스크 어때?" --context 00126380
+    $PY run_test.py ask "이 회사 최근 리스크 어때?" --context 00126380
 
     # 워크스페이스 없이 — 빈 `--workspace` 가 먼저, `--context` 가 맨 끝
-    python run_test.py ask "이 회사 최근 리스크 어때?" --workspace --context 00126380
+    $PY run_test.py ask "이 회사 최근 리스크 어때?" --workspace --context 00126380
 
   ★위 두 줄은 **그대로 복사해 붙이면 된다.** 설명을 명령 뒤에 `#` 없이 달지
     않는다 — 맨 끝 옵션이 `nargs="*"` 라 그 설명까지 기업 키로 먹는다. 실제로
@@ -298,6 +312,9 @@ def cmd_tools(args) -> None:
 
     from app.tools import agent_tools, citation, scope
 
+    # ★사명을 그대로 넘긴다. `keys.resolved()` 가 정본으로 되짚으므로
+    #   `corp_code` 든 `norm_name` 이든 같은 기업이면 같은 재료가 나온다
+    #   (현황서 §6-0 A-5 — 전에는 이름으로 부르면 거부됐다).
     key = args.key
     rejected: list[str] = []
     _head(f"도구 7종 — key={key!r}  (LLM 없음)")
