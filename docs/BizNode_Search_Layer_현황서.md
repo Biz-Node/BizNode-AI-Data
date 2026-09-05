@@ -5,7 +5,7 @@
 > **작업이 끝날 때마다 이 문서를 갱신합니다.**
 
 마지막 갱신 **2026-08-28** · 브랜치 `yun-phase15`
-· 테스트 **773개** (760 passed · 2 xfailed = 알려진 결함 [§4-5](#4-5-동음이의-사명은-원리적으로-못-가른다)·[§5-15](#5-15-사명의-부분-토큰이-실존-기업으로-해소된다-todo) · 4 deselected = `needs_db` · **7 failed** = [§5-26](#5-26-프롬프트를-고치면서-문구를-박아둔-테스트-7개가-깨졌다-todo))
+· 테스트 **1,076개** (1,074 passed · **failed 0** · 2 xfailed = 알려진 결함 [§4-5](#4-5-동음이의-사명은-원리적으로-못-가른다)·[§5-15](#5-15-사명의-부분-토큰이-실존-기업으로-해소된다-todo) · 38 deselected = `needs_db`·`needs_llm`) — ★**Docker 가 떠 있어야 돕니다** ([§13-1](#13-1-원칙))
 
 > 📌 **파일 이름이 `Search_Layer` 지만 내용은 검색 + 챗봇 둘 다입니다.** 예전에는
 > 「기술 부채 및 설계 검토 사항」이라는 세 번째 문서가 따로 있었는데, **2026-08-23 에
@@ -1593,6 +1593,9 @@ except Exception:  # noqa: BLE001 — 임베딩이 죽어도 답변은 나가야
 `pytest.ini` 에 `needs_db` 마커를 등록하고 `addopts = -m "not needs_db"` 로
 **기본 실행에서 뺐습니다.** DB 없는 환경에서 실패하면 「내 변경이 깼나」를
 매번 다시 가려야 합니다. 돌리려면 `pytest -m needs_db`.
+
+★**이 마커가 덮는 것은 일부입니다** — 저장소 전체는 여전히 Docker 를 전제로 합니다
+([§13-1](#13-1-원칙)). 마커를 전체로 넓히지 않기로 한 근거도 그곳에 있습니다.
 
 ★**이 그물이 실제로 잡았습니다.** 1.5차에서 `fetch_*` 가 도구를 부르게 바뀌자
   `test_conditional_edges` 가 즉시 깨졌습니다(대역이 안 먹혀 실 DB 를 쳤다).
@@ -3514,6 +3517,7 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 | 항목 | 왜 미루나 |
 |---|---|
 | `app/api/main.py` 의 미사용 import (`RiskEvent`·`TrendingItem`) | 빌드/런타임에 영향 없음. 이전부터 그랬음 |
+| ★`app/api/main.py:106` 이 **import 시점에** `RetrieveService()` 를 세워 DB 없이는 테스트 수집이 죽는다 | Docker 를 늘 띄우고 개발하므로 지금은 안 아프다. **CI 를 붙이거나 저장소를 남에게 넘길 때** 지연 생성으로 바꾸면 된다 → [§13-1](#13-1-원칙) |
 | `GET /health` 가 여전히 `"stub": true` 를 하드코딩 | 이전부터 그랬음 |
 | `Source.source_type` 기본값이 `Evidence.source_type` 과 다름(`news` vs `dart`) | `_source_from_evidence()` 가 항상 명시적으로 채워서 실질적 영향 없음 |
 | `QueryRouter` 저신뢰 키워드 9종의 실데이터 정확도 미검증 | 리스크는 낮다. 실사용 트래픽이 쌓이면 같이 측정할 만하다 |
@@ -3540,7 +3544,8 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 | 2026-09-04 | **LLM 클라이언트와 key 해소를 각각 한 곳으로** | `pipeline/llm.get_client()` 가 있는데도 같은 4줄 사본이 **일곱 벌** 있었다(코드 지도의 「LLM 호출 한 곳」이 사실이 아니었다). 여섯을 공용 게터로 돌리고, 키 없음을 먼저 알리던 배치 하나는 가드를 남긴 채 위임한다. 도구 셋이 나눠 갖던 key 해소와 **실패 문구**를 `app/tools/keys.py` 로 모았다 — 그 문구는 Agent 가 읽고 다음 호출을 정하는 값이라 두 벌이면 갈린다. ★LLM JSON 스키마 보일러플레이트 통합은 **철회했다** — 텍스트로는 31곳이 잡혔지만 값으로 보면 같은 꼴이 **6개뿐**이고, LLM 계약인 스키마에 그만큼을 위해 추상화를 넣는 것은 이득보다 위험이 크다 |
 | 2026-09-04 | **호출되지 않는 코드와 무력화된 스텁 장치 제거** | 도입 커밋 이후 **한 번도 불린 적 없는** 함수 11개, 미사용 import 32개, 읽히지 않는 지역변수 8개를 지웠다. `_STUB` 이 빈 튜플인 채로 `X-Stub` 미들웨어가 모든 요청을 지나고 있어 함께 지웠다 — 헤더는 2026-08-23 이후 이미 안 나가고 있었으므로 `/preview` 표시도 백엔드가 보는 값도 **변하지 않는다**. `/health` 의 `stub` 키는 값 `false` 로 남긴다 |
 | 2026-09-04 | **구현과 어긋난 주석·문서 정정** | 코드가 하는 일과 **반대를 말하는** 주석 4건을 고쳤다(State 가 도구 DTO 를 「안 쓴다」·도구 계약이 「구현 없다」·`examples.py` 가 「스텁 응답」·수동 시험 도움말의 워크스페이스 검색 게이트). 코드 지도가 2026-08-15 에 멈춰 `app/` 42개 중 39개와 `search/` 15개 **전부**를 안 싣고 `app/api/` 를 「미구현」이라 적고 있었다 — 조회·검색·챗봇 계층을 채우고 누락 배치 23개를 반영했다 |
-| 2026-09-04 | ★**경로 A 완주 — 시드 적재가 옮겨간 표를 따라가게 했다** | `company_loader` 의 `INSERT INTO companies` 를 `company_attributes` 로 바꿨다. 표를 되살리지 않는다 — 저장소에 `CREATE TABLE companies` 가 없고 `infra/postgres/init/02_schema.sql` 도 만들지 않는다(그 파일 머리말이 「이미 없앤 `companies` 를 만들던」 것을 고친 이력으로 적고 있다). `stock_code`·`market` 은 칸이 없어 싣지 않고 Cypher 가 Neo4j 노드에 쓴다. `sector_label`·`revenue_snapshot` 등 다른 배치가 채우는 칸은 `DO UPDATE SET` 에 넣지 않아 보존된다. ★**롤백 트랜잭션으로 먼저 검증**해 `node_key`(text)와 `corp_code`(character)에 같은 파라미터를 쓰면 `AmbiguousParameter` 가 나는 것을 잡았다 — 파라미터를 분리했다. ★**실측: 시드 64행 잃은 값 0 · 바뀐 값 0 · 전체 3,414행 그대로** — pg_tidy 의 「값도 동일」 주장이 확인됐다. 경로 A 가 1/4~5/5 완주하고, **두 번 돌려도 그래프가 글자까지 같다**(멱등). ★데이터가 늘며(`OWNS_STAKE_IN` +133) 깨진 테스트 2건은 **자기 의도대로 고쳤다** — 코드 회귀가 아니라 순위·상한에 기댄 단정이었다. ① 상대 타입 분류 시험이 삼성전자로 물어 특정 인물이 하드캡 100 안에 드는지를 보고 있었다(2026-08-09 에도 같은 이유로 한 번 깨졌다) → 상한이 안 걸리는 앵커를 쓰고 **이름 대신 그래프 라벨과의 일치**를 본다. 오분류를 주입해 실제로 깨지는 것을 확인했다. ② 양방향 평가 케이스는 **구조**를 보는데 `top_k=10` 이라 방향 구성이 안 보였다 → 30 으로 넓혔다 (실측 20→out 19·in 1 · 30→out 20·in 7). 후보 집합의 양방향은 검색기 레벨 시험이 따로 본다. ★**별건으로 남긴다**: `tests/search/` 의 실 DB 의존 테스트 63개에 `needs_db` 표시가 없다 — 저장소 전체 마커가 6개뿐이라 `pytest.ini` 의 규칙이 사실상 안 지켜지고 있다 |
+| 2026-09-05 | ★**`needs_db` 표시를 늘리지 않기로 했다 — 규칙이 아니라 전제가 틀렸다** | 전날 「별건」으로 적은 「`tests/search/` 63개에 마커가 없다」를 실측으로 검증했다. **숫자가 틀렸고 결론도 틀렸다.** ★DB 를 죽은 포트로 돌리고 기본 `pytest` 를 돌리니 **84 failed · 75 errors = 159건**이 깨진다 — 63이 아니고, `tests/search/`(104) 밖에 `tests/services/` 53 · `tests/graph/` 2 가 더 있다. ★그런데 **마커로는 못 고친다**: 두 파일이 **수집 단계**에서 죽어 실행 전체를 중단시키고(`app/api/main.py:106` 의 `RetrieveService()` 가 import 시점에 `build_orchestrator()` → `ChromaRepository()` 까지 가서 실제 접속을 연다) 마커는 수집 **뒤**에 걸린다. 나머지 73건은 fixture setup 에서 죽는다. ★**이번에 치른 비용도 마커가 막을 종류가 아니었다** — 그 두 테스트는 DB 가 떠 있는 상태에서 데이터가 늘어 깨졌다. `needs_db` 는 「환경이 없음」을 가리지 「데이터가 변함」을 가리지 않는다. ★**다 붙이면 손해가 크다**: 실 DB 대상은 §13-1 이 못 박은 **설계 결정**이고, 159건을 빼면 기본 실행이 검색·서비스 두 계층을 통째로 안 돈다. → 마커 작업은 **하지 않는다**. 남는 진짜 문제는 import 시점 생성 하나이고 [§11](#11-후순위-정리-대상-defer) 로 미룬다 |
+| 2026-09-04 | ★**경로 A 완주 — 시드 적재가 옮겨간 표를 따라가게 했다** | `company_loader` 의 `INSERT INTO companies` 를 `company_attributes` 로 바꿨다. 표를 되살리지 않는다 — 저장소에 `CREATE TABLE companies` 가 없고 `infra/postgres/init/02_schema.sql` 도 만들지 않는다(그 파일 머리말이 「이미 없앤 `companies` 를 만들던」 것을 고친 이력으로 적고 있다). `stock_code`·`market` 은 칸이 없어 싣지 않고 Cypher 가 Neo4j 노드에 쓴다. `sector_label`·`revenue_snapshot` 등 다른 배치가 채우는 칸은 `DO UPDATE SET` 에 넣지 않아 보존된다. ★**롤백 트랜잭션으로 먼저 검증**해 `node_key`(text)와 `corp_code`(character)에 같은 파라미터를 쓰면 `AmbiguousParameter` 가 나는 것을 잡았다 — 파라미터를 분리했다. ★**실측: 시드 64행 잃은 값 0 · 바뀐 값 0 · 전체 3,414행 그대로** — pg_tidy 의 「값도 동일」 주장이 확인됐다. 경로 A 가 1/4~5/5 완주하고, **두 번 돌려도 그래프가 글자까지 같다**(멱등). ★데이터가 늘며(`OWNS_STAKE_IN` +133) 깨진 테스트 2건은 **자기 의도대로 고쳤다** — 코드 회귀가 아니라 순위·상한에 기댄 단정이었다. ① 상대 타입 분류 시험이 삼성전자로 물어 특정 인물이 하드캡 100 안에 드는지를 보고 있었다(2026-08-09 에도 같은 이유로 한 번 깨졌다) → 상한이 안 걸리는 앵커를 쓰고 **이름 대신 그래프 라벨과의 일치**를 본다. 오분류를 주입해 실제로 깨지는 것을 확인했다. ② 양방향 평가 케이스는 **구조**를 보는데 `top_k=10` 이라 방향 구성이 안 보였다 → 30 으로 넓혔다 (실측 20→out 19·in 1 · 30→out 20·in 7). 후보 집합의 양방향은 검색기 레벨 시험이 따로 본다. ★여기서 「별건」으로 적었던 `needs_db` 표시 누락은 **다음 날 재측정해 뒤집혔다**(숫자도 틀렸다) → 아래 2026-09-05 행 |
 | 2026-09-04 | ★**경로 A 실행 — 임원 관계 495건이 한 달 만에 다시 적재됐다. 그리고 두 번째 고장을 찾았다** | 임원 검증기를 고친 뒤 `python -m batch.build.graph` 를 돌렸다(`--reset` 없이). **2/4 에서 또 죽었다** — `company_loader` 가 `INSERT INTO companies` 를 하는데 그 표는 `batch/repair/pg_tidy.py` 가 **2026-08-15 에 지웠다**(「64행 전부 `company_attributes` 에 있고 값도 동일」). 실패가 쓰기 전이라 **DB 는 그대로였다**(노드·엣지·staged 전부 무변화 확인). ★2/4(시드 PG 쓰기)만 빼고 3/5~5/5 를 돌려 물어본 것을 확인했다: **`IS_EXECUTIVE_OF` 722 → 787 (+65) · 이번 배치 495건 · 근거 보유 495/495** · `OWNS_STAKE_IN` 2,157 → 2,290 (+133) · Company +19 · Person +2 · ER 병합 3건(홍라희·이재용). 삼성전자 임원이 사전 측정(`build_corp_document` 9건)과 **정확히 일치**한다. ★`staged_edges` 의 `dart:*` 가 2,310 → 2,303 으로 7행 줄었다 — 매트릭스 위반 0 · 미적재 0 이므로 **거절이 아니라 오늘의 정규화기가 7건 덜 만든 것**이다. 옛 행은 2026-08-02 이전 것이었다(그 뒤로 스테이징이 죽어 있었다). 그래프는 MERGE 라 줄지 않았다 |
 | 2026-09-04 | ★**경로 A 가 파일 생성 이래 죽어 있었다 — 임원 검증기의 import 누락** | `pipeline/validators/dart.py::validate_executives` 가 `is_plausible_birth_year_month` 를 **import 없이** 부르고 있었다. 정리 중 `ruff F821` 이 잡았다. `staging.build_corp_document()` 에 try/except 가 없어 **Person 을 만나는 순간 `NameError` 로 경로 A 전체가 중단**된다 — 실측: 원본이 있는 **64곳 중 62곳**이 죽는다(Person 495명 · `IS_EXECUTIVE_OF` 495건). `git log -S` 로 확인하니 import 는 **파일 생성 커밋 이래 한 번도 없었다**. 그래프의 기존 `IS_EXECUTIVE_OF` 722건은 이 경로가 지금 모양이 되기 전에 적재된 것이다. ★**수정이 데이터를 버리지 않는다** — 고친 뒤 495건 전부 유지 · 드롭 0 · 생년월 경고 0. ★살아남은 이유가 **테스트 0건**이라 `tests/pipeline/test_validators_dart.py` 를 신설했다(11건). import 를 되돌려 **5건이 실제로 깨지는 것**을 확인했다 |
 | 2026-09-04 | ★**1차 답변 경로(`AnswerService`) 폐기 — 대조 기준선이 이미 빨간불이었다** | 운영은 2026-08-27 에 LangGraph 로 넘어갔고 1차는 `ask_graph_parity` 의 기준선으로만 남아 있었다. ★**폐기 전에 마지막으로 쟀다** — 재료 대조 20건 중 **완전 일치 1 · 예상 밖 차이 19**, 전제가 깨진 질문 2건은 무효. 1.5차 표기 추가(2026-08-26 관계 의도 필터)와 앵커리스 개정(2026-09-01) 이후 스크립트가 갱신되지 않아 **「그래프가 예전과 같은 답을 내는가」를 이미 증명하지 못하는 상태**였다 — 빨간불인 기준선은 없는 것보다 나쁘다. ★공유 자산을 `app/llm/` 로 옮겼다: 시스템 프롬프트·`SAFE_MESSAGE`·`STRIP_UNLINKED_CLAIMS` → `prompt.py`, `ANSWER_SCHEMA`·`SAFE_FALLBACK` → `schemas.py`. 옮긴 값 7종을 **해시로 대조**해 바이트 동일을 확인했다. ★`claim_grounding` 을 **운영 경로로 옮겼다** — 1차 프롬프트로 재고 있어서 **나가지 않는 프롬프트의 분포**를 재던 자리다. 판정 인자는 `check_state_claims()` 한 곳에서 조립해 배치와 운영이 같은 것을 잰다. ★**커버리지로 검증했다** — 남은 파일 중 **떨어진 것 0건**, `pipeline/llm.py` 88.2%→100% · `app/graph/prompt.py` 92.6%→98.5%. 실패 표시 규약(`ask_json`)은 폐기 모듈의 테스트가 우연히 밟고 있어서 직접 단위 테스트를 신설했다. 로그 위생 6건은 `tests/graph/test_log_hygiene.py` 로, 회귀 고정 10건은 운영 렌더러로 이관 — 격리 장치(⑥.5) 적용 검증이 `tests/graph/` 에 **0건이던 구멍**이 이번에 메워졌다. **1063 passed · 38 deselected · 2 xfailed** · OpenAPI 스키마 무변경 · `/ask` 실호출 정상 |
@@ -3636,16 +3641,38 @@ R1 이 혼자 746건이라 R0+R1 이 `limit` 을 다 채우고 끝납니다. **R
 객체로 단위 테스트하고, **호출 계약**(「limit 이 항상 전달되는가」)을 볼 때만 예외적으로
 `monkeypatch` 를 씁니다.
 
+★**Docker 가 떠 있는 것이 전제입니다 — 선택이 아닙니다**(2026-09-05 실측). DB 를 죽은
+포트로 돌리고 기본 `pytest` 를 돌리면 **84 failed · 75 errors = 159건**이 깨집니다.
+그중 두 파일(`test_ask_api.py`·`test_retrieve_api.py`)은 **테스트가 돌기 전 수집
+단계에서** 죽고, 그러면 나머지가 멀쩡해도 **실행 전체가 중단됩니다**.
+
 ```text
-581개  (579 passed · 2 xfailed)
-├─ tests/search/      Search Layer              297
-│   └─ eval/           회귀 평가셋                30   ← 20 케이스 + 심층 판정 10
-├─ tests/agent/       ★Agent 평가셋              28   ← 20 케이스 + 집합 판정 8
-│                      (needs_llm — 기본 실행에서 빠진다)
-├─ tests/services/     graph_service ·           266
-│                      RetrieveService · AnswerService ·
-│                      query_understanding · API
-└─ tests/pipeline/     token_overlap              18
+Interrupted: 2 errors during collection
+  app/api/main.py:106  _retrieve_service = RetrieveService()   ← import 시점
+    └ build_orchestrator() → ChromaRepository() → 실제 Chroma 접속
+```
+
+★그래서 **`needs_db` 마커로 이걸 덮으려 하지 마세요.** 마커는 수집이 끝난 **뒤**에
+걸리므로 위 두 파일은 붙여도 그대로 죽고, 실행은 그대로 중단됩니다. 그리고 159건을 전부
+빼면 기본 실행이 **검색·서비스 두 계층을 통째로 안 돌게** 됩니다 — 지금 가장 활발히
+고치는 곳입니다.
+`needs_db` 는 **전체가 아니라 일부**를 가리는 표시이고(현재 6개 파일), 「환경이 없음」을
+다룰 뿐 **「데이터가 변함」은 다루지 않습니다.** 데이터가 늘어 깨지는 단정은 마커가
+아니라 **단정 자체를 데이터 크기에 안 기대게** 고쳐야 합니다(2026-09-04 두 건이 그랬다).
+
+```text
+수집 1,114개 · 기본 실행 1,076개  (1,074 passed · 2 xfailed · 38 deselected)
+
+├─ tests/services/    graph_service · RetrieveService ·     384
+│                     query_understanding · API
+├─ tests/search/      Search Layer                          297
+│   └─ eval/           회귀 평가셋                            30  ← 20 케이스 + 심층 판정 10
+├─ tests/graph/       ★`/ask` LangGraph — 노드 · 조건부      158
+│                     엣지 · State · 계측 · 재료 대조
+├─ tests/tools/       Agent 도구 4원칙 · citation 승격       104
+├─ tests/llm/         프롬프트 · 어댑터 · 모델 노브            64
+├─ tests/pipeline/    검증기 · LLM 계약 · 사건 병합 · 토큰      59
+└─ tests/agent/       ★Agent 평가셋                          48  ← 32는 needs_llm 로 빠진다
 ```
 
 ★`tests/services/test_graph_service.py` 는 **프로덕션 Cypher 의 안전망**입니다.
