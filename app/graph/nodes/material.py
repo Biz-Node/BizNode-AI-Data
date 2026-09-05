@@ -26,12 +26,9 @@ from app.services import (evidence_selector, query_understanding,
                           workspace_service)
 from app.tools import graph_tools
 from app.graph import budget
-from app.services.retrieve_service import (RetrieveService, anchor_companies,
-                                           anchor_names_for, companies_from,
-                                           companies_of_events, default_embed,
-                                           hits_reflect_the_anchor,
-                                           match_type_of, with_anchor_backstop,
-                                           is_anchorless, select_global_events)
+from app.services.retrieve_service import (RetrieveService, anchor_names_for,
+                                           default_embed, match_type_of,
+                                           material_companies)
 from search.dto.search_request import SearchRequest
 
 log = trace_logger(__name__)
@@ -167,31 +164,19 @@ def plan_material(state: AskState) -> AskState:
     request, query, result = state["request"], state["query"], state["result"]
     decision = state["decision"]
 
-    event_pairs: list[tuple[str, str]] = []
-    if is_anchorless(decision):
-        # ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3 · 2026-09-02).
-        #   `/retrieve` 와 **같은 함수**를 부르고, 고른 결과를 `event_pairs` 로
-        #   실어 도구가 다시 고르지 않게 한다. 전에는 히트에서 Company 만 추려
-        #   재료 기업을 정했는데 그 5곳이 사실상 임의였다(F1) — 히트에 실려 오던
-        #   Event 노드는 `companies_from()` 이 통째로 버렸다(F4).
-        events = select_global_events(request.question, embed=default_embed)
-        companies = companies_of_events(events)
-        event_pairs = [(e.event_id, e.company.key) for e in events if e.company]
+    # ★선정은 `/retrieve` 와 **같은 함수**다(`material_companies`). 전에는 분기가
+    #   두 벌이었고 한 줄이 갈려 있어서, 같은 질문이 입구에 따라 다른 재료를
+    #   냈다(§6-0 A-6). 앵커리스에서 고른 사건은 그대로 받아 `event_pairs` 로
+    #   실어 도구가 **다시 고르지 않게** 한다 — 다시 고르면 두 입구가 다른
+    #   사건을 본다.
+    companies, global_events = material_companies(
+        decision, query, result, request.question, embed=default_embed)
+    event_pairs: list[tuple[str, str]] = (
+        [(e.event_id, e.company.key) for e in global_events if e.company]
+        if global_events is not None else [])
+    if global_events is not None:
         log.info("material.anchorless events=%d companies=%d",
                  len(event_pairs), len(companies))
-    else:
-        use_hits = hits_reflect_the_anchor(decision, query)
-        if use_hits:
-            companies = companies_from(result)
-        else:
-            # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-            companies = anchor_companies(decision)
-            log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
-                     [c.key for c in companies], len(result.hits))
-
-        # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16).
-        #   앵커 경로에서는 이미 앵커가 `companies` 라 무동작이다.
-        companies = with_anchor_backstop(companies, decision)
 
     anchor_names = anchor_names_for(query, decision, companies)
     intent = evidence_selector.intent_of(request.question, anchor_names)

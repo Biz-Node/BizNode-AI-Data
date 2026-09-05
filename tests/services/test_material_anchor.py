@@ -116,7 +116,7 @@ def test_semantic_hits_do_not_decide_companies_for_a_query_anchor(wired):
     wired["decision"] = _query_decision(key="엔비디아", name="엔비디아")
     orchestrator = _orchestrator([_hit("01234567", "에스비비테크"),
                                   _hit("00111111", "현대모비스")])
-    _, retrieved = RetrieveService(orchestrator).retrieve_for_ask(_request())
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
     assert [c.name for c in retrieved.companies] == ["엔비디아"]
 
 
@@ -127,7 +127,7 @@ def test_anchored_graph_hits_are_kept_as_material(wired):
     orchestrator = _orchestrator([_hit("00301246", "SFA반도체"), _hit("01095722", "심텍")],
                                  mode=SearchMode.RELATIONSHIP,
                                  resolved=[_resolution()])
-    _, retrieved = RetrieveService(orchestrator).retrieve_for_ask(_request())
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
     assert [c.name for c in retrieved.companies] == ["SFA반도체", "심텍"]
 
 
@@ -135,7 +135,7 @@ def test_context_anchor_collects_from_the_anchor(wired):
     """★설계서 §14-7 ⓑ — 「점수순으로 아무거나」가 아니라 워크스페이스 기업이 앵커다."""
     wired["decision"] = _context_decision()
     orchestrator = _orchestrator([_hit("01234567", "무관한기업")])
-    _, retrieved = RetrieveService(orchestrator).retrieve_for_ask(_request())
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG, _HYNIX]
 
 
@@ -162,17 +162,30 @@ def test_context_anchor_supplies_names_for_similarity_stripping(wired, monkeypat
     wired["decision"] = _context_decision()
     orchestrator = _orchestrator([_hit("01234567", "무관한기업")])   # resolved 없음
 
-    RetrieveService(orchestrator).retrieve_for_ask(_request())
+    RetrieveService(orchestrator).retrieve(_request())
 
     assert seen["anchor_names"] == ["삼성전자", "SK하이닉스"]
 
 
-def test_retrieve_route_still_uses_the_search_hits(wired):
-    """★`/retrieve` 는 **무변경**이다(설계서 §14-5) — SEMANTIC 이 여기서는 살아 있다."""
+def test_both_entrances_pick_the_same_material(wired):
+    """★**계약이 뒤집혔다**(2026-09-05 · §6-0 A-6). 전에는 이 자리가
+    「`/retrieve` 는 무변경」이라 히트(에스비비테크)를 그대로 재료로 삼는 것을
+    못 박고 있었다 — 이 파일 머리말이 🔴 로 적어 둔 바로 그 모양인데,
+    `/ask` 에서만 고치고 `/retrieve` 에는 남겨 뒀던 것이다.
+
+    ★그래서 같은 질문이 **입구에 따라 갈렸다.** 판정 함수
+      (`hits_reflect_the_anchor`)는 이미 공유하고 있었고 `/retrieve` 만 그 답을
+      안 썼다. 선정을 `material_companies()` 한 곳으로 모아 둘을 맞춘다.
+
+    ★`SEMANTIC` 은 죽지 않았다 — `match_type` 은 그대로 나간다. 바뀐 것은
+      「의미 유사 기업을 **재료로도 쓰나**」뿐이다."""
     wired["decision"] = _query_decision(key="엔비디아", name="엔비디아")
     orchestrator = _orchestrator([_hit("01234567", "에스비비테크")])
+
     retrieved = RetrieveService(orchestrator).retrieve(_request())
-    assert [c.name for c in retrieved.companies] == ["에스비비테크"]
+
+    assert [c.name for c in retrieved.companies] == ["엔비디아"], \
+        "앵커가 재료를 정한다 — 히트는 이 앵커를 반영하지 않는다"
 
 
 def test_anchor_companies_are_capped_and_the_cut_is_logged(wired, caplog):
@@ -184,7 +197,7 @@ def test_anchor_companies_are_capped_and_the_cut_is_logged(wired, caplog):
         anchors=[Anchor(key=k, name=n, source=AnchorSource.CONTEXT)
                  for k, n in many.items()])
     with caplog.at_level("INFO"):
-        _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+        retrieved = RetrieveService(_orchestrator()).retrieve(_request())
     assert len(retrieved.companies) == rs_module._MAX_COMPANIES
     assert "anchors truncated" in caplog.text
 
@@ -210,7 +223,7 @@ def test_search_hit_evidence_is_kept_even_when_hits_are_not_the_material(wired, 
         return []
 
     monkeypatch.setattr(rs_module.relation_service, "evidence_for_ids", _evidence_for_ids)
-    RetrieveService(_orchestrator([hit])).retrieve_for_ask(_request())
+    RetrieveService(_orchestrator([hit])).retrieve(_request())
     assert "ev_from_hit" in captured["ids"]
 
 
@@ -228,7 +241,7 @@ def test_relations_come_out_in_ring_order(wired):
         _row("e_ring1", _SAMSUNG, "삼성전자", "00301246", "SFA반도체", score=0.97),
         _row("e_ring0", _SAMSUNG, "삼성전자", _HYNIX, "SK하이닉스", score=0.10),
     ]}
-    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator()).retrieve(_request())
     assert [r.edge_id for r in retrieved.relations] == [
         "e_ring0", "e_ring1", "e_ring2", "e_ring3"]
 
@@ -238,7 +251,7 @@ def test_ring_does_not_drop_unrelated_relations(wired):
     순서만 뒤로 간다."""
     wired["decision"] = _context_decision()
     wired["relations"] = {_SAMSUNG: [_row("e_far", "09999999", "남", "08888888", "남2")]}
-    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator()).retrieve(_request())
     assert [r.edge_id for r in retrieved.relations] == ["e_far"]
 
 
@@ -250,7 +263,7 @@ def test_same_ring_keeps_the_incoming_order(wired):
         _row("e_a", _SAMSUNG, "삼성전자", "00301246", "SFA반도체", score=0.9),
         _row("e_b", _SAMSUNG, "삼성전자", "01095722", "심텍", score=0.8),
     ]}
-    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator()).retrieve(_request())
     assert [r.edge_id for r in retrieved.relations] == ["e_a", "e_b"]
 
 
@@ -262,7 +275,7 @@ def test_ring_distribution_is_logged(wired, caplog):
         _row("e1", _SAMSUNG, "삼성전자", "00301246", "SFA반도체"),
     ]}
     with caplog.at_level("INFO"):
-        RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+        RetrieveService(_orchestrator()).retrieve(_request())
     assert "relations.rings" in caplog.text
 
 
@@ -286,7 +299,7 @@ def test_ring_zero_survives_the_score_cap(wired):
               for i in range(30)]
     wired["relations"] = {_SAMSUNG: filler + [
         _row("e_ring0", _SAMSUNG, "삼성전자", _HYNIX, "SK하이닉스", score=0.01)]}
-    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator()).retrieve(_request())
     assert retrieved.relations[0].edge_id == "e_ring0"
 
 
@@ -309,8 +322,8 @@ def test_the_asked_edge_type_comes_first_within_a_ring(wired):
              score=0.10, rel_type="SUPPLIES_TO"),
     ]}
 
-    _, retrieved = RetrieveService(
-        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve_for_ask(_request())
+    retrieved = RetrieveService(
+        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve(_request())
 
     assert [r.edge_id for r in retrieved.relations] == ["e_supply", "e_partner"]
 
@@ -329,8 +342,8 @@ def test_intent_does_not_beat_the_ring_order(wired):
              rel_type="COMPETES_WITH"),
     ]}
 
-    _, retrieved = RetrieveService(
-        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve_for_ask(_request())
+    retrieved = RetrieveService(
+        _orchestrator(edge_types=["SUPPLIES_TO"])).retrieve(_request())
 
     assert [r.edge_id for r in retrieved.relations] == [
         "e_ring0_other", "e_ring1_match"]
@@ -346,7 +359,7 @@ def test_relation_intent_is_a_no_op_when_the_query_asked_for_no_relation(wired):
              rel_type="SUPPLIES_TO"),
     ]}
 
-    _, retrieved = RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator()).retrieve(_request())
 
     assert [r.edge_id for r in retrieved.relations] == ["e_a", "e_b"]
 
@@ -361,6 +374,6 @@ def test_the_relation_cut_count_is_logged(wired, caplog):
         for i in range(rs_module.MAX_RELATIONS_PER_COMPANY * 2 + 5)]}
 
     with caplog.at_level("INFO"):
-        RetrieveService(_orchestrator()).retrieve_for_ask(_request())
+        RetrieveService(_orchestrator()).retrieve(_request())
 
     assert "cut=5" in caplog.text

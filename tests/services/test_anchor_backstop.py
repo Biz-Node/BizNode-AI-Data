@@ -96,21 +96,21 @@ def test_person_counterparties_no_longer_empty_the_material(wired):
     """「삼성전자 임원」 — 히트가 전부 Person 이라 companies 가 비었었다."""
     hits = [_hit("p_1", "이재용", EntityType.PERSON),
             _hit("p_2", "한종희", EntityType.PERSON)]
-    _, retrieved = RetrieveService(_orchestrator(hits)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator(hits)).retrieve(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG]
 
 
 def test_organization_counterparties_no_longer_empty_the_material(wired):
     """「삼성전자를 규제한 기관」 — 히트가 전부 Organization."""
     hits = [_hit("o_1", "공정거래위원회", EntityType.ORGANIZATION)]
-    _, retrieved = RetrieveService(_orchestrator(hits)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator(hits)).retrieve(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG]
 
 
 def test_event_counterparties_no_longer_empty_the_material(wired):
     """「삼성전자 기술 유출 사건」 — 히트가 전부 Event."""
     hits = [_hit("evt_1", "기술 유출", EntityType.EVENT)]
-    _, retrieved = RetrieveService(_orchestrator(hits)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator(hits)).retrieve(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG]
 
 
@@ -120,8 +120,8 @@ def test_backstop_makes_the_anchor_produce_material(wired):
                                    "event_type": "정보유출", "is_risk": True,
                                    "role": "subject", "occurred_at": "2026-01-01",
                                    "evidence_ids": ["ev_a"]}]}
-    _, retrieved = RetrieveService(
-        _orchestrator([_hit("evt_1", "기술 유출", EntityType.EVENT)])).retrieve_for_ask(
+    retrieved = RetrieveService(
+        _orchestrator([_hit("evt_1", "기술 유출", EntityType.EVENT)])).retrieve(
         _request())
     assert [e.event_id for e in retrieved.events] == ["evt_1"]
 
@@ -134,7 +134,7 @@ def test_companies_still_holds_only_company_nodes(wired):
     """★Person·Organization·Event 는 **여전히 안 들어간다**(설계서 §9)."""
     hits = [_hit("p_1", "이재용", EntityType.PERSON),
             _hit("o_1", "공정거래위원회", EntityType.ORGANIZATION)]
-    _, retrieved = RetrieveService(_orchestrator(hits)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator(hits)).retrieve(_request())
     assert [c.name for c in retrieved.companies] == ["삼성전자"]
 
 
@@ -142,8 +142,8 @@ def test_anchor_absent_from_the_graph_is_not_added(wired):
     """★해소됐다 ≠ 그래프에 있다. 없는 앵커를 넣으면 `companies` 에 **팬텀 항목**만
     남고 재료는 안 생긴다 — 「재료가 된 기업」이라는 뜻이 거짓이 된다."""
     wired["decision"] = _query_decision(key="00999999", name="그래프에없는회사")
-    _, retrieved = RetrieveService(
-        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve_for_ask(
+    retrieved = RetrieveService(
+        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve(
         _request())
     assert retrieved.companies == []
 
@@ -159,7 +159,7 @@ def test_backstop_does_not_fire_when_material_already_exists(wired):
     그건 별도 `[TODO]` 다(현황서 §5-16).
     """
     hits = [_hit("00301246", "SFA반도체"), _hit(_HYNIX, "SK하이닉스")]
-    _, retrieved = RetrieveService(_orchestrator(hits)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(_orchestrator(hits)).retrieve(_request())
     assert [c.key for c in retrieved.companies] == ["00301246", _HYNIX]
 
 
@@ -172,8 +172,8 @@ def test_backstop_never_exceeds_the_company_cap(wired):
         source=AnchorSource.QUERY, workspace_names=_WS,
         anchors=[Anchor(key=k, name=n, source=AnchorSource.QUERY)
                  for k, n in many.items()])
-    _, retrieved = RetrieveService(
-        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve_for_ask(
+    retrieved = RetrieveService(
+        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve(
         _request())
     assert len(retrieved.companies) <= rs_module._MAX_COMPANIES
 
@@ -184,25 +184,31 @@ def test_context_anchor_path_is_untouched(wired):
         source=AnchorSource.CONTEXT, workspace_names=_WS,
         anchors=[Anchor(key=k, name=n, source=AnchorSource.CONTEXT)
                  for k, n in _WS.items()])
-    _, retrieved = RetrieveService(
-        _orchestrator([_hit("x", "무관")], resolved=False)).retrieve_for_ask(_request())
+    retrieved = RetrieveService(
+        _orchestrator([_hit("x", "무관")], resolved=False)).retrieve(_request())
     assert [c.key for c in retrieved.companies] == [_SAMSUNG, _HYNIX]
 
 
 def test_unresolved_gets_no_backstop(wired):
-    """★못 찾은 대상에는 앵커가 없다 — 넣을 것도 없고, 애초에 재료를 안 만든다."""
+    """★못 찾은 대상에는 **앵커가 없다** — 백스톱이 넣을 것이 없다.
+
+    ★전에는 「재료를 아예 안 만든다」를 여기서 봤는데, 그건 `retrieve_for_ask()`
+      라는 죽은 입구의 규약이었다(2026-09-05 제거). 살아 있는 자리는 그래프의
+      조건부 엣지이고 `tests/graph/test_conditional_edges.py::
+      test_unresolved_anchor_routes_to_halt` 가 그것을 본다. 여기서는 이 파일이
+      맡은 것 — **백스톱이 무엇을 넣는가** — 만 본다."""
     wired["decision"] = AnchorDecision(source=AnchorSource.UNRESOLVED, named="TSMC",
                                        workspace_names=_WS)
-    decision, retrieved = RetrieveService(
-        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve_for_ask(
+    retrieved = RetrieveService(
+        _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve(
         _request())
-    assert retrieved is None
+    assert retrieved.companies == [], "앵커가 없으니 메울 것도 없다"
 
 
 def test_backstop_is_logged(wired, caplog):
     """★**조용히 넣지 않는다** — 재료 구성이 바뀐 것은 로그에 남아야 한다."""
     with caplog.at_level("INFO"):
         RetrieveService(
-            _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve_for_ask(
+            _orchestrator([_hit("p_1", "누군가", EntityType.PERSON)])).retrieve(
             _request())
     assert "anchor.backstop" in caplog.text

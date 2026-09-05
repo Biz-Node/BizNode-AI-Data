@@ -264,6 +264,49 @@ def hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> boo
     return decision.source is AnchorSource.QUERY and bool(query.resolved_entities)
 
 
+def material_companies(decision: AnchorDecision, query: SearchQuery,
+                       result: SearchResult, question: str,
+                       *, embed=None) -> tuple[list[RelationEndpoint], Optional[list]]:
+    """재료 기업을 정한다 — ★**두 입구가 이 함수 하나를 쓴다.**
+
+    `/retrieve`(`_assemble`)와 `/ask`(그래프 `plan_material`)가 같은 질문에 같은
+    재료를 내야 한다. 전에는 분기가 **두 벌**이었고 한 줄이 갈려 있었다:
+
+        /retrieve   use_hits=True 고정
+        /ask        use_hits=hits_reflect_the_anchor(...)
+
+    판정 함수는 이미 공유하고 있었는데 **`/retrieve` 만 그 답을 안 썼다.** 그래서
+    「이 회사 리스크 어때?」(기업 상세 화면)가 입구에 따라 갈렸다 — `/ask` 는
+    삼성전자를, `/retrieve` 는 삼성에스디에스·원익홀딩스·리노공업을 재료로 냈다
+    (현황서 §6-0 A-6 · 2026-09-05).
+
+    ★돌려주는 둘째 값은 **앵커리스에서 이미 고른 사건**이다. 그 경로는 사건을
+      먼저 고르고 기업을 역산하므로, 부르는 쪽이 사건을 다시 고르면 두 입구가
+      **다른 사건**을 보게 된다. 앵커 경로에서는 `None` 이다 — 사건은 기업이
+      정해진 뒤에 고른다.
+    """
+    if is_anchorless(decision):
+        # ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3 · 2026-09-02).
+        #   전에는 검색 히트에서 Company 만 추려 재료 기업을 정했는데, 앵커
+        #   없는 질문에서 그 기업 5곳은 사실상 임의로 정해진 것이었다(F1) —
+        #   「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다.
+        #   히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려
+        #   **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
+        events = select_global_events(question, embed=embed or default_embed)
+        return companies_of_events(events), events
+
+    if hits_reflect_the_anchor(decision, query):
+        companies = companies_from(result)
+    else:
+        # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
+        companies = anchor_companies(decision)
+        log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
+                 [c.key for c in companies], len(result.hits))
+    # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
+    #   이미 앵커가 `companies` 라 무동작이다.
+    return with_anchor_backstop(companies, decision), None
+
+
 def anchor_names_for(query: SearchQuery, decision: AnchorDecision,
                       companies: list[RelationEndpoint]) -> list[str]:
     """사건 랭킹에서 **라벨과 질문 양쪽에서 떼어낼 기업명**(`evidence_selector`).
@@ -417,55 +460,27 @@ class RetrieveService:
     def retrieve(self, request: AskRequest) -> RetrieveResponse:
         """질문 하나 → 챗봇이 인용할 재료. **여기서 문장을 만들지 않는다.**
 
-        ★`/retrieve` 의 **동작은 안 바뀐다**(설계서 §14-5) — `anchors[]` 가 실릴
-          뿐이고, SEMANTIC 은 여기서 여전히 살아 있는 경로다. `unresolved` 조기
-          반환은 `/ask` 의 규약이라 `retrieve_for_ask()` 쪽에 있다.
+        ★재료 기업 선정은 `material_companies()` 한 곳이다 — 그래프의
+          `plan_material` 과 **같은 함수**를 쓴다. 전에는 여기가 `use_hits=True`
+          로 고정돼 있어서 같은 질문이 입구에 따라 다른 재료를 냈다(§6-0 A-6).
+
+        ★`SEMANTIC` 은 여전히 살아 있는 경로다(설계서 §14-5) — `match_type` 은
+          그대로 나간다. 바뀐 것은 「의미 유사 기업을 **재료로도 쓰나**」뿐이다.
+
+        ★`unresolved` 조기 반환은 여기 없다. `/ask` 의 규약이고, 그래프의
+          조건부 엣지(`is_resolved`)가 그 자리에서 갈라 준다.
         """
         query, result, decision = self._search(request)
-        return self._assemble(request, query, result, decision, use_hits=True)
-
-    def retrieve_for_ask(self, request: AskRequest) -> tuple[AnchorDecision,
-                                                             Optional[RetrieveResponse]]:
-        """`/ask` 전용 입구 — **`unresolved` 면 재료를 만들지 않는다**(설계서 §14-4).
-
-        ★못 찾은 대상에 워크스페이스 재료를 붙이면 그게 곧 조용한 오답이다.
-          조립을 건너뛰므로 Neo4j 왕복(사건·관계·파급·근거)도 나가지 않는다.
-        """
-        query, result, decision = self._search(request)
-        if decision.source is AnchorSource.UNRESOLVED:
-            log.info("ask.unresolved named=%r — 재료를 만들지 않는다", decision.named)
-            return decision, None
-        # ★`/ask` 에서만 앵커가 재료를 정한다(설계서 §14-5) — `/retrieve` 는 무변경.
-        use_hits = hits_reflect_the_anchor(decision, query)
-        return decision, self._assemble(request, query, result, decision,
-                                        use_hits=use_hits)
+        return self._assemble(request, query, result, decision)
 
     # ── ③~⑥ — 재료를 조립한다 ──────────────────────────────────────────
     def _assemble(self, request: AskRequest, query: SearchQuery,
-                  result: SearchResult, decision: AnchorDecision,
-                  *, use_hits: bool) -> RetrieveResponse:
-        if is_anchorless(decision):
-            # ★**사건을 먼저 고르고 기업을 역산한다**(설계 Q3 · 2026-09-02).
-            #   전에는 검색 히트에서 Company 만 추려 재료 기업을 정했는데, 앵커
-            #   없는 질문에서 그 기업 5곳은 사실상 임의로 정해진 것이었다(F1) —
-            #   「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다.
-            #   히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려
-            #   **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
-            embed = self._embed if self._embed is not None else default_embed
-            events = select_global_events(request.question, embed=embed)
-            companies = companies_of_events(events)
-        else:
-            if use_hits:
-                companies = companies_from(result)
-            else:
-                # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
-                companies = anchor_companies(decision)
-                log.info("material.anchored companies=%s (검색 히트 %d건은 쓰지 않는다)",
-                         [c.key for c in companies], len(result.hits))
-            # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
-            #   이미 앵커가 `companies` 라 무동작이다.
-            companies = with_anchor_backstop(companies, decision)
-            events = self._events_of(companies, request.question, query, decision)
+                  result: SearchResult, decision: AnchorDecision) -> RetrieveResponse:
+        companies, global_events = material_companies(
+            decision, query, result, request.question, embed=self._embed)
+        # 앵커리스는 사건을 이미 골랐다 — 다시 고르면 두 입구가 다른 사건을 본다.
+        events = (global_events if global_events is not None
+                  else self._events_of(companies, request.question, query, decision))
         propagation = self._propagation_of(events)
         relations = self._relations_of(companies, set(request.workspace_keys),
                                        query, decision)

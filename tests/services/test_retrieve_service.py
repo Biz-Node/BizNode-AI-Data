@@ -38,6 +38,16 @@ def _resolution(corp_code, corp_name):
                       method="exact", score=1.0)
 
 
+def _anchored(hits, **kw):
+    """★히트가 재료가 되는 것은 **② Search 가 실제로 앵커를 잡았을 때**다
+    (`hits_reflect_the_anchor`). 아래 조립 계약들은 그 경우를 본다 — 못 잡은
+    경우에는 앵커 자신이 재료라 히트 매핑을 볼 수가 없다.
+
+    ★전에는 이 전제를 안 세워도 됐다. `/retrieve` 가 판정을 무시하고 **늘**
+      히트를 썼기 때문이다(2026-09-05 · §6-0 A-6 에서 고쳤다)."""
+    return _orchestrator(hits, resolved=[_resolution("00126380", "삼성전자")], **kw)
+
+
 def _orchestrator(hits, *, mode=SearchMode.RELATIONSHIP, resolved=()):
     orch = MagicMock()
     query = SearchQuery(raw_query="q", normalized_query="q",
@@ -119,7 +129,7 @@ def test_question_is_echoed_back(stub_services):
 # ── Company 만 추린다 (설계서 §9) ───────────────────────────────────────
 
 def test_only_company_hits_become_companies(stub_services):
-    orch = _orchestrator([
+    orch = _anchored([
         _hit("00126380", "삼성전자"),
         _hit("김준성|1967-10", "김준성", entity_type=EntityType.PERSON),
         _hit("evt_abc", "삼성전자 압수수색", entity_type=EntityType.EVENT),
@@ -142,13 +152,13 @@ def test_non_company_hits_are_not_sent_to_company_lookups(stub_services):
 
 
 def test_duplicate_company_hits_are_collapsed(stub_services):
-    orch = _orchestrator([_hit("00126380", "삼성전자"), _hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자"), _hit("00126380", "삼성전자")])
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
     assert len(got.companies) == 1
 
 
 def test_companies_are_capped_but_reported(stub_services, caplog):
-    orch = _orchestrator([_hit(f"c{i}", f"기업{i}") for i in range(9)])
+    orch = _anchored([_hit(f"c{i}", f"기업{i}") for i in range(9)])
     with caplog.at_level("INFO"):
         got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -161,7 +171,7 @@ def test_companies_are_capped_but_reported(stub_services, caplog):
 def test_events_are_collected_per_company(stub_services):
     company, _ = stub_services
     company.events_of.return_value = [_event("evt_1", "화재")]
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -174,7 +184,7 @@ def test_same_event_from_two_companies_appears_once(stub_services):
     엮여 있으면 그대로 쌓을 경우 같은 사건을 두 번 말하게 된다."""
     company, _ = stub_services
     company.events_of.return_value = [_event("evt_1", "화재")]
-    orch = _orchestrator([_hit("00126380", "삼성전자"), _hit("00164779", "SK하이닉스")])
+    orch = _anchored([_hit("00126380", "삼성전자"), _hit("00164779", "SK하이닉스")])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -189,7 +199,7 @@ def test_events_are_capped_per_company_and_reported(stub_services, caplog):
     company, _ = stub_services
     company.events_of.return_value = [
         _event(f"evt_{i}", f"사건{i}") for i in range(rs_module.MAX_EVENTS_PER_COMPANY + 4)]
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     with caplog.at_level("INFO"):
         got = RetrieveService(orch).retrieve(AskRequest(question="q"))
@@ -206,7 +216,7 @@ def test_each_company_gets_its_own_quota(stub_services):
     company.events_of.side_effect = lambda key: (
         [_event(f"a{i}", f"A사건{i}") for i in range(n + 5)] if key == "A"
         else [_event("b1", "B사건")])
-    orch = _orchestrator([_hit("A", "A기업"), _hit("B", "B기업")])
+    orch = _anchored([_hit("A", "A기업"), _hit("B", "B기업")])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -308,7 +318,7 @@ def test_propagation_runs_only_for_risk_events(stub_services):
     company, relation = stub_services
     company.events_of.return_value = [
         _event("evt_risk", "화재", is_risk=True), _event("evt_plain", "신제품")]
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -329,7 +339,7 @@ def test_missing_event_node_is_logged_not_silently_dropped(stub_services, caplog
     company, relation = stub_services
     company.events_of.return_value = [_event("evt_risk", "화재", is_risk=True)]
     relation.event_impact.return_value = None
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     with caplog.at_level("WARNING"):
         got = RetrieveService(orch).retrieve(AskRequest(question="q"))
@@ -344,7 +354,7 @@ def test_relations_keep_edge_id(stub_services):
     """★`edge_id`가 관계를 가리키는 유일한 id다. `evidence_id`로 대신할 수 없다."""
     company, _ = stub_services
     company.relations_of.return_value = [_relation("5:abc:1")]
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -355,7 +365,7 @@ def test_same_edge_from_two_companies_appears_once(stub_services):
     """관계의 양끝이 둘 다 결과에 있으면 같은 엣지를 두 번 읽게 된다."""
     company, _ = stub_services
     company.relations_of.return_value = [_relation("5:abc:1")]
-    orch = _orchestrator([_hit("00301246", "SFA반도체"), _hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00301246", "SFA반도체"), _hit("00126380", "삼성전자")])
 
     got = RetrieveService(orch).retrieve(AskRequest(question="q"))
 
@@ -381,7 +391,7 @@ def test_evidence_ids_come_from_relations_events_and_hits(stub_services):
     company, relation = stub_services
     company.relations_of.return_value = [_relation("5:a:1", evidence_id="ev_rel")]
     company.events_of.return_value = [_event("evt_1", "화재", evidence_ids=["ev_evt"])]
-    orch = _orchestrator([_hit("00126380", "삼성전자",
+    orch = _anchored([_hit("00126380", "삼성전자",
                                evidence=[{"evidence_id": "ev_hit"}])])
 
     RetrieveService(orch).retrieve(AskRequest(question="q"))
@@ -395,7 +405,7 @@ def test_duplicate_evidence_ids_are_collapsed(stub_services):
     company, relation = stub_services
     company.relations_of.return_value = [
         _relation("5:a:1", evidence_id="ev_same"), _relation("5:a:2", evidence_id="ev_same")]
-    orch = _orchestrator([_hit("00126380", "삼성전자")])
+    orch = _anchored([_hit("00126380", "삼성전자")])
 
     RetrieveService(orch).retrieve(AskRequest(question="q"))
 
