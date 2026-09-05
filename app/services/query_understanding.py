@@ -136,10 +136,38 @@ def decide_anchor(
     ctx_hit = _name_hit(question, context_names)
 
     # ── ①b 1단 — corp_code (② Search 가 이미 낸 결과를 읽기만 한다) ─────
+    #
+    # ★**해소됐다 ≠ 그래프에 있다** (현황서 §6-0 A-2 · 2026-09-05). 해소는
+    #   `corp_code_master` **118,535건**을 보는데 그래프 Company 는 **3,451곳**
+    #   뿐이다. 없는 key 를 앵커로 세우면 재료가 통째로 0 이 되고 답이 죽는다:
+    #
+    #       「요즘 반도체 업계 어때?」 → 앵커 요즘(01719318) → 사건 0 → 「확인되지 않았습니다」
+    #
+    #   「요즘」·「대상」·「미래」·「오늘」·「우리」가 **실제 사명**이라 1.000 으로
+    #   정확히 붙는다 — 점수로는 못 가른다. 그런데 **그래프엔 하나도 없다.**
+    #
+    #   ★**닫힌 낱말 목록으로 막지 않는다.** 이 저장소가 그 방법으로 두 번
+    #     실패했다(`normalizer/generic_names.py` 머리말) — 놓치고, 실명을 친다.
+    #     품사도 못 가른다(실측: 요즘·대상·미래가 삼성전자와 달리 NNG 이지만,
+    #     NNP 를 요구하면 그래프 기업 3,451곳 중 **1,308곳(37.9%)** 이 죽는다.
+    #     `3m`·`amd`·`arm`·`bmw` 처럼 Kiwi 가 고유명사로 안 읽는 이름들이다).
+    #
+    #   ★대신 **이미 있는 불변식**을 쓴다 — `names_by_keys()` 가 「존재 확인을
+    #     겸한다」고 적어 둔 그것이다. 2단(`find_by_names`)은 이미 그래프를 보고
+    #     있었다. **1단만 안 보고 있었던 것**이 이 결함의 전부다.
+    #
+    #   ★비용: 인덱스 조회 **한 번 6.5ms**(실측). 종단 15초의 0.04% 다.
+    #     「해소에 성공하면 그래프를 건드리지 않는다」는 전 계약을 이만큼
+    #     내주고 죽은 답 한 갈래를 없앤다.
     if resolved_entities:
         best = _primary(resolved_entities)
-        return _query(best.corp_code, best.corp_name, "corp_code",
-                      workspace_names, context_names)
+        if company_service.names_by_keys([best.corp_code]):
+            return _query(best.corp_code, best.corp_name, "corp_code",
+                          workspace_names, context_names)
+        # ★떨어뜨리지 않고 **아래로 흘린다.** 2단이 이름으로 다시 찾고, 그래도
+        #   없으면 ①a·④ 가 「못 찾았다」와 「대상이 없다」를 가른다.
+        log.info("anchor.not_in_graph key=%s name=%r — 해소는 됐으나 그래프에 없다",
+                 best.corp_code, best.corp_name)
 
     # ── ①b 2단 — norm_name fallback (설계서 §16-1 의 식별 우선순위) ──────
     # ★`ctx_hit` 을 `ws_hit` 과 **같은 자리에** 넣는다. 둘 다 「질문에 이름이
