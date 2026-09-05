@@ -1,7 +1,7 @@
 """`anchor_source`·`anchors[]` 계약 — 스키마만 본다(설계서 §5 계약 변경).
 
 ★**판정 로직은 여기 없다.** 값을 누가 채우는가는 `query_understanding` 이
-  생긴 뒤의 일이고([현황서 §6-2](../../docs/BizNode_Search_Layer_현황서.md) ② 단계),
+  생긴 뒤의 일이고([현황 §6-2](../../docs/BizNode_Search_Layer.md) ② 단계),
   이 파일은 「계약이 그 값을 담을 수 있는가」와 「기존 호출이 안 깨지는가」만 본다 —
   `tests/search/test_example_queries.py` 가 DTO 에 대해 하는 것과 같은 성격이다.
 """

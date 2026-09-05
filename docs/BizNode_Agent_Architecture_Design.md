@@ -2,7 +2,7 @@
 
 > **본문 기준 코드**: `yun-phase2` · HEAD `709496a` (2026-08-28 23:08)
 > **폐기 절 표시 갱신**: `yun` · `6c39289` (2026-09-05) — 아래 🔴 참조
-> **함께 읽을 문서**: [설계서](BizNode_Search_Layer_설계.md) · [현황서](BizNode_Search_Layer_현황서.md) · [최종 설계](BizNode_Workspace_Contextual_Agent_Final_Design.md) · [Agent 평가셋 (생성물)](BizNode_Agent_평가셋.md)
+> **함께 읽을 문서**: [검색·챗봇 설계](BizNode_Search_Layer.md#설계편--어떻게-만들기로-했고-왜-그렇게-했는가) · [현황](BizNode_Search_Layer.md#현황편--지금-어디까지-됐고-무엇이-고장났고-다음에-무엇을-하는가) · [최종 설계](BizNode_Workspace_Contextual_Agent_Final_Design.md) · [Agent 평가셋 (생성물)](BizNode_Agent_평가셋.md)
 
 > 🔴 **2026-09-01 최종 설계가 이 문서의 일부를 폐기했습니다.**
 >
@@ -14,7 +14,7 @@
 > 영향받은 절 여덟에 🔴 표시를 달았습니다 — §3 그림 1 · §5 그림 2 · §5-1 · §7-1 · §7-2 ·
 > §14-1 · §16-2 · §16-3.
 > 근거는 [최종 설계 §6-1·§17-1·§17-3](BizNode_Workspace_Contextual_Agent_Final_Design.md),
-> 이력은 [현황서 §8-22](BizNode_Search_Layer_현황서.md) 입니다.
+> 이력은 [현황 §8-22](BizNode_Search_Layer.md#현황편--지금-어디까지-됐고-무엇이-고장났고-다음에-무엇을-하는가) 입니다.
 >
 > ★**본문의 나머지 서술은 `709496a` 기준 그대로입니다** — 이번에 전면 재검증하지
 > 않았습니다. 값이 어긋나면 현황서가 정본입니다.
@@ -985,7 +985,7 @@ for event_id in list(event_ids)[:MAX_RISK_EVENTS_FOR_PROPAGATION]:   # = 3
 > `AnchorSource.WORKSPACE` 가 `ANCHORLESS` 로 바뀌었고, 앵커 없는 질의의 재료는
 > **Global Search 의 히트**가 댑니다
 > ([최종 설계 §17-3·§19-4](BizNode_Workspace_Contextual_Agent_Final_Design.md) ·
-> [설계서 §3](BizNode_Search_Layer_설계.md) 의 같은 표시).
+> [설계 §3](BizNode_Search_Layer.md#설계편--어떻게-만들기로-했고-왜-그렇게-했는가) 의 같은 표시).
 > `workspace_keys` 는 **랭킹 문맥으로만** 남습니다.
 
 ### 16-3. `workspace_keys` 가 쓰이는 자리 — 넷 중 🔴 둘이 폐기됐습니다
@@ -1129,7 +1129,7 @@ R1 이 혼자 **746건**(정본 `9ae14c4`)이라 R0+R1 이 `limit` 을 다 채�
 
 `relation_selector.order()` 는 `ordered = list(rows)` 뒤 `sort()` 만 합니다 — **길이를 보존하는 순열**이라 블록 크기를 못 바꿉니다. 그래서 **링 안 순서는 링별 kept *개수*에 영향을 줄 수 없습니다.**
 
-★한때 재측정 수치의 개수 변화(`kept 126→110` 등)를 이 수정의 효과로 적었으나, **그것은 계측 오귀속이었습니다** — `observe.record_rings()` 가 도구 호출마다 `edge_id` 중복을 안 접어 「호출 × 관계」를 세고 있었고, 몇 번 부를지는 LLM 이 정합니다. 계측은 `e6c70f4` 에서 고쳤고 `tests/graph/test_observe_rings.py` 8건이 「호출 횟수가 링 수치를 못 바꾼다」를 못 박습니다. 자세한 경위는 [현황서 §12 변경 이력](BizNode_Search_Layer_현황서.md) 의 2026-08-29 항목입니다.
+★한때 재측정 수치의 개수 변화(`kept 126→110` 등)를 이 수정의 효과로 적었으나, **그것은 계측 오귀속이었습니다** — `observe.record_rings()` 가 도구 호출마다 `edge_id` 중복을 안 접어 「호출 × 관계」를 세고 있었고, 몇 번 부를지는 LLM 이 정합니다. 계측은 `e6c70f4` 에서 고쳤고 `tests/graph/test_observe_rings.py` 8건이 「호출 횟수가 링 수치를 못 바꾼다」를 못 박습니다. 자세한 경위는 [현황 §12 변경 이력](BizNode_Search_Layer.md#현황편--지금-어디까지-됐고-무엇이-고장났고-다음에-무엇을-하는가) 의 2026-08-29 항목입니다.
 
 **이 수정의 효과를 보려면 링별로 「어떤 `edge_id` 가 남았나」를 대조해야 합니다** — 실제로 LLM 없이 한 대조에서 **순서까지 11/11 동일**이 나왔고, 달라진 것은 어떤 엣지가 남나뿐이었습니다(§17-4).
 
@@ -1343,15 +1343,15 @@ python -m batch.audit.ask_graph_parity --materials  # 재료 집합 대조
 | 1 | `explore_impact` 를 Agent Tool 로 제공 | ★**미구현** — Phase 2-B. `get_propagation` 도 도구가 아님(금지 목록) | §11-3 |
 | 2 | `Agent Graph → Query Router → Tool` | QueryRouter 는 **Agent 앞**, Search Layer 소속, LLM 아님 | §5-2 · §10 |
 | 3 | workspace 를 hard filter → ranking signal 로 **변경** | 처음부터 랭킹 문맥. 개정 표에 **「무변경」**. 바뀐 것은 material anchor 채택(A-3) | §16-1 |
-| 4 | Phase 0~8 정의 | 실제는 **0 → 1 → 1.5 → 1.75 → 2 → 8** | [현황서 §12](BizNode_Search_Layer_현황서.md) |
+| 4 | Phase 0~8 정의 | 실제는 **0 → 1 → 1.5 → 1.75 → 2 → 8** | [현황 §12](BizNode_Search_Layer.md#현황편--지금-어디까지-됐고-무엇이-고장났고-다음에-무엇을-하는가) |
 | 5 | 「심텍 공급 리스크 케이스 교체」 | ★**확인되지 않음** — git·문서에 그 케이스 없음. 현 케이스는 `query-event-capital-smallcap`(자본거래) | `tests/agent/eval/cases.py` |
 
 ## 부록 C. 관련 문서
 
 | 문서 | 무엇이 있나 |
 |---|---|
-| [설계서](BizNode_Search_Layer_설계.md) | 검색·재료·챗봇 전체 설계. §3 워크스페이스 · §10 flow 10단계 · §14 앵커 판정 |
-| [현황서](BizNode_Search_Layer_현황서.md) | 구현 현황 · 알려진 결함 · 실측 기록 · `[DECIDE]` |
+| [검색·챗봇 문서 설계편](BizNode_Search_Layer.md#설계편--어떻게-만들기로-했고-왜-그렇게-했는가) | 검색·재료·챗봇 전체 설계. §3 워크스페이스 · §10 flow 10단계 · §14 앵커 판정 |
+| [검색·챗봇 문서 현황편](BizNode_Search_Layer.md#현황편--지금-어디까지-됐고-무엇이-고장났고-다음에-무엇을-하는가) | 구현 현황 · 알려진 결함 · 실측 기록 · `[DECIDE]` |
 | [최종 설계](BizNode_Workspace_Contextual_Agent_Final_Design.md) | ★**이 문서의 일부를 폐기한 문서.** Workspace 는 Ranking Signal · Anchor 확장 |
 | [Agent 평가셋 (생성물)](BizNode_Agent_평가셋.md) | ★자동 생성 — 케이스별 실행 결과. 판정 기준은 `tests/agent/eval/cases.py` |
 | [CODEMAP](CODEMAP.md) | 파일별 책임 |
