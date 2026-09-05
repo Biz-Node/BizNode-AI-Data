@@ -26,16 +26,17 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.api.schemas import Event
+from app.api.schemas import Event, RelationEndpoint
 from app.core import clock
 from app.services import evidence_selector as sel
 
 
 def _event(event_id, name, event_type, *, is_risk=False, occurred_at="2026-06-01",
-           evidence_ids=("ev_x",)):
+           evidence_ids=("ev_x",), company=None):
     return Event(event_id=event_id, name=name, event_type=event_type,
                  is_risk=is_risk, role="subject", occurred_at=occurred_at,
-                 article_count=1, timeline=[], evidence_ids=list(evidence_ids))
+                 article_count=1, timeline=[], evidence_ids=list(evidence_ids),
+                 company=RelationEndpoint(key=company, name=company) if company else None)
 
 
 # ── 의도 추출 ────────────────────────────────────────────────────────────
@@ -576,3 +577,136 @@ def test_similarities_without_an_embedder_is_empty():
     got = sel.similarities([_event("e1", "노조 설립", "노무")],
                            intent="노조", embed=None, anchor_names=[])
     assert got == {}
+
+
+# ══════════════════════════════════════════════════════════════════
+#  워크스페이스 몫 — 정렬 **위에 얹은 배분 계층** (§6-0 A-1)
+#
+#  ★정렬 규칙은 한 줄도 안 바뀐다. 이 계층은 「누가 상한 안에 드는가」만
+#    정하고, 고른 것들 사이의 순서는 기존 정렬 그대로다.
+# ══════════════════════════════════════════════════════════════════
+
+_WS = frozenset({"00126380"})
+_MINE, _OTHER = "00126380", "00999999"
+
+
+def _mixed(*, mine_sims=(0.70, 0.65, 0.60, 0.55), other_sims=(0.90, 0.85, 0.80, 0.75),
+           mine_type="사업확장", other_type="사업확장", mine_risk=True, other_risk=True):
+    """전역이 유사도로 앞서는 후보. **몫이 없으면 전역이 상한을 독점한다.**"""
+    other = [_event(f"g{i}", f"전역{i}", other_type, is_risk=other_risk,
+                    company=_OTHER) for i in range(len(other_sims))]
+    mine = [_event(f"m{i}", f"내것{i}", mine_type, is_risk=mine_risk,
+                   company=_MINE) for i in range(len(mine_sims))]
+    sims = {f"g{i}": s for i, s in enumerate(other_sims)}
+    sims |= {f"m{i}": s for i, s in enumerate(mine_sims)}
+    return other + mine, sims
+
+
+def _mine_of(kept):
+    return [e.event_id for e in kept if e.company and e.company.key in _WS]
+
+
+def test_the_workspace_layer_is_off_by_default():
+    """★불변식 — 인자를 안 주면 이 계층은 없는 것과 같다."""
+    events, sims = _mixed()
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4)
+    assert [e.event_id for e in kept] == ["g0", "g1", "g2", "g3"]
+
+
+def test_an_empty_workspace_is_identical_to_not_passing_one():
+    """★앵커 경로가 이 길로 간다 — 빈 집합이 무변화여야 기존 동작이 안 바뀐다."""
+    events, sims = _mixed()
+    without, cut_a = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4)
+    empty, cut_b = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                              workspace_keys=frozenset())
+    assert [e.event_id for e in without] == [e.event_id for e in empty]
+    assert [e.event_id for e in cut_a] == [e.event_id for e in cut_b]
+
+
+def test_the_workspace_takes_half_the_slots():
+    events, sims = _mixed()
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert _mine_of(kept) == ["m0", "m1"]
+    assert len(kept) == 4
+
+
+def test_a_workspace_short_on_events_does_not_fill_its_share():
+    """★현대차·기아 실측(2026-09-05) — 사업확장이 2건뿐이면 2건만 받는다."""
+    events, sims = _mixed(mine_sims=(0.70,))
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert _mine_of(kept) == ["m0"]
+    assert len(kept) == 4          # 남은 자리는 전역이 채운다
+
+
+def test_the_share_never_crosses_the_rule_tier():
+    """★실측에서 잡은 결함(2026-09-05) — 투자를 물었는데 워크스페이스 **파업**이
+    들어왔다. 몫은 규칙 티어를 **넘지 못한다.**"""
+    events, sims = _mixed(mine_sims=(0.70, 0.65, 0.60), mine_type="노무")
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert all(e.event_type == "사업확장" for e in kept)
+    assert _mine_of(kept) == []
+
+
+def test_the_share_never_crosses_the_risk_tier():
+    events, sims = _mixed(mine_sims=(0.70, 0.65, 0.60), mine_risk=False)
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=4,
+                         risk_wanted=True, workspace_keys=_WS)
+    assert all(e.is_risk for e in kept)
+    assert _mine_of(kept) == []
+
+
+def test_a_semantic_query_holds_the_workspace_to_the_global_floor():
+    """★규칙도 위험도 없으면 유사도가 **유일한 주제 신호**다. 그때는 워크스페이스
+    후보도 전역 컷라인을 넘어야 몫을 받는다 — 안 그러면 「반도체」를 물었는데
+    담아 둔 자동차 회사 파업이 들어온다(실측 2026-09-05)."""
+    events, sims = _mixed(mine_sims=(0.10, 0.09, 0.08, 0.07))
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert _mine_of(kept) == []
+
+
+def test_a_workspace_event_that_clears_the_floor_still_gets_its_share():
+    events, sims = _mixed(mine_sims=(0.88, 0.10, 0.09, 0.08))
+    kept, _ = sel.select(events, matched=frozenset(), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert _mine_of(kept) == ["m0"]
+
+
+def test_a_rule_query_does_not_apply_the_floor():
+    """규칙 티어가 주제를 이미 읽었으면 하한을 걸지 않는다 — 걸면 「최근 파업」에서
+    담아 둔 회사의 파업이 통째로 죽는다(실측 2026-09-05)."""
+    events, sims = _mixed(mine_sims=(0.10, 0.09, 0.08, 0.07))
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert _mine_of(kept) == ["m0", "m1"]
+
+
+def test_without_similarity_the_share_is_not_forced():
+    """★사용자 결정(2026-09-05) — 임베딩이 죽어 `sims` 가 비면 몫을 **강제하지
+    않는다.** 관련도를 못 재는 상태에서 자리를 떼어 주면 근거 없이 순위를 흔든다."""
+    events, _sims = _mixed()
+    base, _ = sel.select(events, matched=frozenset({"사업확장"}), sims={}, limit=4)
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims={}, limit=4,
+                         workspace_keys=_WS)
+    assert [e.event_id for e in kept] == [e.event_id for e in base]
+
+
+def test_the_share_keeps_the_existing_order_among_the_chosen():
+    """★몫만 정한다 — `select_propagation()` 과 같은 규약이다. 번갈아 내보내면
+    전역 1위가 밀려 사실상 티어가 된다."""
+    events, sims = _mixed()
+    kept, _ = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                         workspace_keys=_WS)
+    assert [e.event_id for e in kept] == ["g0", "g1", "m0", "m1"]
+
+
+def test_what_the_share_pushed_out_is_still_reported():
+    """잘린 것을 버리지 않는다 — 기존 계약 그대로다."""
+    events, sims = _mixed()
+    kept, cut = sel.select(events, matched=frozenset({"사업확장"}), sims=sims, limit=4,
+                           workspace_keys=_WS)
+    assert len(kept) == 4
+    assert [e.event_id for e in cut] == ["g2", "g3", "m2", "m3"]

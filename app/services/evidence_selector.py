@@ -366,10 +366,116 @@ def _bucketed(sim: float) -> int:
     return round(sim / _SIM_BUCKET)
 
 
+# ── 워크스페이스 몫 — 정렬 **위에 얹는 배분 계층** (§6-0 A-1 · 2026-09-05) ──
+#
+# ★**정렬 규칙을 한 줄도 안 고친다.** 이 계층은 「누가 상한 안에 드는가」만
+#   정하고, 고른 것들 사이의 순서는 아래 `select()` 의 정렬 그대로 둔다
+#   (`llm/prompt.select_propagation()` 과 같은 규약 — 번갈아 내보내면 읽기
+#   어렵고, 전역 1위가 밀려 사실상 티어가 된다).
+#
+# ★**왜 티어가 아니라 배분인가** — 사전식 티어를 세 자리(규칙 위·아래·유사도
+#   위)에 얹어 봤는데 **셋 다 상위 10건을 워크스페이스가 10/10 으로 채웠다**
+#   (실측 2026-09-05 · 워크스페이스 2곳이 전역 후보 933행 중 188행 20%).
+#   자리를 옮겨도 이진 티어는 상한을 독점한다 — 최종 설계 §19-3 이 금지한
+#   hard filter 와 관측상 구별되지 않는다. IMPACTS 를 얹은 다단 티어(T1 이
+#   3.1%)도, 1홉 이웃 티어(워크스페이스와 무관하게 33% · 절반이 삼성전자)도
+#   같은 이유로 기각했다.
+def _in_workspace(event: _EventLike, keys: frozenset[str]) -> bool:
+    """`company` 는 **앵커 없는 경로에서만** 찬다(`Event.company`). 앵커 경로의
+    사건은 `None` 이라 여기서 자연히 빠진다."""
+    company = getattr(event, "company", None)
+    return bool(company and company.key in keys)
+
+
+def _share_tier(event: _EventLike, matched: frozenset[str],
+                risk_wanted: bool, recent_since: Optional[str]) -> tuple[int, ...]:
+    """워크스페이스보다 **위**에 있는 정렬 키만 추린 서명. 몫은 이 서명이 같은
+    덩어리 **안에서만** 나눈다 — 넘어가면 질문이 부른 것을 밀어낸다.
+
+    ★실측(2026-09-05)에서 실제로 밟았다. 서명 없이 전체에서 몫을 떼자
+      「최근 주요 투자 이벤트가 뭐야?」에 워크스페이스 **파업 3건**이 들어왔다
+      (그 워크스페이스에 사업확장이 2건뿐이라 모자란 몫을 노무가 채웠다).
+    """
+    tier = [0 if event.event_type in matched else 1]
+    if risk_wanted:
+        tier.append(0 if event.is_risk else 1)
+    if recent_since:
+        tier.append(0 if (event.occurred_at or "") >= recent_since else 1)
+    return tuple(tier)
+
+
+def _share_floor(ordered: list, sims: dict[str, float], limit: int,
+                 matched: frozenset[str], risk_wanted: bool) -> Optional[int]:
+    """워크스페이스 후보가 넘어야 할 관련도 하한. **없으면 None.**
+
+    ★**규칙 티어도 위험 티어도 없을 때만 건다.** 그때는 유사도가 주제를 읽는
+      **유일한 신호**라, 몫이 그것을 덮으면 「반도체 업계」를 물었는데 담아 둔
+      자동차 회사의 파업이 들어온다(실측 2026-09-05).
+
+    ★반대로 **규칙이 있으면 걸면 안 된다.** 전 질의에 걸어 봤더니 「최근 파업」
+      에서 담아 둔 회사의 파업이 통째로 죽었다 — 하한이 「전역 상위 10만큼
+      유사할 것」인데 그 상위 10이 이미 그 유형의 최상위라 순환이다.
+
+    ★**새 상수를 만들지 않는다.** 값은 전역 상위 `limit` 건의 최저 유사도
+      덩어리에서 나온다 — 질의마다 유사도 대역이 달라(0.1~0.2 대 0.3~0.4)
+      절대값 상수로는 애초에 못 쓴다.
+    """
+    if matched or risk_wanted:
+        return None
+    return min(_bucketed(sims.get(e.event_id, 0.0)) for e in ordered[:limit])
+
+
+def _with_workspace_share(
+    ordered: list, *, workspace_keys: frozenset[str], sims: dict[str, float],
+    matched: frozenset[str], risk_wanted: bool, recent_since: Optional[str],
+    limit: int,
+) -> list:
+    """상한 안의 자리를 워크스페이스와 전역이 **번갈아** 가져간다.
+
+    앞에서부터 자르면 한쪽이 예산을 통째로 먹는다는 것은 이 저장소가 이미 한 번
+    밟았고(`select_propagation()` · §5-20), 처방도 같다 — 라운드로빈이다.
+    **상수가 없다**: 몫은 나누다 보면 정해지고, 한쪽이 모자라면 그만큼만 가져간다.
+    """
+    floor = _share_floor(ordered, sims, limit, matched, risk_wanted)
+
+    def eligible(event: _EventLike) -> bool:
+        if not _in_workspace(event, workspace_keys):
+            return False
+        return floor is None or _bucketed(sims.get(event.event_id, 0.0)) >= floor
+
+    groups: dict[tuple[int, ...], list[int]] = {}
+    for index, event in enumerate(ordered):
+        groups.setdefault(
+            _share_tier(event, matched, risk_wanted, recent_since), []).append(index)
+
+    picked: set[int] = set()
+    for tier in sorted(groups):
+        room = limit - len(picked)
+        if room <= 0:
+            break
+        rows = groups[tier]
+        mine = [i for i in rows if eligible(ordered[i])]
+        taken = set(mine)
+        rest = [i for i in rows if i not in taken]
+        n_mine = n_rest = 0
+        while n_mine + n_rest < room and (n_mine < len(mine) or n_rest < len(rest)):
+            if n_mine < len(mine):
+                n_mine += 1
+            if n_mine + n_rest < room and n_rest < len(rest):
+                n_rest += 1
+        picked.update(mine[:n_mine])
+        picked.update(rest[:n_rest])
+
+    head = [e for i, e in enumerate(ordered) if i in picked]
+    tail = [e for i, e in enumerate(ordered) if i not in picked]
+    return head + tail
+
+
 def select(
     events: Sequence[_EventLike], *, matched: frozenset[str],
     sims: dict[str, float], limit: int, risk_wanted: bool = False,
     recent_since: Optional[str] = None,
+    workspace_keys: frozenset[str] = frozenset(),
 ) -> tuple[list, list]:
     """(남길 것, 잘라낸 것). **잘라낸 것을 버리지 않고 돌려준다** — 호출자가
     「몇 건을 왜 잘랐는지」 로그에 남길 수 있어야 한다.
@@ -442,4 +548,16 @@ def select(
     if risk_wanted:
         ordered.sort(key=lambda e: not e.is_risk)
     ordered.sort(key=lambda e: 0 if e.event_type in matched else 1)
+
+    # ★위 정렬은 **끝났다.** 아래는 순서를 다시 매기는 것이 아니라 상한 안의
+    #   자리를 나누는 것이다. 두 조건 중 하나라도 빠지면 통째로 건너뛴다 —
+    #   그러면 이 함수는 이 계층이 생기기 전과 **글자까지 같은 값**을 낸다.
+    #
+    #   ★`sims` 가 비면 몫을 **강제하지 않는다**(2026-09-05 결정). 임베딩이
+    #     죽었거나 의도가 없어 관련도를 못 재는 상태인데, 그때 자리를 떼어 주면
+    #     근거 없이 순위를 흔든다(§5-27 과 같은 자리다).
+    if workspace_keys and sims:
+        ordered = _with_workspace_share(
+            ordered, workspace_keys=workspace_keys, sims=sims, matched=matched,
+            risk_wanted=risk_wanted, recent_since=recent_since, limit=limit)
     return ordered[:limit], ordered[limit:]

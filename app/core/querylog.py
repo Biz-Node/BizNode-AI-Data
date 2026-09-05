@@ -69,12 +69,16 @@ def record(*, question: str, intent: str, matched: Iterable[str],
            selected_types: Iterable[str], anchor_source: str,
            n_events: int, n_companies: int,
            risk_wanted: bool = False, recent_since: Optional[str] = None,
-           path: str = "") -> None:
+           path: str = "", workspace_share: Optional[int] = None) -> None:
     """질의 한 건. **부르는 쪽은 실패를 신경 쓰지 않아도 된다.**
 
     `path` 는 어느 경로가 골랐나 — `"global"`(앵커 없음) 또는 `"per_company"`.
     같은 질문이 두 입구에서 각각 한 줄씩 남을 수 있으므로 집계할 때 `trace_id`
     로 묶는다.
+
+    ★`workspace_share` 는 고른 사건 중 **워크스페이스 것이 몇 건**인가(§6-0 A-1).
+      `None` 이면 그 경로가 워크스페이스를 안 본 것이고, `0` 은 **보고도 한 건도
+      안 들어온 것**이다 — 둘을 합치면 「몫이 왜 비었나」를 나중에 못 가른다.
     """
     if _DISABLED:
         return
@@ -91,6 +95,7 @@ def record(*, question: str, intent: str, matched: Iterable[str],
         "risk_wanted": bool(risk_wanted),
         "recent_since": recent_since,
         "path": path,
+        "workspace_share": workspace_share,
     }
     _append(row)
 

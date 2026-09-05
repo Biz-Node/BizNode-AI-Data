@@ -292,7 +292,13 @@ def material_companies(decision: AnchorDecision, query: SearchQuery,
         #   「최근 주요 투자 이벤트」에 (주)DB Inc.·IMANTOAG·유진로봇이 나왔다.
         #   히트에 실려 오던 Event 노드는 `companies_from()` 이 통째로 버려
         #   **살아 있는 유일한 Event 경로가 재료 조립 직전에 끊겨** 있었다(F4).
-        events = select_global_events(question, embed=embed or default_embed)
+        #   ★워크스페이스는 **랭킹 문맥**이라 여기서 넘긴다(§6-0 A-1 · 2026-09-05).
+        #     `decision.workspace_names` 는 `source` 와 무관하게 항상 차 있고,
+        #     key 공간이 `result_ranker.workspace_priority()` 와 **같다**
+        #     (요청이 준 key 그대로 · 설계서 §16-1 의 `corp_code`→`norm_name`).
+        events = select_global_events(
+            question, embed=embed or default_embed,
+            workspace_keys=frozenset(decision.workspace_names))
         return companies_of_events(events), events
 
     if hits_reflect_the_anchor(decision, query):
@@ -350,7 +356,8 @@ def anchor_names_for(query: SearchQuery, decision: AnchorDecision,
 
 
 def select_global_events(question: str, *, embed,
-                         limit: int = _MAX_GLOBAL_EVENTS) -> list[Event]:
+                         limit: int = _MAX_GLOBAL_EVENTS,
+                         workspace_keys: frozenset[str] = frozenset()) -> list[Event]:
     """전역 사건 후보에서 질문이 부른 것을 고른다. **(기업, 사건) 쌍 단위.**
 
     ★`anchor_names` 가 **빈 목록인 것이 맞다.** 앵커가 없으니 질문에서도 라벨에서도
@@ -378,18 +385,24 @@ def select_global_events(question: str, *, embed,
                                           anchor_names=[])
     kept, cut = evidence_selector.select(
         candidates, matched=matched, sims=sims, limit=limit,
-        risk_wanted=risk_wanted, recent_since=recent_since)
+        risk_wanted=risk_wanted, recent_since=recent_since,
+        workspace_keys=workspace_keys)
     firms = {e.company.key for e in kept if e.company}
+    # ★몫이 몇 자리를 가져갔는지 **로그에서 읽혀야 한다**. 가중합을 안 쓰는
+    #   이유가 「왜 이게 뽑혔나」를 읽으려는 것인데(`_SIM_BUCKET` 주석), 배분도
+    #   안 남기면 같은 자리에서 같은 이유로 못 읽는다.
+    n_ws = sum(1 for e in kept if e.company and e.company.key in workspace_keys)
     log.info("global.events 후보=%d 선택=%d 버림=%d intent=%r matched=%s "
-             "risk=%s recent=%s 기업=%d",
+             "risk=%s recent=%s 기업=%d 워크스페이스몫=%d/%d",
              len(candidates), len(kept), len(cut), intent, sorted(matched),
-             risk_wanted, recent_since, len(firms))
+             risk_wanted, recent_since, len(firms), n_ws, len(kept))
     # ★Phase 6 의 재료 — 라벨 없이 정답/누락/오탐을 세려면 이 넷이 남아야 한다.
     querylog.record(question=question, intent=intent, matched=matched,
                     selected_types=[e.event_type for e in kept],
                     anchor_source="anchorless", n_events=len(kept),
                     n_companies=len(firms), risk_wanted=risk_wanted,
-                    recent_since=recent_since, path="global")
+                    recent_since=recent_since, path="global",
+                    workspace_share=n_ws if workspace_keys else None)
     return kept
 
 
