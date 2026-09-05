@@ -32,7 +32,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Iterable, Optional
 
@@ -255,6 +255,9 @@ class Propagation:
     path: list[str]          # 사람이 읽을 경로 설명
     stated: bool             # 기사가 직접 말한 파급인가(1홉), 계산한 것인가
     channel: str = ""        # supply(공급 차질) | demand(매출 상실) — 2홉만
+    # ★경로를 이루는 **실제 엣지**. 화면이 이걸로 그래프의 그 선을 연다.
+    #   `path` 는 사람이 읽는 설명이고, 이쪽은 되짚을 수 있는 열쇠다.
+    edge_ids: list[str] = field(default_factory=list)
 
     def describe(self) -> str:
         tag = "보도됨" if self.stated else f"계산 {self.hops}홉"
@@ -298,6 +301,9 @@ WHERE $only IS NULL OR c.name = $only OR d.name = $only
 RETURN e.name AS event, c.name AS direct, unit,
        CASE WHEN startNode(s) = c THEN 'supply' ELSE 'demand' END AS flow,
        coalesce(i.sign,'') AS sign, properties(i) AS i_props,
+       // ★경로를 **문자열로만** 주면 화면이 「그래프에서 보기」를 못 만든다.
+       //   경로는 실제 엣지로 이뤄져 있으니 그 id 를 함께 실어 보낸다.
+       elementId(i) AS i_eid, elementId(s) AS s_eid,
        d.name AS downstream, properties(s) AS s_props,
        // 허브 감점은 **그 방향의 부채꼴 크기**로 센다. 파는 쪽으로 100곳에
        // 뿌리는 회사와, 사오는 곳이 3곳뿐인 회사는 희석 정도가 다르다.
@@ -340,7 +346,8 @@ def propagate_risk(event_name: str, *, today: Optional[date] = None,
                 out[r["direct"]] = Propagation(
                     r["direct"], 1, s1,
                     [r["event"], f"IMPACTS({r['sign'] or '?'})", hop1],
-                    stated=True)
+                    stated=True,
+                    edge_ids=[x for x in (r["i_eid"],) if x])
 
         # ── 2홉: 공급망을 타고 계산 ───────────────────────
         if not r["downstream"]:
@@ -361,6 +368,7 @@ def propagate_risk(event_name: str, *, today: Optional[date] = None,
             r["downstream"], 2, s2,
             [r["event"], f"IMPACTS({r['sign'] or '?'})", hop1,
              leg, r["downstream"]],
-            stated=False, channel="supply" if supply else "demand")
+            stated=False, channel="supply" if supply else "demand",
+            edge_ids=[x for x in (r["i_eid"], r["s_eid"]) if x])
 
     return sorted(out.values(), key=lambda p: -p.score)

@@ -270,6 +270,7 @@ def event_impact(event_id: str, max_hops: int = 3) -> Optional[list[dict]]:
         "target": p.target, "key": keys.get(p.target),
         "score": round(p.score, 3), "hops": p.hops,
         "stated": p.stated, "channel": p.channel or None, "path": list(p.path),
+        "edge_ids": list(p.edge_ids),
     } for p in got]
 
 
