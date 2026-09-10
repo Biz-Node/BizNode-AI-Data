@@ -40,7 +40,7 @@ def graph(monkeypatch):
       이 파일의 기존 시험들이 뜻을 그대로 유지한다.
     """
     state = {"companies": {}, "non_company": {}, "keys": {},
-             "missing_keys": set()}
+             "firms": {}, "missing_keys": set()}
 
     monkeypatch.setattr(qu.company_service, "names_by_keys",
                         lambda keys: {k: k for k in keys
@@ -53,14 +53,20 @@ def graph(monkeypatch):
                         lambda names: {n: state["non_company"][n] for n in names
                                        if n in state["non_company"]})
 
-    def _find_non_company(names):
+    def _find_non_company(names, *, named=()):
         """★같은 `non_company` 표에서 나온다 — 라벨을 주는 쪽과 앵커를 주는 쪽이
-        갈리면 「HBM 은 Product 인데 앵커는 안 된다」 같은 상태가 생긴다."""
+        갈리면 「HBM 은 Product 인데 앵커는 안 된다」 같은 상태가 생긴다.
+
+        `firms` 는 그 노드의 **기업 이웃 수**다. 안 적어 두면 넉넉한 것으로 본다."""
         for name in names:
             label = state["non_company"].get(name)
-            if label and label != "Event":
-                return {"key": state["keys"].get(name, name), "name": name,
-                        "label": label}
+            if not label or label == "Event":
+                continue
+            firms = state["firms"].get(name, 99)
+            if name not in named and firms < qu.MIN_ANCHOR_COMPANIES:
+                continue
+            return {"key": state["keys"].get(name, name), "name": name,
+                    "label": label, "firms": firms}
         return None
 
     monkeypatch.setattr(qu.company_service, "find_non_company_by_names",
@@ -170,6 +176,40 @@ def test_a_person_the_graph_knows_becomes_a_query_anchor(graph):
     decision = qu.decide_anchor("이재용 관련 최근 이슈가 뭐야?", [], _WS)
     assert decision.source is AnchorSource.QUERY
     assert [(a.name, a.label.value) for a in decision.anchors] == [("이재용", "Person")]
+
+
+def test_a_common_noun_that_names_a_graph_node_can_anchor_too(graph):
+    """★**고유명사 관문 밖에서도 대상은 지목된다**(§6-0 A-8 단계 5). Kiwi 는
+    기관·제품 이름을 자주 `NNG` 로 준다 — 공정거래위원회·고용노동부·낸드플래시가
+    전부 그렇다. 관문만 보면 이 이름들은 후보에 **오르지도 못한다.**"""
+    graph["non_company"]["낸드플래시"] = "Product"
+    graph["firms"]["낸드플래시"] = 7
+    decision = qu.decide_anchor("낸드플래시를 개발하는 기업은?", [], _WS)
+    assert decision.source is AnchorSource.QUERY
+    assert [(a.name, a.label.value) for a in decision.anchors] == [("낸드플래시", "Product")]
+
+
+def test_a_category_word_does_not_anchor_just_because_a_node_shares_its_name(graph):
+    """★관문을 그냥 풀면 앵커리스가 죽는다 — 실측(2026-09-10)에서 「반도체」·「메모리」가
+    Product 노드로 실재해 앵커리스 질의 16건 중 **6건**을 가져갔다.
+
+    ★가르는 신호는 **재료를 낼 수 있는가**다. 「반도체」는 기업 이웃이 **0곳**,
+      「메모리」는 **1곳**인데 낸드플래시는 7곳·공정거래위원회는 76곳이다.
+      업계를 묻는 질문에 기업 한 곳을 재료로 답하는 것은 앵커리스보다 나쁘다.
+    """
+    graph["non_company"]["메모리"] = "Product"
+    graph["firms"]["메모리"] = 1
+    assert qu.decide_anchor("메모리 가격 담합", [], _WS).source is AnchorSource.ANCHORLESS
+
+
+def test_the_company_count_rule_spares_names_the_question_marked_as_proper(graph):
+    """★**고유명사 덩어리에는 안 건다.** 「문무일」은 기업 이웃이 한 곳뿐인데
+    질문이 고유명사로 지목했으므로 대상이 맞다 — 이 규칙은 **일반명사 덩어리가
+    우연히 노드 이름과 겹치는 것**만 막는다."""
+    graph["non_company"]["문무일"] = "Person"
+    graph["firms"]["문무일"] = 1
+    decision = qu.decide_anchor("문무일 수사", [], _WS)
+    assert [a.name for a in decision.anchors] == ["문무일"]
 
 
 def test_an_event_named_in_the_question_is_not_an_anchor(graph):

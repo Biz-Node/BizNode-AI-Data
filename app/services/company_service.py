@@ -29,9 +29,12 @@ from datetime import date
 from typing import Optional, Sequence
 
 from app.core.database import neo4j_session, postgres_connection
+from app.core.trace import trace_logger
 from pipeline.freshness import assess
 from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.ksic import label_of
+
+log = trace_logger(__name__)
 
 # 근거 검증에서 이 판정이 난 관계는 **응답에서 아예 뺀다.**
 # `wrong_type` 은 빼지 않는다 — 관계 자체는 실재하므로 점수만 깎는다.
@@ -176,9 +179,37 @@ def corp_codes_by_keys(keys: list[str]) -> dict[str, str]:
 #   Organization·Product 는 `norm_name` 을 든다(실측 2026-09-10).
 _NON_COMPANY_Q = """
 MATCH (n) WHERE NOT n:Company AND n.name IN $names
+OPTIONAL MATCH (n)-[]-(c:Company)
 RETURN n.name AS name, labels(n)[0] AS label,
-       coalesce(n.person_key, n.norm_name, n.name) AS key
+       coalesce(n.person_key, n.norm_name, n.name) AS key,
+       count(DISTINCT c) AS firms
 """
+
+# ★**일반명사 덩어리가 앵커가 되려면 기업 이웃이 이만큼은 있어야 한다**
+#   (2026-09-10 · 현황서 §6-0 A-8 단계 5).
+#
+#   Kiwi 는 기관·제품 이름을 자주 `NNG` 로 준다 — 공정거래위원회·고용노동부·
+#   낸드플래시가 전부 그렇다. 그래서 고유명사 관문만 보면 이 이름들이 후보에
+#   **오르지도 못한다.** 그런데 관문을 그냥 풀면 앵커리스가 죽는다: 실측에서
+#   「반도체」·「메모리」가 Product 노드로 실재해 앵커리스 질의 16건 중 **6건**을
+#   가져갔다(「최근 반도체 업계 주요 이슈가 뭐야?」 → 앵커 반도체).
+#
+#   ★가르는 신호는 **재료를 낼 수 있는가**다 — 새 랭킹 티어도 유사도 임계값도
+#     아니고 **구조적 자격 조건**이다. 업계를 묻는 질문에 기업 한 곳을 재료로
+#     답하는 것은 앵커리스보다 나쁘다.
+#
+#       반도체    기업 0곳     메모리   기업 1곳     ← 앵커로 안 세운다
+#       카카오톡  기업 2곳     고용노동부 기업 7곳
+#       낸드플래시 기업 7곳     공정거래위원회 기업 76곳
+#
+#   ★**고유명사 덩어리에는 안 건다**(`named`). 「문무일」은 기업 이웃이 한 곳뿐인데
+#     질문이 고유명사로 지목했으므로 대상이 맞다. 이 조건이 막는 것은 **일반명사가
+#     우연히 노드 이름과 겹치는 것**뿐이다.
+#
+#   ★근거는 질의 24건(앵커리스 16 · 열려야 할 8)이다. 규칙 다섯을 견줘서
+#     오탐 0/16 · 정탐 7/8 로 가장 나은 것을 골랐다 — 못 연 하나는 「국민연금」인데
+#     그건 A-10(별칭이 별도 노드)이라 **안 여는 것이 맞다.** 표본이 크지 않다.
+MIN_ANCHOR_COMPANIES = 2
 
 # 앵커가 될 수 있는 비-Company 라벨. ★`Event` 는 빠진다 — 사건을 대상으로 삼으면
 # 재료 조립이 다른 이야기가 되고(`Anchor.label` 계약), A-8 실측이 잰 것도 넷뿐이다.
@@ -209,7 +240,8 @@ def _non_company_rows(names: list[str]) -> dict[str, dict]:
         return {r["name"]: dict(r) for r in s.run(_NON_COMPANY_Q, names=unique)}
 
 
-def find_non_company_by_names(names: list[str]) -> Optional[dict]:
+def find_non_company_by_names(names: list[str], *,
+                              named: Sequence[str] = ()) -> Optional[dict]:
     """이름 후보들 중 **앵커가 될 수 있는 비-Company 노드** 하나. 없으면 `None`.
 
     ★`find_by_names()` 의 비-Company 짝이다(§6-0 A-8). 부르는 순서가 계약이다 —
@@ -223,11 +255,18 @@ def find_non_company_by_names(names: list[str]) -> Optional[dict]:
       을 낸 그 규칙을 그대로 쓴다(현황서 §8-5). `CONTAINS` 로 넓히면 「삼성전자」가
       Event 이름에 걸려 실존 기업이 통째로 억제된다.
     """
+    proper = set(named)
     rows = _non_company_rows(names)
     for name in names:
         row = rows.get(name)
-        if row and row["label"] in _ANCHOR_LABELS:
-            return {"key": row["key"], "name": row["name"], "label": row["label"]}
+        if row is None or row["label"] not in _ANCHOR_LABELS:
+            continue
+        if name not in proper and row["firms"] < MIN_ANCHOR_COMPANIES:
+            log.info("anchor.non_company_thin name=%r label=%s 기업=%d — 앵커로 안 세운다",
+                     name, row["label"], row["firms"])
+            continue
+        return {"key": row["key"], "name": row["name"], "label": row["label"],
+                "firms": row["firms"]}
     return None
 
 

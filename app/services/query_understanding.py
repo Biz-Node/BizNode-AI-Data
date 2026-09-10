@@ -56,6 +56,9 @@ from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.resolver import Resolution
 from pipeline.token_overlap import kiwi, merged_spans
 
+# 테스트와 문서가 한 이름으로 읽도록 다시 내보낸다 — 값은 `company_service` 가 정한다.
+MIN_ANCHOR_COMPANIES = company_service.MIN_ANCHOR_COMPANIES
+
 log = trace_logger(__name__)
 
 # 고유명사 후보 태그. `SL`(외국어)을 넣는 이유는 실측이다 — Kiwi 는 `TSMC`·
@@ -117,6 +120,24 @@ def _name_tokens(question: str) -> list[str]:
     return list(dict.fromkeys(
         text for text, tags in merged_spans(kiwi().tokenize(question))
         if tags & _NAME_TAGS))
+
+
+def _content_spans(question: str) -> list[str]:
+    """붙어 있던 내용어 덩어리 **전부.** 고유명사 관문을 안 건다.
+
+    ★`_name_tokens()` 는 「질문이 대상을 명시했나」(①a)를 가르는 값이라 고유명사를
+      품은 것만 남긴다 — 안 그러면 「최근」·「업계」가 대상이 되어 **앵커리스가
+      통째로 죽는다.** 하지만 ①b **3단**은 사정이 다르다: 그래프에 **정확히 같은
+      이름의 노드가 있는가**를 묻는 것이라, 없는 이름은 저절로 떨어진다.
+
+    ★Kiwi 가 기관·제품 이름을 자주 `NNG` 로 준다 — 공정거래위원회·고용노동부·
+      낸드플래시가 전부 그렇다. 관문만 보면 후보에 **오르지도 못한다**(§6-0 A-8 단계 5).
+
+    ★대신 `find_non_company_by_names()` 가 **기업 이웃 수**로 거른다 — 「반도체」·
+      「메모리」처럼 업계 용어가 Product 노드로 실재하는 경우를 막는 자리다.
+    """
+    return list(dict.fromkeys(
+        text for text, _ in merged_spans(kiwi().tokenize(question))))
 
 
 def _name_hit(question: str, names: dict[str, str]) -> Optional[str]:
@@ -259,7 +280,13 @@ def decide_anchor(
     #
     # ★`Event` 는 여기 안 온다(`_ANCHOR_LABELS`). 아래 ①a 의 제외는 **그대로 남는다** —
     #   Event 이름과 겹치는 토큰을 거르는 것이 여전히 그 함수의 일이다.
-    non_company = company_service.find_non_company_by_names(tokens)
+    # ★**여기서는 고유명사 관문을 안 건다**(2026-09-10 · 단계 5). Kiwi 가 기관·제품을
+    #   `NNG` 로 주는 일이 잦아 관문만 보면 공정거래위원회·낸드플래시가 후보에 못
+    #   오른다. 대신 `named` 로 「질문이 고유명사로 지목한 것」을 함께 넘겨,
+    #   나머지(일반명사 덩어리)에만 **기업 이웃 수** 조건을 걸게 한다 —
+    #   「반도체」·「메모리」가 앵커리스 질의를 가져가던 것을 막는 자리다.
+    non_company = company_service.find_non_company_by_names(
+        _content_spans(question), named=tokens)
     if non_company is not None:
         return _query(non_company["key"], non_company["name"], "non_company",
                       workspace_names, context_names,

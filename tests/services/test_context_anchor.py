@@ -68,8 +68,9 @@ def graph(monkeypatch):
     # ★비-Company 해소(§6-0 A-8)도 세운다 — 안 세우면 이 파일이 **실 Neo4j 를 친다.**
     #   기본 실행은 DB 없이 돌아야 한다(`needs_db` 마커의 취지).
     monkeypatch.setattr(qu.company_service, "find_non_company_by_names",
-                        lambda names: next(
-                            ({"key": n, "name": n, "label": state["non_company"][n]}
+                        lambda names, *, named=(): next(
+                            ({"key": n, "name": n, "label": state["non_company"][n],
+                              "firms": 99}
                              for n in names
                              if state["non_company"].get(n) not in (None, "Event")),
                             None))
