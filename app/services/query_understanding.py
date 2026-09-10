@@ -32,8 +32,9 @@
   41건으로 재서 정했다 — 39/41(95.1%), 현황서 §8-5.
 
       ①a 1차   워크스페이스 기업명을 질문 문자열과 직접 대조
-      ①a 2차   Kiwi 고유명사 토큰(NNP·SL)
-               └ 단, **Company 아닌 노드 이름과 정확히 일치**하는 토큰은 뺀다
+      ①a 2차   Kiwi 가 쪼갠 것을 도로 붙인 **덩어리** 중 고유명사(NNP·SL)를 품은 것
+               └ 단, **Company 아닌 노드 이름과 정확히 일치**하는 것은 뺀다
+               └ ★조각이 아니라 덩어리인 까닭은 `_name_tokens()` 에 (§5-15)
       ①b       corp_code(PostgreSQL) → 실패하면 norm_name(Neo4j)
 
 ★**재료를 모으지 않는다.** 여기는 flow ①b 이고 재료는 ③ 이다(설계서 §10). 새
@@ -53,7 +54,7 @@ from app.core.trace import trace_logger
 from app.services import company_service
 from pipeline.normalizer.base import normalize_company_name
 from pipeline.normalizer.resolver import Resolution
-from pipeline.token_overlap import kiwi
+from pipeline.token_overlap import kiwi, merged_spans
 
 log = trace_logger(__name__)
 
@@ -87,9 +88,35 @@ class AnchorDecision:
 
 
 def _name_tokens(question: str) -> list[str]:
-    """질문에서 고유명사로 읽히는 토큰. **순서를 지키고 중복만 제거한다.**"""
+    """질문이 지목한 **사명 후보.** 순서를 지키고 중복만 제거한다.
+
+    ★**토큰이 아니라 덩어리다**(2026-09-10 · 현황서 §5-15). 원문에서 사이가
+      벌어져 있지 않았던 내용어를 도로 붙인 뒤, 그중 **고유명사를 품은 것**만
+      남긴다. Kiwi 가 사명을 쪼개서 조각이 그대로 후보가 되면 **두 방향으로**
+      틀린다:
+
+          오탐  「TSMC반도체홀딩스코리아」의 조각 `TSMC` 가 실존 기업을 문다
+          미탐  「SK하이닉스」가 조각 `SK`(SK주식회사 00144155)로 해소된다
+
+      뒤엣것은 A-7 의 2차 앵커에서 **실제로 나가고 있었다** — 「삼성전자와
+      SK하이닉스는 무슨 관계야?」의 2차 앵커가 SK주식회사였다.
+
+    ★**고유명사를 품은 덩어리만** 남기는 것이 요점이다. 덩어리를 그냥 쓰면
+      「최근」·「업계」·「가격」 같은 일반명사가 대상이 되어 **앵커리스가
+      통째로 죽는다**(실측: 12/12 가 `unresolved` 로 뒤집혔다 — Global Event
+      Search 가 막힌다). 반대로 이 조건을 걸면 **「고유명사가 없다」가 전과 같은
+      뜻**이라 앵커리스 판정이 그대로다(질의 774건 전수에서 공집합 동치 무위반).
+
+    ★**조각으로 되돌리는 폴백을 두지 않는다.** 「삼성전자주가」처럼 붙여 쓴 것은
+      미탐으로 남는데, 폴백을 넣으면 합성 사명 오탐이 그대로 돌아온다 — 재 봤고
+      121 로 되돌아갔다(2026-09-10 · 질의 539건). 그 형태는 ①b **1단**
+      (`corp_code`)이 절반쯤 흡수한다(58건 중 26).
+
+    ★실측 — ①b 2단으로 내려오는 539건에서 오탐 **121 → 12**, 정답 111 → 110.
+    """
     return list(dict.fromkeys(
-        t.form for t in kiwi().tokenize(question) if t.tag in _NAME_TAGS))
+        text for text, tags in merged_spans(kiwi().tokenize(question))
+        if tags & _NAME_TAGS))
 
 
 def _name_hit(question: str, names: dict[str, str]) -> Optional[str]:
@@ -120,9 +147,10 @@ def _second_anchor(tokens: list[str], primary_name: str,
       해소된다**(실측 2026-09-05). 조각이 별개 기업으로 앵커가 되면 묻지 않은
       대상이 재료에 들어온다 — §14-3 이 막으려는 그 오답이다.
 
-    ★**§5-15 를 전면 해결하지 않는다.** 막는 것은 「이미 잡은 앵커 이름의 조각」
-      하나뿐이고, 합성 사명(「TSMC반도체홀딩스코리아」)은 그대로 남는다. 그쪽은
-      토큰 병합이 후보인데 오탐/미탐을 다시 재기 전에는 규칙을 얹지 않는다.
+      ★**2차 쪽이 쪼개지던 것은 여기서 못 막았다** — 이 함수는 **1차 앵커 이름의**
+        조각만 본다. 「삼성전자와 SK하이닉스는 무슨 관계야?」의 2차 앵커가
+        SK주식회사로 나가고 있었다. 후보가 덩어리가 된 뒤로(`_name_tokens` ·
+        §5-15) 애초에 안 쪼개지므로, **이 줄이 남는 이유는 이제 비용이다.**
 
     ★**남는 토큰이 없으면 조회를 안 한다.** 단일 대상 질의(41건 중 33건 · §8-5)의
       그래프 조회가 하나로 유지된다 —

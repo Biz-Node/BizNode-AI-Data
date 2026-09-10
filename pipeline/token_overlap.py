@@ -132,26 +132,38 @@ def kiwi():
     return _kiwi()
 
 
-def _merge_adjacent(analyzed) -> list[str]:
-    """붙어 있던 내용어를 도로 붙인다.
+def merged_spans(analyzed) -> list[tuple[str, frozenset[str]]]:
+    """붙어 있던 내용어를 도로 붙인다 — **덩어리와 그것을 이룬 품사들.**
 
     ★Kiwi 가 사명을 쪼갠다 — `SFA반도체가` → SFA/SL + 반도체/NNG + 가/JKS,
       `SK하이닉스에` → SK/SL + 하이닉스/NNP + 에/JKB. 쪼갠 채로 대조하면
       「SFA」와 「반도체」가 따로 걸려 뜻이 흐려진다. **원문에서 사이가 벌어져
       있지 않았던 것만** 다시 붙인다.
+
+    ★**품사를 함께 돌려주는 이유** (2026-09-10 · 현황서 §5-15). 붙이는 규칙이
+      필요한 곳이 하나 더 생겼다 — `query_understanding._name_tokens()` 가
+      「이 덩어리가 사명 후보인가」를 가려야 하는데, 그 판정에 품사가 든다.
+      규칙을 복사해 가면 두 벌이 되고 **두 벌은 반드시 갈린다.** 여기가
+      한 벌이고 부르는 쪽이 각자 걸러 쓴다.
     """
-    merged: list[str] = []
+    spans: list[tuple[str, set[str]]] = []
     end_of_previous = -1
     for token in analyzed:
         if token.tag not in _CONTENT_TAGS:
             end_of_previous = -1        # 조사·어미가 끼면 이어 붙이지 않는다
             continue
-        if merged and token.start == end_of_previous:
-            merged[-1] += token.form
+        if spans and token.start == end_of_previous:
+            text, tags = spans[-1]
+            spans[-1] = (text + token.form, tags | {token.tag})
         else:
-            merged.append(token.form)
+            spans.append((token.form, {token.tag}))
         end_of_previous = token.start + len(token.form)
-    return merged
+    return [(text, frozenset(tags)) for text, tags in spans]
+
+
+def _merge_adjacent(analyzed) -> list[str]:
+    """덩어리의 **글자만**. `sentence_tokens` 가 쓰던 그대로다."""
+    return [text for text, _ in merged_spans(analyzed)]
 
 
 def sentence_tokens(text: str) -> list[str]:

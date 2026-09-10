@@ -129,3 +129,26 @@ def test_sentence_stopwords_do_not_leak_into_the_default_tokenizer():
 
 def test_sentence_tokenizer_on_empty_text():
     assert to.sentence_tokens("") == []
+
+
+# ── 덩어리와 그 품사 (현황서 §5-15) ──────────────────────────────────────
+
+def test_merged_spans_carry_the_tags_that_made_them():
+    """★`_merge_adjacent` 는 문자열만 돌려줘서 「이 덩어리가 사명 후보인가」를
+    부르는 쪽이 알 수 없었다. `query_understanding` 이 그 판정을 해야 해서
+    품사를 함께 돌려주는 입구를 연다 — **붙이는 규칙은 한 벌이다.**"""
+    got = dict(to.merged_spans(to.kiwi().tokenize("SK하이닉스에 납품하는 기업은?")))
+    assert "SK하이닉스" in got
+    assert got["SK하이닉스"] & {"NNP", "SL"}, "고유명사를 품은 덩어리다"
+    assert not got["납품"] & {"NNP", "SL"}, "일반명사뿐인 덩어리다"
+
+
+def test_merging_behaviour_is_unchanged():
+    """★`sentence_tokens` 가 이 규칙 위에 서 있다 — 바뀌면 grounding 이 조용히
+    바뀐다(`_GROUND_THRESHOLD = 0.34` 가 이 동작에 맞춰 잡힌 값이다)."""
+    for sentence in ("삼성전자에 납품하는 기업으로 SFA반도체가 있다",
+                     "마이크론의 공급 차질로 심텍에 매출 상실 우려",
+                     "97억 원 규모의 장비를 발주하였다"):
+        analyzed = to.kiwi().tokenize(sentence)
+        assert [text for text, _ in to.merged_spans(analyzed)] \
+            == to._merge_adjacent(analyzed)

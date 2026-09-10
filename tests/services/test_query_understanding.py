@@ -239,27 +239,67 @@ def test_question_without_name_tokens_skips_the_non_company_lookup(monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  미해결 — 사명의 부분 토큰이 실존 기업으로 해소된다 (현황서 §5-15)
+#  ★사명은 **붙어 있던 덩어리 단위**로 본다 (현황서 §5-15 해소)
+#
+#  Kiwi 는 사명을 쪼갠다 — `SK하이닉스에` → SK/SL + 하이닉스/NNP + 에/JKB.
+#  조각을 그대로 후보로 쓰면 두 방향으로 틀린다:
+#
+#      오탐   「TSMC반도체홀딩스코리아」의 조각 `TSMC` 가 실존 기업을 문다
+#      미탐   「SK하이닉스」가 조각 `SK`(SK주식회사)로 해소된다
+#
+#  그래서 **원문에서 사이가 벌어져 있지 않았던 내용어를 도로 붙인 덩어리** 중
+#  고유명사를 품은 것만 후보로 쓴다(`token_overlap.merged_spans`).
+#
+#  ★실측 2026-09-10 — 질의 758건(실존 사명 58곳 × 7틀 + 합성 사명 348 + 허구 4).
+#    ①b 2단으로 내려오는 539건에서 **오탐 121 → 12**, 정답 111 → 110.
+#    앵커리스 판정은 774건 전수에서 **공집합 동치가 어긋나지 않았다** — 덩어리는
+#    고유명사를 품어야 남으므로 「고유명사가 없다」가 양쪽에서 같은 뜻이다.
 # ══════════════════════════════════════════════════════════════════════
 
-@pytest.mark.xfail(strict=True, reason="현황서 §5-15 — 규칙을 얹기 전에 실측이 먼저다")
-def test_partial_token_of_a_made_up_name_should_not_anchor(graph):
-    """★실재하지 않는 이름인데 그 **조각**이 실존 기업이라 앵커가 붙는다.
+def test_a_made_up_name_does_not_anchor_through_one_of_its_fragments(graph):
+    """★실재하지 않는 이름인데 그 **조각**이 실존 기업이라 앵커가 붙던 자리다.
 
         「TSMC반도체홀딩스코리아는 어떤가?」
-          Kiwi → 'TSMC'(SL) · '반도체' …         ★합성 사명을 쪼갠다
-          → find_by_names 가 실존 TSMC 를 문다   🔴 묻지 않은 기업이 대상이 된다
+          전  Kiwi → 'TSMC'(SL)·'코리아' → find_by_names 가 실존 TSMC 를 문다
+          후  덩어리 'TSMC반도체홀딩스코리아' 하나 → 그래프에 없다 → unresolved
 
-    ★**전보다 나쁘다.** 전에는 SEMANTIC 이라 헤지라도 걸렸는데 지금은
-      `anchor_source=query` 로 헤지 없이 나간다.
-
-    ★고치지 않고 표시만 한다 — 토큰 병합(`token_overlap._merge_adjacent()`)이
-      후보지만, 합성 사명이 든 질의로 **오탐/미탐을 다시 재기 전에는** 규칙을
-      얹지 않는다. 고쳐지면 이 테스트가 XPASS 로 뒤집혀 갱신하라고 알린다.
+    ★`query` 로 나가면 **헤지 없이** 나간다 — 「못 찾았다」와 「이 회사 얘기다」는
+      사용자에게 전혀 다른 말이다.
     """
     graph["companies"]["TSMC"] = {"key": "tsmc", "name": "TSMC", "corp_code": None}
     decision = qu.decide_anchor("TSMC반도체홀딩스코리아는 어떤가?", [], _WS)
     assert decision.source is AnchorSource.UNRESOLVED
+    # ★**무엇을 못 찾았는지도 덩어리로 말한다** — 「TSMC 를 못 찾았다」는 거짓이다.
+    assert decision.named == "TSMC반도체홀딩스코리아"
+
+
+def test_a_split_company_name_is_put_back_together(graph):
+    """★`SK하이닉스에` 를 쪼갠 채 두면 `SK` 가 **SK주식회사로 실제로 해소된다.**"""
+    assert qu._name_tokens("SK하이닉스에 납품하는 기업은?") == ["SK하이닉스"]
+    assert qu._name_tokens("TSMC반도체홀딩스코리아는 어떤가?") == ["TSMC반도체홀딩스코리아"]
+
+
+def test_a_question_that_names_no_company_stays_anchorless(graph):
+    """★**앵커리스를 죽이면 안 된다.** 덩어리를 그냥 쓰면 「최근」·「업계」가
+    대상이 되어 Global Event Search 가 통째로 막힌다 — 실측에서 12/12 가
+    `unresolved` 로 뒤집혔다. 고유명사를 품은 덩어리만 남기는 이유다."""
+    for question in ("최근 반도체 업계 주요 이슈가 뭐야?", "납품 단가 압박",
+                     "메모리 가격 담합 관련 소식", "최근 인수 사례"):
+        assert qu._name_tokens(question) == [], question
+        assert qu.decide_anchor(question, [], _WS).source is AnchorSource.ANCHORLESS
+
+
+def test_a_common_noun_glued_to_a_name_is_not_split_back_off(graph):
+    """★붙여 쓴 「삼성전자주가」는 덩어리 하나다 — 조각으로 되돌리지 않는다.
+
+    ★**그래서 미탐이 하나 남는다.** 합성 사명과 구별할 신호가 없어서인데,
+      실측(2026-09-10)에서 이 형태 58건 중 **26건은 ①b 1단(corp_code)이 흡수**한다.
+      조각 폴백을 넣으면 §5-15 가 그대로 돌아온다 — 재 봤고, 오탐이 121 로 되돌아갔다.
+    """
+    graph["companies"]["삼성전자"] = {"key": _SAMSUNG, "name": "삼성전자",
+                                   "corp_code": _SAMSUNG}
+    assert qu._name_tokens("삼성전자주가 알려줘") == ["삼성전자주가"]
+    assert qu.decide_anchor("삼성전자주가 알려줘", [], {}).source is AnchorSource.UNRESOLVED
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -285,13 +325,31 @@ def test_a_partial_token_of_the_first_anchor_is_not_a_second_anchor(graph):
     """★실측 — `SK` 는 **SK주식회사**(00144155)로 실제로 해소된다. 「SK하이닉스」를
     쪼갠 조각이 별개 기업으로 앵커가 되면 묻지 않은 대상이 재료에 들어온다.
 
-    ★§5-15 를 전면 해결하지는 않는다 — **이미 잡은 앵커 이름의 부분 문자열**만
-      막는다. 합성 사명(「TSMC반도체홀딩스코리아」)은 그대로 남는다.
+    ★후보가 덩어리가 된 뒤로는(§5-15) 「SK하이닉스」가 애초에 안 쪼개진다.
+      이 줄이 남는 이유는 **남는 토큰이 없으면 조회를 안 하는** 비용 쪽이다.
     """
     graph["companies"]["SK"] = {"key": "00144155", "name": "SK", "corp_code": "00144155"}
     decision = qu.decide_anchor("SK하이닉스 소송 상황",
                                 [_resolution(_HYNIX, "SK하이닉스")], {})
     assert [a.key for a in decision.anchors] == [_HYNIX]
+
+
+def test_the_second_anchor_is_the_whole_name_not_a_fragment(graph):
+    """★A-7 이 절반만 맞았다 (실측 2026-09-10 · §5-15 가 드러냄).
+
+        「삼성전자와 SK하이닉스는 무슨 관계야?」
+          전  2차 앵커 = `SK`(SK주식회사 00144155)   🔴 묻지 않은 회사다
+          후  2차 앵커 = SK하이닉스
+
+    `_second_anchor` 의 부분 문자열 차단은 **1차 앵커 이름의 조각**만 막는다.
+    2차 쪽이 쪼개진 것은 못 막았다 — 덩어리로 보면 애초에 안 쪼개진다.
+    """
+    graph["companies"]["SK"] = {"key": "00144155", "name": "SK", "corp_code": "00144155"}
+    graph["companies"]["SK하이닉스"] = {"key": _HYNIX, "name": "SK하이닉스",
+                                    "corp_code": _HYNIX}
+    decision = qu.decide_anchor("삼성전자와 SK하이닉스는 무슨 관계야?",
+                                [_resolution(_SAMSUNG, "삼성전자")], {})
+    assert [a.key for a in decision.anchors] == [_SAMSUNG, _HYNIX]
 
 
 def test_a_leftover_token_that_is_no_company_adds_no_anchor(graph):
