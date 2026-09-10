@@ -27,11 +27,13 @@ from __future__ import annotations
 from typing import Optional
 
 from app.api.schemas import (AnchorSource, AskRequest, Event, Evidence, MatchType,
-                             Propagation, Relation, RelationEndpoint, RetrieveResponse)
+                             NodeLabel, Propagation, Relation, RelationEndpoint,
+                             RetrieveResponse)
 from app.core import querylog
 from app.core.trace import new_trace_id, trace_logger
-from app.services import (company_service, evidence_selector, query_understanding,
-                          relation_selector, relation_service, workspace_service)
+from app.services import (company_service, evidence_selector, graph_service,
+                          query_understanding, relation_selector, relation_service,
+                          workspace_service)
 from app.services.query_understanding import AnchorDecision
 from search.dto.search_query import SearchQuery
 from search.dto.search_request import SearchRequest
@@ -323,6 +325,13 @@ def material_companies(decision: AnchorDecision, query: SearchQuery,
             workspace_keys=frozenset(decision.workspace_names))
         return companies_of_events(events), events
 
+    # ★**비-Company 앵커는 히트를 보지 않는다**(§6-0 A-8). `companies_from()` 은
+    #   히트에서 **Company 만** 추리므로, Person·Product 앵커에서 그걸 믿으면
+    #   앵커와 아무 관계 없는 기업이 재료가 된다 — A-3 이 고친 그 오답이다.
+    #   재료는 앵커에서 한 홉이다(Path B).
+    if is_non_company_anchor(decision):
+        return companies_via_anchor(decision), None
+
     if hits_reflect_the_anchor(decision, query):
         companies = companies_from(result)
     else:
@@ -333,6 +342,51 @@ def material_companies(decision: AnchorDecision, query: SearchQuery,
     # ★재료 기업이 하나도 안 남았으면 앵커로 메운다(현황서 §5-16). 앵커 경로에서는
     #   이미 앵커가 `companies` 라 무동작이다.
     return with_anchor_backstop(companies, decision), None
+
+
+def is_non_company_anchor(decision: AnchorDecision) -> bool:
+    """앵커가 Company 가 아닌가 (§6-0 A-8). **판정을 한 곳에만 둔다** —
+    `/ask` 와 `/retrieve` 가 각자 `anchors[0].label is ...` 를 쓰면 조건이 갈린다."""
+    return bool(decision.anchors) and any(
+        a.label is not NodeLabel.Company for a in decision.anchors)
+
+
+def companies_via_anchor(decision: AnchorDecision) -> list[RelationEndpoint]:
+    """비-Company 앵커 → **1홉 안의 기업**. Path B (§6-0 A-8 · 2026-09-10).
+
+    ★**여기서 새 조회를 만들지 않는다.** `graph_service.relations_of()` 를 그대로
+      쓴다 — 그쪽이 이미 만료 관계 제외 · 근거 검증 판정 반영 · 점수 내림차순을
+      한다. 사본을 두면 「파급은 근거 없는 엣지를 안 타는데 재료 선정은 탄다」는
+      상태가 생긴다(`graph_service._HIDE` 가 막으려는 그것이다).
+
+    ★**Company 끝만 담는다**(설계서 §9). 상대가 Product·Person 이면 건너뛴다 —
+      비-Company key 를 `events_of()` 에 넣으면 예외가 아니라 **조용히 0건**이라
+      「사건이 없다」로 잘못 읽힌다. 앵커 자신도 Company 가 아니므로 자연히 빠진다.
+
+    ★**상한은 기존 `_MAX_COMPANIES` 다.** 새 숫자를 만들지 않는다. 허브 앵커
+      (공정거래위원회는 1홉 기업이 **73곳** · 실측)를 어떻게 자를지는 아직 미결이라
+      (A-8 Deferred) 여기서는 점수 상위만 남긴다.
+
+    ★실측(2026-09-06) — 앵커→Company→Event 도달률 Person 76.0% · Organization
+      78.0% · Product 74.3% 로 Company 81.3% 와 거의 같다. 「Person 은 Event 연결이
+      0이니 REJECT」는 실측이 부정했다.
+    """
+    anchor = decision.anchors[0]
+    out: list[RelationEndpoint] = []
+    seen: set[str] = set()
+    for relation in graph_service.relations_of(anchor.key):
+        for key, name, label in (
+                (relation.source_id, relation.source, relation.source_entity_type),
+                (relation.target_id, relation.target, relation.target_entity_type)):
+            if label != NodeLabel.Company.value or not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(RelationEndpoint(key=key, name=name))
+    if len(out) > _MAX_COMPANIES:
+        log.info("material.path_b truncated %d -> %d", len(out), _MAX_COMPANIES)
+    log.info("material.path_b anchor=%s(%s) companies=%s",
+             anchor.key, anchor.label.value, [c.key for c in out[:_MAX_COMPANIES]])
+    return out[:_MAX_COMPANIES]
 
 
 def anchor_names_for(query: SearchQuery, decision: AnchorDecision,

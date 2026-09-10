@@ -1004,6 +1004,16 @@ class Anchor(BaseModel):
         description="`query` — 질문이 지정한 대상. "
                     "`context` — 사용자가 지금 보고 있는 기업. "
                     "★워크스페이스 기업은 앵커가 되지 않는다 — 랭킹 문맥이다")
+    label: Literal[NodeLabel.Company, NodeLabel.Person,
+                   NodeLabel.Organization, NodeLabel.Product] = Field(
+        NodeLabel.Company,
+        description="**이 앵커가 그래프의 어떤 노드인가**(현황서 §6-0 A-8). "
+                    "`Company` 가 기본값이라 기존 호출은 그대로다. "
+                    "★`Event` 는 올 수 없다 — 사건을 대상으로 삼으면 재료 조립이 "
+                    "다른 이야기가 되고, A-8 실측이 잰 것도 네 타입뿐이다. "
+                    "★비-Company 앵커의 `companies` 는 **그 노드에서 1홉 안의 "
+                    "기업**이다 — 앵커 자신이 아니다",
+        examples=[NodeLabel.Company])
 
 
 # ★**답변을 만들지 않는다.** 사실과 근거만 준다 — 문장 생성은 추론 담당 몫이고,

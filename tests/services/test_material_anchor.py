@@ -377,3 +377,108 @@ def test_the_relation_cut_count_is_logged(wired, caplog):
         RetrieveService(_orchestrator()).retrieve(_request())
 
     assert "cut=5" in caplog.text
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Path B — 비-Company 앵커의 재료는 **1홉 안의 기업**이다 (§6-0 A-8)
+#
+#  실측(2026-09-06): 앵커→Company→Event 도달률이 Company 81.3% · Organization
+#  78.0% · Person 76.0% · Product 74.3% 로 **네 타입이 거의 같다.** 「Person 은
+#  Event 연결이 0이니 REJECT」가 아니라, 우회 경로가 열려 있다는 뜻이다.
+# ══════════════════════════════════════════════════════════════════════
+
+from app.api.schemas import NodeLabel                                # noqa: E402
+from app.services.graph_service import Relation                      # noqa: E402
+from pipeline.freshness import assess                                # noqa: E402
+
+_LEE = "이재용@00126186"
+
+
+def _edge(target_name, target_key, *, confidence=0.9, target_label="Company",
+          source_key=_LEE, source_name="이재용", source_label="Person"):
+    """앵커에서 나가는 엣지 하나. ★진짜 `Relation` 을 쓴다 — 가짜 객체를 쓰면
+    필드 이름이 바뀌어도 시험이 안 깨진다."""
+    return Relation(
+        source=source_name, target=target_name, edge_type="IS_EXECUTIVE_OF",
+        subtype="", source_type="dart", confidence=confidence, corroboration=1,
+        freshness=assess({}, today=date(2026, 9, 10)), props={},
+        source_id=source_key, source_entity_type=source_label,
+        target_id=target_key, target_entity_type=target_label)
+
+
+@pytest.fixture
+def one_hop(monkeypatch):
+    """앵커에서 1홉 — `graph_service.relations_of` 를 세운다."""
+    rows: list = []
+
+    def _install(*edges):
+        rows[:] = list(edges)
+        monkeypatch.setattr(rs_module.graph_service, "relations_of",
+                            lambda key, **kw: list(rows))
+    return _install
+
+
+def _person_decision():
+    return AnchorDecision(
+        source=AnchorSource.QUERY, workspace_names=_WS,
+        anchors=[Anchor(key=_LEE, name="이재용", source=AnchorSource.QUERY,
+                        label=NodeLabel.Person)])
+
+
+def test_a_person_anchor_takes_its_material_from_one_hop_companies(one_hop):
+    """★「이재용 관련 최근 이슈가 뭐야?」가 **전역 사건 목록**으로 답하던 자리다."""
+    one_hop(_edge("삼성전자", "00126380"), _edge("삼성에스디에스", "00126186"))
+
+    companies, events = rs_module.material_companies(
+        _person_decision(), MagicMock(), MagicMock(), "이재용 관련 최근 이슈가 뭐야?")
+
+    assert [c.key for c in companies] == ["00126380", "00126186"]
+    assert events is None, "앵커 경로다 — 사건은 기업이 정해진 뒤에 고른다"
+
+
+def test_the_non_company_end_never_becomes_material(one_hop):
+    """★`companies` 는 **Company 만** 담는다(설계서 §9). 비-Company key 를
+    `events_of` 에 넣으면 예외가 아니라 **조용히 0건**이라 「사건이 없다」로 읽힌다."""
+    one_hop(_edge("HBM", "hbm", target_label="Product"),
+            _edge("삼성전자", "00126380"))
+
+    companies, _ = rs_module.material_companies(
+        _person_decision(), MagicMock(), MagicMock(), "질문")
+
+    assert [c.key for c in companies] == ["00126380"]
+
+
+def test_the_anchor_itself_is_not_material(one_hop):
+    """★앵커 자신은 Company 가 아니므로 재료에 안 들어간다 — 양끝을 다 보되
+    라벨로 가른다. 넣으면 위와 같은 조용한 0건이 된다."""
+    one_hop(_edge("삼성전자", "00126380"))
+    companies, _ = rs_module.material_companies(
+        _person_decision(), MagicMock(), MagicMock(), "질문")
+    assert _LEE not in [c.key for c in companies]
+
+
+def test_one_hop_companies_reuse_the_existing_company_cap(one_hop):
+    """★**새 숫자를 만들지 않는다.** 상한은 기존 `_MAX_COMPANIES` 다.
+    공정거래위원회는 1홉 기업이 73곳이다(실측) — 허브 절단 규칙은 아직 미결이라
+    (A-8 Deferred) 여기서는 기존 상한만 건다."""
+    one_hop(*[_edge(f"기업{i}", f"0000000{i}", confidence=0.9 - i / 100)
+              for i in range(rs_module._MAX_COMPANIES + 5)])
+
+    companies, _ = rs_module.material_companies(
+        _person_decision(), MagicMock(), MagicMock(), "질문")
+
+    assert len(companies) == rs_module._MAX_COMPANIES
+
+
+def test_a_non_company_anchor_never_trusts_the_search_hits(one_hop, monkeypatch):
+    """★검색 히트는 **Company 만** 추려 온다(`companies_from`). 비-Company 앵커에서
+    히트를 믿으면 앵커와 아무 관계 없는 기업이 재료가 된다 — A-3 이 고친 그 오답이다."""
+    one_hop(_edge("삼성전자", "00126380"))
+    monkeypatch.setattr(rs_module, "companies_from",
+                        lambda result: (_ for _ in ()).throw(
+                            AssertionError("히트를 봤다")))
+
+    companies, _ = rs_module.material_companies(
+        _person_decision(), MagicMock(), MagicMock(), "질문")
+
+    assert [c.key for c in companies] == ["00126380"]

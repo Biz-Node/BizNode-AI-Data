@@ -130,9 +130,18 @@ class Relation:
 #   관계 상위 10건 중 5건이 비-Company 끝이었다).
 #   워크스페이스는 필터가 아니라 **랭킹 문맥**이다 — 순서를 정하는 데 쓰고,
 #   후보를 지우는 데 쓰지 않는다. 계산은 ResultRanker 가 한다.
+# ★이름 절이 `person_key` 도 본다(2026-09-10 · 현황서 §6-0 A-8). 비-Company 앵커의
+#   재료는 **1홉 안의 기업**인데(Path B) 그 1홉을 이 함수가 돈다. Person 노드는
+#   `norm_name` 이 없고 `person_key` 를 들어서(실측), 이름 절이 `norm_name` 만 보면
+#   Person 앵커의 재료가 **통째로 0** 이 된다. Organization·Product 는 `norm_name` 을
+#   들어 전부터 걸렸다 — 구멍이 Person 하나였다.
+#
+#   ★**기존 호출은 안 바뀐다.** `person_key` 는 `이재용@00126186` 꼴이라 `norm_name`
+#     과 값 공간이 겹치지 않고, Company 노드는 이 속성을 아예 갖지 않는다.
 _QUERY = """
 MATCH (a)-[r]->(b)
-WHERE ($name IS NULL OR a.norm_name = $name OR b.norm_name = $name)
+WHERE ($name IS NULL OR a.norm_name = $name OR b.norm_name = $name
+       OR a.person_key = $name OR b.person_key = $name)
   AND ($types IS NULL OR type(r) IN $types)
 RETURN coalesce(a.name, '?') AS source, coalesce(b.name, '?') AS target,
        type(r) AS edge_type, properties(r) AS props, elementId(r) AS edge_id,

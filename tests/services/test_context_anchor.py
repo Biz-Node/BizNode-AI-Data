@@ -54,6 +54,10 @@ def graph(monkeypatch):
     """
     state = {"companies": {}, "non_company": {}}
 
+    # ★A-2 의 「해소됐다 ≠ 그래프에 있다」 관문도 세운다 — 안 세우면 `resolved_entities`
+    #   를 주는 시험 둘이 실 Neo4j 를 친다(A-2 때 여기만 빠졌다).
+    monkeypatch.setattr(qu.company_service, "names_by_keys",
+                        lambda keys: {k: k for k in keys if k})
     monkeypatch.setattr(qu.company_service, "find_by_names",
                         lambda names: next(
                             (state["companies"][n] for n in names
@@ -61,6 +65,14 @@ def graph(monkeypatch):
     monkeypatch.setattr(qu.company_service, "non_company_labels",
                         lambda names: {n: state["non_company"][n] for n in names
                                        if n in state["non_company"]})
+    # ★비-Company 해소(§6-0 A-8)도 세운다 — 안 세우면 이 파일이 **실 Neo4j 를 친다.**
+    #   기본 실행은 DB 없이 돌아야 한다(`needs_db` 마커의 취지).
+    monkeypatch.setattr(qu.company_service, "find_non_company_by_names",
+                        lambda names: next(
+                            ({"key": n, "name": n, "label": state["non_company"][n]}
+                             for n in names
+                             if state["non_company"].get(n) not in (None, "Event")),
+                            None))
     return state
 
 

@@ -169,10 +169,20 @@ def corp_codes_by_keys(keys: list[str]) -> dict[str, str]:
                 if r["corp_code"]}
 
 
+# ★한 벌이다 — 라벨만 읽는 쪽(`non_company_labels`)과 앵커로 쓰는 쪽
+#   (`find_non_company_by_names`)이 **같은 행**을 본다. 두 벌이면 「HBM 은
+#   Product 인데 앵커는 안 된다」 같은 상태가 조용히 생긴다.
+# ★key 는 그래프의 식별 우선순위 그대로다(설계서 §16-1) — Person 은 `person_key`,
+#   Organization·Product 는 `norm_name` 을 든다(실측 2026-09-10).
 _NON_COMPANY_Q = """
 MATCH (n) WHERE NOT n:Company AND n.name IN $names
-RETURN n.name AS name, labels(n)[0] AS label
+RETURN n.name AS name, labels(n)[0] AS label,
+       coalesce(n.person_key, n.norm_name, n.name) AS key
 """
+
+# 앵커가 될 수 있는 비-Company 라벨. ★`Event` 는 빠진다 — 사건을 대상으로 삼으면
+# 재료 조립이 다른 이야기가 되고(`Anchor.label` 계약), A-8 실측이 잰 것도 넷뿐이다.
+_ANCHOR_LABELS = frozenset({"Person", "Organization", "Product"})
 
 
 def non_company_labels(names: list[str]) -> dict[str, str]:
@@ -187,11 +197,38 @@ def non_company_labels(names: list[str]) -> dict[str, str]:
       (실측: 삼성전자→Event · TSMC→Event · 마이크론→Organization · 엔비디아→Product).
       정확 일치에서는 `HBM` 만 걸리고 나머지는 하나도 안 걸린다 — 오탐 0.
     """
+    return {name: row["label"] for name, row in _non_company_rows(names).items()}
+
+
+def _non_company_rows(names: list[str]) -> dict[str, dict]:
+    """이름 → 그 이름을 **정확히** 가진 비-Company 노드 한 행. 조회는 한 번이다."""
     unique = list(dict.fromkeys(n for n in names if n and n.strip()))
     if not unique:
         return {}
     with neo4j_session() as s:
-        return {r["name"]: r["label"] for r in s.run(_NON_COMPANY_Q, names=unique)}
+        return {r["name"]: dict(r) for r in s.run(_NON_COMPANY_Q, names=unique)}
+
+
+def find_non_company_by_names(names: list[str]) -> Optional[dict]:
+    """이름 후보들 중 **앵커가 될 수 있는 비-Company 노드** 하나. 없으면 `None`.
+
+    ★`find_by_names()` 의 비-Company 짝이다(§6-0 A-8). 부르는 순서가 계약이다 —
+      **Company 를 먼저 보고** 못 찾았을 때만 여기 온다. 「국민연금」처럼 같은
+      이름이 Organization(엣지 3)과 Company 국민연금공단(엣지 34)으로 갈라져 있는
+      경우(A-10) 재료가 얇은 쪽으로 붙으면 안 되기 때문이다.
+
+    ★**입력 순서가 이긴다** — `find_by_names()` 와 같은 규약이다.
+
+    ★**정규화하지 않는다.** `non_company_labels()` 가 `n.name` 정확 일치로 오탐 0
+      을 낸 그 규칙을 그대로 쓴다(현황서 §8-5). `CONTAINS` 로 넓히면 「삼성전자」가
+      Event 이름에 걸려 실존 기업이 통째로 억제된다.
+    """
+    rows = _non_company_rows(names)
+    for name in names:
+        row = rows.get(name)
+        if row and row["label"] in _ANCHOR_LABELS:
+            return {"key": row["key"], "name": row["name"], "label": row["label"]}
+    return None
 
 
 def _verdict(p: dict) -> str:

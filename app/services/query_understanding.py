@@ -49,7 +49,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.api.schemas import Anchor, AnchorSource
+from app.api.schemas import Anchor, AnchorSource, NodeLabel
 from app.core.trace import trace_logger
 from app.services import company_service
 from pipeline.normalizer.base import normalize_company_name
@@ -241,6 +241,30 @@ def decide_anchor(
                       workspace_names, context_names,
                       extra=_second_anchor(tokens, found["name"], found["key"]))
 
+    # ── ①b 3단 — ★비-Company 앵커 (§6-0 A-8 · 2026-09-10) ───────────────
+    #
+    # ★**Company 를 먼저 본 뒤에만 온다.** 순서가 계약이다 — 「국민연금」은
+    #   Organization(엣지 3)이면서 Company 국민연금공단(엣지 34)이 따로 있어
+    #   (A-10), 여기가 앞이면 재료가 얇은 쪽으로 붙는다.
+    #
+    # ★**전에는 ①a 가 이것을 떨어뜨렸다.** `non_company_labels()` 가 「기업이 아닌
+    #   것을 기업으로 오인하지 않는다」며 Person·Product 토큰을 빼서, 「이재용 관련
+    #   최근 이슈가 뭐야?」가 `anchorless` 로 가 **전역 사건 목록**으로 답했다.
+    #   물은 것과 다른 대상으로 답하는데 응답이 그 사실을 말하지도 못했다(A-6 과
+    #   같은 종류다). 이제 **Person 으로 제대로 부르므로** 그 오인이 성립하지 않는다.
+    #
+    # ★재료는 이 노드 자신이 아니라 **1홉 안의 Company** 다 — `material_companies()`
+    #   의 Path B 갈래가 정한다. 실측(2026-09-06): 앵커→Company→Event 도달률이
+    #   Person 76.0% · Organization 78.0% · Product 74.3% 로 Company 81.3% 와 거의 같다.
+    #
+    # ★`Event` 는 여기 안 온다(`_ANCHOR_LABELS`). 아래 ①a 의 제외는 **그대로 남는다** —
+    #   Event 이름과 겹치는 토큰을 거르는 것이 여전히 그 함수의 일이다.
+    non_company = company_service.find_non_company_by_names(tokens)
+    if non_company is not None:
+        return _query(non_company["key"], non_company["name"], "non_company",
+                      workspace_names, context_names,
+                      label=NodeLabel(non_company["label"]))
+
     # ── ①a — 그래서, 대상을 명시하기는 했나 ─────────────────────────────
     named = tokens
     if named:
@@ -296,10 +320,15 @@ def decide_anchor(
 def _query(key: str, name: str, via: str,
            workspace_names: dict[str, str],
            context_names: Optional[dict[str, str]] = None,
-           *, extra: Optional[dict] = None) -> AnchorDecision:
+           *, extra: Optional[dict] = None,
+           label: NodeLabel = NodeLabel.Company) -> AnchorDecision:
     """★`extra` 는 질문이 함께 지목한 **둘째 기업**이다(§6-0 A-7). 1차와 같은
-    `source=query` 다 — 둘 다 질문이 지목한 것이라 가를 이유가 없다."""
-    anchors = [Anchor(key=key, name=name, source=AnchorSource.QUERY)]
+    `source=query` 다 — 둘 다 질문이 지목한 것이라 가를 이유가 없다.
+
+    ★`label` 은 **1차 앵커의 것만** 받는다(§6-0 A-8). `extra` 는 `_second_anchor`
+      가 Company 에서만 찾으므로 늘 Company 다 — 비-Company 2차 앵커는 재 본 적이
+      없어 열지 않는다."""
+    anchors = [Anchor(key=key, name=name, source=AnchorSource.QUERY, label=label)]
     if extra is not None:
         anchors.append(Anchor(key=extra["key"], name=extra["name"],
                               source=AnchorSource.QUERY))

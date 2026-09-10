@@ -186,3 +186,23 @@ def test_limit_is_a_score_ordered_python_slice_not_a_cypher_limit(anchored):
     """
     few = relations_of(norm_name=normalize_company_name(_ANCHOR), limit=5)
     assert few == anchored[:5]
+
+
+# ── Person 은 norm_name 이 없다 (§6-0 A-8 Path B) ───────────────────────
+
+def test_a_person_is_reachable_by_person_key():
+    """★비-Company 앵커의 재료는 **1홉 안의 기업**인데(Path B), 그 1홉을 이 함수가
+    돈다. Person 노드는 `norm_name` 이 없고 `person_key` 를 든다(실측 2026-09-10)
+    — 이름 절이 `norm_name` 만 보면 Person 앵커의 재료가 **통째로 0** 이 된다.
+
+    ★Organization·Product 는 `norm_name` 을 들어 전부터 걸렸다. 여기만 구멍이었다.
+    """
+    from app.core.database import neo4j_session
+
+    with neo4j_session() as session:
+        row = session.run(
+            "MATCH (p:Person)-[]-(:Company) "
+            "WHERE p.person_key IS NOT NULL "
+            "RETURN p.person_key AS key LIMIT 1").single()
+    assert row is not None, "Person↔Company 엣지가 하나도 없다 — 전제가 깨졌다"
+    assert relations_of(row["key"]), "person_key 로 관계가 안 나온다 — Path B 가 죽는다"

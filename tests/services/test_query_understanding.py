@@ -39,7 +39,8 @@ def graph(monkeypatch):
       (§6-0 A-2). 비워 두면 모든 key 가 그래프에 있는 것으로 본다 — 그래야
       이 파일의 기존 시험들이 뜻을 그대로 유지한다.
     """
-    state = {"companies": {}, "non_company": {}, "missing_keys": set()}
+    state = {"companies": {}, "non_company": {}, "keys": {},
+             "missing_keys": set()}
 
     monkeypatch.setattr(qu.company_service, "names_by_keys",
                         lambda keys: {k: k for k in keys
@@ -51,6 +52,19 @@ def graph(monkeypatch):
     monkeypatch.setattr(qu.company_service, "non_company_labels",
                         lambda names: {n: state["non_company"][n] for n in names
                                        if n in state["non_company"]})
+
+    def _find_non_company(names):
+        """★같은 `non_company` 표에서 나온다 — 라벨을 주는 쪽과 앵커를 주는 쪽이
+        갈리면 「HBM 은 Product 인데 앵커는 안 된다」 같은 상태가 생긴다."""
+        for name in names:
+            label = state["non_company"].get(name)
+            if label and label != "Event":
+                return {"key": state["keys"].get(name, name), "name": name,
+                        "label": label}
+        return None
+
+    monkeypatch.setattr(qu.company_service, "find_non_company_by_names",
+                        _find_non_company)
     return state
 
 
@@ -133,12 +147,48 @@ def test_question_without_a_named_target_is_anchorless(graph):
     assert decision.workspace_names == _WS
 
 
-def test_product_name_is_not_a_named_target(graph):
-    """★실측이 잡아낸 오탐(현황서 §8-5) — 「HBM을 만드는 기업」의 `HBM` 은 `SL`
-    태그가 붙지만 **Product 노드**다. 기업을 지목한 것이 아니다."""
+def test_a_product_the_graph_knows_becomes_a_query_anchor(graph):
+    """★**뜻이 뒤집힌 시험이다**(§6-0 A-8). 전에는 `HBM` 이 Product 라서 **떨어뜨렸고**
+    질문이 「대상을 안 물었다」로 처리됐다. 이제는 Product 앵커다 —
+    「HBM을 만드는 기업」의 답은 HBM 을 만드는 기업들이고, 그 목록은 HBM 노드에서
+    한 홉이면 나온다(Path B).
+
+    ★떨어뜨리던 근거는 「기업이 아닌 것을 **기업으로** 오인하지 않는다」였다.
+      Product 로 제대로 부르는 지금은 그 오인이 성립하지 않는다.
+    """
     graph["non_company"]["HBM"] = "Product"
+    graph["keys"]["HBM"] = "hbm"
     decision = qu.decide_anchor("HBM을 만드는 기업", [], _WS)
-    assert decision.source is AnchorSource.ANCHORLESS
+    assert decision.source is AnchorSource.QUERY
+    assert [(a.key, a.label.value) for a in decision.anchors] == [("hbm", "Product")]
+
+
+def test_a_person_the_graph_knows_becomes_a_query_anchor(graph):
+    """★「이재용 관련 최근 이슈가 뭐야?」가 **전역 사건 목록**으로 답하던 자리다."""
+    graph["non_company"]["이재용"] = "Person"
+    graph["keys"]["이재용"] = "이재용@00126186"
+    decision = qu.decide_anchor("이재용 관련 최근 이슈가 뭐야?", [], _WS)
+    assert decision.source is AnchorSource.QUERY
+    assert [(a.name, a.label.value) for a in decision.anchors] == [("이재용", "Person")]
+
+
+def test_an_event_named_in_the_question_is_not_an_anchor(graph):
+    """★Event 는 앵커가 아니다 — 재료 조립이 다른 이야기가 된다(`Anchor.label` 계약).
+    떨어뜨리는 동작은 **그대로 남는다** — 「삼성전자」가 Event 이름에도 있어서
+    그것까지 앵커로 삼으면 실존 기업이 억제되던 그 자리다."""
+    graph["non_company"]["압수수색"] = "Event"
+    assert qu.decide_anchor("압수수색 관련 소식", [], _WS).source is AnchorSource.ANCHORLESS
+
+
+def test_a_company_still_wins_over_a_non_company_of_the_same_name(graph):
+    """★순서가 계약이다 — ①b 2단(Company)이 3단(비-Company)보다 앞이다.
+    「국민연금」은 Organization(엣지 3)이면서 Company 국민연금공단이 따로 있다(A-10).
+    Company 를 먼저 보지 않으면 재료가 훨씬 얇은 쪽으로 붙는다."""
+    graph["companies"]["카카오"] = {"key": "00258801", "name": "카카오",
+                                  "corp_code": "00258801"}
+    graph["non_company"]["카카오"] = "Product"
+    decision = qu.decide_anchor("카카오 최근 이슈", [], _WS)
+    assert [(a.key, a.label.value) for a in decision.anchors] == [("00258801", "Company")]
 
 
 def test_non_company_filter_matches_exactly_not_by_substring(graph):

@@ -12,7 +12,14 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.schemas import (Anchor, AnchorSource, AskResponse, MatchType,
-                             RelationEndpoint, RetrieveResponse)
+                             NodeLabel, RelationEndpoint, RetrieveResponse)
+
+
+@pytest.fixture(params=[NodeLabel.Person, NodeLabel.Organization,
+                        NodeLabel.Product])
+def graph_label(request):
+    """A-8 이 실측한 비-Company 앵커 세 타입."""
+    return request.param
 
 
 # ── AnchorSource — 설계서 §14-3 의 세 값 + `context` ────────────────────
@@ -51,6 +58,31 @@ def test_anchor_key_may_be_norm_name():
     """★식별은 `corp_code` → `norm_name` 순이다(설계서 §16-1). `corp_code` 가
     없는 기업(TSMC·마이크론)은 `norm_name` 이 key 다 — 8자리 숫자를 강제하지 않는다."""
     assert Anchor(key="tsmc", name="TSMC", source=AnchorSource.QUERY).key == "tsmc"
+
+
+def test_anchor_carries_the_node_label(graph_label):
+    """★**앵커가 Company 하나가 아니게 된다**(§6-0 A-8). 「이재용 관련 이슈」의 답이
+    Person 이재용에 대한 것이라는 사실을 **응답이 말할 수 있어야** 한다 — A-8 이
+    A-6 과 같은 종류라고 적힌 이유가 「물은 것과 다른 대상으로 답하는데 그 사실을
+    알리는 필드가 없다」이기 때문이다."""
+    anchor = Anchor(key="이재용@00126186", name="이재용",
+                    source=AnchorSource.QUERY, label=graph_label)
+    assert anchor.label is graph_label
+
+
+def test_anchor_label_defaults_to_company():
+    """★기본값이 있어야 **기존 호출이 안 깨진다.** 앵커의 절대다수가 Company 다."""
+    assert Anchor(key="00164779", name="SK하이닉스",
+                  source=AnchorSource.QUERY).label is NodeLabel.Company
+
+
+def test_anchor_label_rejects_event():
+    """★Event 는 앵커가 아니다. A-8 실측이 잰 것은 네 타입뿐이고
+    (Company·Person·Organization·Product), Event 를 대상으로 삼으면 재료 조립이
+    **다른 이야기**가 된다 — 「그 사건의 기업」을 찾는 경로가 따로 필요하다."""
+    with pytest.raises(ValidationError):
+        Anchor(key="evt_1", name="압수수색", source=AnchorSource.QUERY,
+               label=NodeLabel.Event)
 
 
 def test_anchor_rejects_unresolved_as_source():
