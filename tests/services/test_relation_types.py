@@ -111,3 +111,36 @@ def test_the_relation_list_holds_every_relation_the_graph_drew(name):
     drawn = {e["edge_id"] for e in detail["graph"]["edges"]
              if e["type"] not in _EVENT_AXIS}
     assert {r["edge_id"] for r in detail["related"]} == drawn
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ★관계 상대의 key 는 상세 그래프와 같은 식별자다 (§5-17 ③ · 2026-09-12)
+# ══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.needs_db
+def test_a_person_end_carries_the_same_key_as_the_detail_graph():
+    """★같은 `relation_row()` 가 **먹이는 쿼리에 따라** Person key 를 다르게 냈다.
+
+        _REL_Q   (/retrieve·/ask)   Person 끝 = 이름
+        _GRAPH_Q (기업 상세)         Person 끝 = person_key
+
+    저장소의 다른 모든 자리(`graph_service._QUERY`·GraphSearcher·비-Company 앵커)는
+    `person_key` 다. `_REL_Q` 하나만 달라서 **Person 앵커의 링 대조가 원리적으로
+    불가능**했다 — 앵커 key 는 `이재용@00126186` 인데 row 는 `이재용` 을 실었다.
+    """
+    key = company_service.find_by_names(["삼성전자"])["key"]
+    ends = {r["edge_id"]: e for r in company_service.relations_of(key)
+            for e in (r["source"], r["target"]) if e["label"] == "Person"}
+    listed = {eid: e["key"] for eid, e in ends.items()}
+    detail = company_service.company_detail(key)
+    persons = {n["key"] for n in detail["graph"]["nodes"] if n["label"] == "Person"}
+    # ★그래프는 표시 상한(`_TYPE_CAP`)이 걸린 **부분집합**이다 — 양쪽에 있는 엣지끼리 본다
+    drawn = {e["edge_id"]: end for e in detail["graph"]["edges"]
+             for end in (e["source"], e["target"]) if end in persons}
+    both = listed.keys() & drawn.keys()
+    assert both, "목록과 그래프에 같이 있는 Person 엣지가 없다 — 전제가 깨졌다"
+    assert all(listed[eid] == drawn[eid] for eid in both), \
+        "같은 엣지의 Person key 가 목록과 그래프에서 다르다"
+    # ★버그의 본질 — 전에는 key 가 **이름 그대로**였다. person_key 는 `이름@corp`·
+    #   `이름|생년월` 두 꼴이라 모양이 아니라 「이름과 다르다」로 본다.
+    assert all(e["key"] != e["name"] for e in ends.values()), "Person key 가 이름 그대로다"

@@ -268,14 +268,10 @@ class Evidence(BaseModel):
     # ★못 꺼낸 근거를 **조용히 빼지 않는다.** 빼면 「근거가 없는 관계」로 읽힌다.
     missing: bool = Field(False, description="`true` 면 id 는 있는데 원문을 못 찾았다")
 
-
+# ══════════════════════════════════════════════════════════════════
+# 리스크 파급 - stated=false 면 우리가 공급망으로 계산한 것
+# ══════════════════════════════════════════════════════════════════
 class Propagation(BaseModel):
-    """리스크 파급 한 갈래. 질의 시점에 계산한다.
-
-    `stated` 를 **갈라 그려야 한다.** `true` 기사가 직접 말한 것,
-    `false` 우리가 공급망으로 계산한 것. 섞으면 추론을 사실로 팔게 된다.
-    실측(모트라스 파업): 124곳 = 보도 10 + 계산 114.
-    """
 
     target: str = Field(description="영향받는 기업 이름", examples=["현대차증권"])
     key: Optional[str] = Field(None, description="기업 키. 이름만 있고 노드가 없으면 null",

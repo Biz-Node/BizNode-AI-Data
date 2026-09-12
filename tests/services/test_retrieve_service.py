@@ -712,3 +712,63 @@ def test_without_anchor_keys_the_ring_is_unchanged():
                     (_row("W1", "P"), {"W1"}),
                     (_row("X", "Y"), {"W1"})):
         assert rs_module.ring_of(row, ws) == rs_module.ring_of(row, ws, frozenset())
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ★비-Company 앵커를 잇는 관계 — 재료 기업이 앵커 자신이 아닐 때 (§5-17 ③)
+#
+#  A-8 이 연 Person·Organization·Product 앵커에서는 재료 기업이 앵커의 **1홉
+#  이웃**이다. 그래서 「앵커 ↔ 재료 기업」 엣지가 곧 질문이 물은 것인데, 상대가
+#  비-Company 라 Ring 2 로 밀려 상한에서 잘렸다 — 실측(2026-09-11): Coverage 를
+#  통과한 40건 중 **14건에서 앵커를 잇는 엣지가 재료에 0건**이었다.
+#
+#  ★Company 앵커에서는 이 규칙이 **성립하지 않는다.** 앵커가 곧 재료 기업이라
+#    모든 관계가 한쪽 끝에 앵커를 두는데, 그걸 전부 올리면 워크스페이스 링이
+#    통째로 죽는다. A-7 의 경계(「한쪽만 앵커면 이웃일 뿐」)가 그대로 지켜진다.
+# ══════════════════════════════════════════════════════════════════════
+
+_LEE = "이재용@00126186"
+
+
+def _mixed(src, src_label, tgt, tgt_label):
+    return {"source": {"key": src, "label": src_label},
+            "target": {"key": tgt, "label": tgt_label}}
+
+
+def test_an_edge_to_a_non_company_anchor_outranks_every_workspace_ring():
+    """「이재용 → 삼성전자」는 「이재용이 어느 회사 임원이야?」의 답 그 자체다."""
+    link = rs_module.ring_of(_mixed(_LEE, "Person", "00126380", "Company"),
+                             {"00126380", "00164779"}, {_LEE})
+    ws_inside = rs_module.ring_of(_row("00126380", "00164779"),
+                                  {"00126380", "00164779"}, {_LEE})
+    assert link == rs_module._RING_BOTH_ANCHOR
+    assert link < ws_inside
+
+
+def test_the_rule_reads_either_end():
+    """엣지 방향은 저장 방향일 뿐이다 — 앵커가 source 든 target 이든 같다."""
+    a = rs_module.ring_of(_mixed(_LEE, "Person", "C", "Company"), set(), {_LEE})
+    b = rs_module.ring_of(_mixed("C", "Company", _LEE, "Person"), set(), {_LEE})
+    assert a == b == rs_module._RING_BOTH_ANCHOR
+
+
+def test_a_company_anchor_end_alone_is_still_just_a_neighbour():
+    """★A-7 의 경계는 그대로다. Company 앵커에서 「한쪽만 앵커」를 올리면 그 앵커의
+    관계 500여 건이 전부 -1 이 되어 워크스페이스 링이 죽는다."""
+    one_end = rs_module.ring_of(_mixed("A", "Company", "X", "Company"), {"A"}, {"A"})
+    assert one_end != rs_module._RING_BOTH_ANCHOR
+    assert one_end == rs_module.ring_of(_mixed("A", "Company", "X", "Company"), {"A"})
+
+
+def test_a_person_end_that_is_not_the_anchor_stays_in_ring_two():
+    """앵커가 아닌 Person 은 여전히 비-Company 이웃이다 — 규칙은 **앵커**를 본다."""
+    other = rs_module.ring_of(_mixed("00126380", "Company", "다른사람@1", "Person"),
+                              {"00126380"}, {_LEE})
+    assert other == rs_module._RING_OUTSIDE_OTHER
+
+
+def test_without_anchor_keys_a_person_edge_is_unchanged():
+    """★불변식 — 앵커를 안 넘기면 Person 엣지의 링 값도 지금과 같다."""
+    row = _mixed("00126380", "Company", _LEE, "Person")
+    assert rs_module.ring_of(row, {"00126380"}) == \
+           rs_module.ring_of(row, {"00126380"}, frozenset())

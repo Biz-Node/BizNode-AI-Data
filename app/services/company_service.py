@@ -524,6 +524,12 @@ _REL_TYPES = ('SUPPLIES_TO', 'PARTNERS_WITH', 'COMPETES_WITH', 'ACQUIRES',
               'IS_EXECUTIVE_OF', 'DEVELOPS')
 _REL_LIMIT = 30
 
+# ★상대 끝의 key 는 **상세 그래프(`_GRAPH_Q`)와 같은 식**이다(2026-09-12 · §5-17 ③).
+#   전에는 `coalesce(corp_code, norm_name, name)` 이라 Person 끝이 **이름**을 실었다 —
+#   저장소 안에서 그 쿼리 하나만 그랬고(`_GRAPH_Q`·`graph_service._QUERY`·GraphSearcher
+#   는 전부 `person_key`), 같은 `relation_row()` 가 먹이는 쿼리에 따라 Person key 를
+#   다르게 내는 상태였다. 비-Company 앵커의 링 대조는 key 로 하므로 이 불일치가
+#   있는 한 **원리적으로 불가능**했다. Company 끝은 우선순위가 같아 글자까지 불변이다.
 _REL_Q = f"""
 MATCH (c:Company)-[r]-(o)
 WHERE (c.corp_code = $k OR c.norm_name = $k)
@@ -531,7 +537,7 @@ WHERE (c.corp_code = $k OR c.norm_name = $k)
 RETURN type(r) AS t, properties(r) AS p, elementId(r) AS eid,
        startNode(r) = c AS outgoing,
        coalesce(o.name,'?') AS oname,
-       coalesce(o.corp_code, o.norm_name, o.name) AS okey,
+       coalesce(o.corp_code, o.norm_name, o.event_id, o.person_key, o.name) AS okey,
        labels(o)[0] AS olabel,
        c.name AS cname, coalesce(c.corp_code, c.norm_name) AS ckey
 """

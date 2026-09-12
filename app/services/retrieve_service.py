@@ -188,12 +188,33 @@ def ring_of(row: dict, workspace_keys: set[str],
       (여기와 `graph_tools.get_relations`), 사건은 `evidence_selector.select`,
       파급은 `llm/prompt.select_propagation` 이 따로 정한다.
 
+    ★**비-Company 앵커를 잇는 관계도 맨 위다**(§5-17 ③ · 2026-09-12). A-8 이 연
+      Person·Organization·Product 앵커에서는 재료 기업이 앵커 자신이 아니라 **1홉
+      이웃**이다. 그래서 「앵커 ↔ 재료 기업」 엣지가 곧 질문이 물은 것인데
+      (「이재용이 어느 회사 임원이야?」의 답은 `이재용 -IS_EXECUTIVE_OF-> 삼성전자`),
+      상대가 비-Company 라 Ring 2 로 밀려 상한에서 잘렸다 — 실측(2026-09-11):
+      Coverage 를 통과한 40건 중 **14건에서 그 엣지가 재료에 0건**이었다.
+
+      ★**Company 앵커에서는 이 규칙이 성립하지 않는다.** 앵커가 곧 재료 기업이라
+        모든 관계가 한쪽 끝에 앵커를 두는데, 그걸 전부 올리면 워크스페이스 링이
+        통째로 죽는다. 그래서 **앵커 쪽 끝이 Company 가 아닐 때만** 본다 — A-7 의
+        경계(「한쪽만 앵커면 이웃일 뿐」)는 Company 에서 그대로다.
+
+      ★키 대조가 성립하려면 `_REL_Q` 가 Person 끝에 `person_key` 를 실어야 한다 —
+        전에는 이름을 실어서(저장소 안에서 그 쿼리 하나만 그랬다) 이 대조가
+        **원리적으로 불가능**했다. 같은 날 `_GRAPH_Q` 와 같은 식으로 맞췄다.
+
     ★**앵커를 안 넘기면 값이 지금과 같다.** 두 호출부를 **함께** 고쳤다 — 한쪽만
       고치면 두 입구가 다른 관계를 낸다(계약 6 파리티).
     """
     anchors = anchor_keys or set()
-    if anchors and row["source"]["key"] in anchors and row["target"]["key"] in anchors:
-        return _RING_BOTH_ANCHOR
+    if anchors:
+        source, target = row["source"], row["target"]
+        if source["key"] in anchors and target["key"] in anchors:
+            return _RING_BOTH_ANCHOR
+        for end in (source, target):
+            if end["key"] in anchors and end.get("label") != "Company":
+                return _RING_BOTH_ANCHOR
     source_in = row["source"]["key"] in workspace_keys
     target_in = row["target"]["key"] in workspace_keys
     if source_in and target_in:
