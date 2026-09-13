@@ -276,6 +276,43 @@ def with_anchor_backstop(companies: list[RelationEndpoint],
     return kept
 
 
+def with_named_anchors(companies: list[RelationEndpoint],
+                       decision: AnchorDecision) -> list[RelationEndpoint]:
+    """질문이 **명시적으로 지목한 대상은 전부** 재료 기업이다(현황서 §6-0 A-9).
+
+    ★왜 필요한가 — A-7 이 「A와 B」의 2차 앵커를 세웠는데 **랭킹에만** 걸었다.
+      히트 갈래는 `companies_from()` 이 히트만 보므로 2차 앵커의 사건·근거가
+      통째로 빈다(실측 2026-09-05):
+
+        「삼성전자와 현대차 중 어디가 리스크가 커?」
+          앵커 삼성전자 · 현대차  →  재료 기업 삼성전자 1곳 · 사건 10건 전부 삼성전자
+          대조 「현대차 최근 리스크 어때?」 → 사건 9건이 **실재한다**
+
+      비교 질의는 두 대상의 사건을 나란히 놓아야 답이 된다. 게다가 폴백 갈래
+      (`anchor_companies`)는 이미 앵커 전부를 쓰고 있었다 — 같은 질문이 해소
+      경로에 따라 재료 기업 수가 달랐다.
+
+    ★**히트 순서가 이긴다** — 앵커는 빠진 것만 **뒤에** 붙는다. 앞에 세우면
+      `_MAX_COMPANIES` 때문에 히트(「삼성전자에 납품하는 기업」의 공급사)가 밀린다.
+      `with_anchor_backstop` 이 같은 이유로 「재료가 있으면 끼어들지 않는다」를
+      택했다. 앵커가 하나면 그 교환(§5-16)을 그대로 두므로 **무동작**이다.
+
+    ★상한은 기존 `_MAX_COMPANIES` 다. 새 숫자를 만들지 않고, 잘리면 적는다.
+    """
+    if len(decision.anchors) < 2:
+        return companies
+    seen = {c.key for c in companies}
+    added = [RelationEndpoint(key=a.key, name=a.name)
+             for a in decision.anchors if a.key not in seen]
+    if not added:
+        return companies
+    merged = companies + added
+    if len(merged) > _MAX_COMPANIES:
+        log.info("named anchors truncated %d -> %d", len(merged), _MAX_COMPANIES)
+    log.info("material.named_anchors +%s", [a.key for a in added])
+    return merged[:_MAX_COMPANIES]
+
+
 def hits_reflect_the_anchor(decision: AnchorDecision, query: SearchQuery) -> bool:
     """검색 히트를 재료로 써도 되나.
 
@@ -354,7 +391,8 @@ def material_companies(decision: AnchorDecision, query: SearchQuery,
         return companies_via_anchor(decision), None
 
     if hits_reflect_the_anchor(decision, query):
-        companies = companies_from(result)
+        # ★「A와 B」의 2차 앵커는 히트에 없다 — 지목한 대상은 전부 재료다(A-9).
+        companies = with_named_anchors(companies_from(result), decision)
     else:
         # 히트가 앵커를 반영하지 않는다 — 앵커 자신이 재료의 출발점이다.
         companies = anchor_companies(decision)

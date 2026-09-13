@@ -228,6 +228,64 @@ def test_search_hit_evidence_is_kept_even_when_hits_are_not_the_material(wired, 
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  질문이 지목한 대상은 전부 재료 기업이다 (§6-0 A-9)
+#
+#  A-7 이 2차 앵커를 세웠는데 **랭킹에만** 걸었다. 히트 갈래는 `companies_from()`
+#  이 히트만 보므로 「삼성전자와 현대차 중 어디가 리스크가 커?」의 사건·근거가
+#  전부 삼성전자 것이었다 — 현대차 사건 9건이 실재하는데도(실측 2026-09-05).
+# ══════════════════════════════════════════════════════════════════════
+
+_HYUNDAI = "00164742"
+
+
+def _two_anchor_decision(first=(_SAMSUNG, "삼성전자"), second=(_HYUNDAI, "현대자동차")):
+    return AnchorDecision(
+        source=AnchorSource.QUERY, workspace_names=_WS,
+        anchors=[Anchor(key=k, name=n, source=AnchorSource.QUERY)
+                 for k, n in (first, second)])
+
+
+def test_every_named_anchor_is_material_even_when_the_hits_only_reflect_the_first(wired):
+    """★비교 질의 — 두 대상의 사건을 나란히 놓아야 답이 된다. 히트는 1차 앵커
+    하나뿐이라 그것만 믿으면 2차 앵커의 재료가 통째로 빈다."""
+    wired["decision"] = _two_anchor_decision()
+    orchestrator = _orchestrator([_hit(_SAMSUNG, "삼성전자")],
+                                 mode=SearchMode.NAME, resolved=[_resolution()])
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
+    assert [c.key for c in retrieved.companies] == [_SAMSUNG, _HYUNDAI]
+
+
+def test_named_anchors_come_after_the_hits_and_are_not_duplicated(wired):
+    """★히트 순서가 이긴다 — 앵커는 **빠진 것만 뒤에** 붙는다. 앞에 세우면
+    `_MAX_COMPANIES` 때문에 히트가 밀린다(`with_anchor_backstop` 과 같은 교환)."""
+    wired["decision"] = _two_anchor_decision()
+    orchestrator = _orchestrator([_hit("00301246", "SFA반도체"), _hit(_HYUNDAI, "현대자동차")],
+                                 mode=SearchMode.RELATIONSHIP, resolved=[_resolution()])
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
+    assert [c.key for c in retrieved.companies] == ["00301246", _HYUNDAI, _SAMSUNG]
+
+
+def test_a_single_anchor_still_leaves_relationship_hits_alone(wired):
+    """★불변식 — 앵커가 하나면 예전과 글자까지 같다. 「삼성전자에 납품하는 기업」
+    에서 앵커를 끼워 넣으면 공급사 한 곳이 밀린다(§5-16 이 남긴 교환)."""
+    wired["decision"] = _query_decision(key=_SAMSUNG, name="삼성전자")
+    orchestrator = _orchestrator([_hit("00301246", "SFA반도체"), _hit("01095722", "심텍")],
+                                 mode=SearchMode.RELATIONSHIP, resolved=[_resolution()])
+    retrieved = RetrieveService(orchestrator).retrieve(_request())
+    assert [c.key for c in retrieved.companies] == ["00301246", "01095722"]
+
+
+def test_named_anchors_respect_the_company_cap_and_the_cut_is_logged(wired, caplog):
+    """★새 숫자를 만들지 않는다 — 상한은 기존 `_MAX_COMPANIES` 고, 잘리면 적는다."""
+    wired["decision"] = _two_anchor_decision()
+    hits = [_hit(f"0000000{i}", f"기업{i}") for i in range(rs_module._MAX_COMPANIES)]
+    orchestrator = _orchestrator(hits, mode=SearchMode.RELATIONSHIP, resolved=[_resolution()])
+    with caplog.at_level("INFO"):
+        retrieved = RetrieveService(orchestrator).retrieve(_request())
+    assert len(retrieved.companies) == rs_module._MAX_COMPANIES
+    assert "truncated" in caplog.text
+
+# ══════════════════════════════════════════════════════════════════════
 #  링(ring) 순서
 # ══════════════════════════════════════════════════════════════════════
 
